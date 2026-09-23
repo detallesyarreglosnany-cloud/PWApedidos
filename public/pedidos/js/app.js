@@ -72,7 +72,7 @@
   function openSheet(html, opts) {
     const ov = document.createElement('div');
     ov.className = 'overlay';
-    ov.innerHTML = '<div class="sheet ' + ((opts && opts.wide) ? 'wide' : '') + '" role="dialog" aria-modal="true">' + html + '</div>';
+    ov.innerHTML = '<div class="sheet ' + ((opts && opts.wide) ? 'wide' : '') + ' ' + ((opts && opts.cls) || '') + '" role="dialog" aria-modal="true">' + html + '</div>';
     const close = () => { ov.remove(); document.removeEventListener('keydown', onKey); flushDeferredRender(); };
     const onKey = (e) => { if (e.key === 'Escape') close(); };
     ov.addEventListener('click', (e) => { if (e.target === ov || e.target.closest('[data-close]')) close(); });
@@ -444,6 +444,19 @@
       </div>`;
   }
 
+  // Color estable por grupo (categoría + subgrupo): mismo grupo → mismo color siempre,
+  // sin listas que mantener. Distribuye los tonos (hue 0-360) según el texto.
+  const grpHue = (() => {
+    const cache = new Map();
+    return (key) => {
+      if (cache.has(key)) return cache.get(key);
+      let h = 0; for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+      const hue = h % 360;
+      cache.set(key, hue);
+      return hue;
+    };
+  })();
+
   function productHTML(p, o) {
     const l = o && o.lines[p.id];
     const cj = l ? l.cajas : 0, un = l ? l.unidades : 0;
@@ -454,7 +467,7 @@
     if (p.sellBy !== 'unidad') prices.push(`<span>Caja${p.unitsPerBox > 1 ? ' x' + p.unitsPerBox : ''}</span><b>${usd(p.boxPrice)}</b>`);
     if (p.sellBy !== 'caja') prices.push(`<span>Unidad</span><b>${usd(p.unitPrice)}</b>`);
     return `
-      <article class="pitem ${req ? 'has-qty' : ''}" data-pid="${esc(p.id)}">
+      <article class="pitem ${req ? 'has-qty' : ''}" data-pid="${esc(p.id)}" style="--grp:${grpHue(p.category + '|' + (p.subgroup || ''))}">
         <div class="pimg">${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy">` : `<span aria-hidden="true">${rubroIcon(p.category)}</span>`}
           ${req ? `<em class="qty-badge">${cj ? cj + 'cj' : ''}${cj && un ? '+' : ''}${un ? un + 'u' : ''}</em>` : ''}</div>
         <div class="pname">${esc(p.name)}</div>
@@ -676,7 +689,7 @@
         ${o.status === 'abierto' ? `<button class="btn btn-ok" id="sendOrder" ${Object.keys(o.lines).length ? '' : 'disabled'}>✓ Cerrar y enviar</button>` : ''}
         ${!locked && o.status !== 'abierto' ? '<button class="btn btn-primary" data-close>✓ Listo (cambios guardados)</button>' : ''}
         <button class="btn btn-danger" id="delOrder" ${canDelete(o) ? '' : 'disabled'}>Eliminar</button>
-      </div>`);
+      </div>`, { cls: 'sheet-order' });
     const notes = $('#notes', sh.el);
     notes.onchange = async () => { o.notes = notes.value.slice(0, 300); await saveOrder(o); };
     const send = $('#sendOrder', sh.el);
