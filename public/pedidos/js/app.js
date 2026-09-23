@@ -178,13 +178,16 @@
   const isOffice = () => location.hash.startsWith('#/oficina');
   function scheduleSync(ms) { clearTimeout(syncTimer); syncTimer = setTimeout(runSync, ms); }
 
+  const syncScope = () => (isOffice() ? {} : (S.session && S.session.sellerId ? { sellerId: S.session.sellerId } : {}));
   async function runSync(manual) {
-    const scope = isOffice() ? {} : (S.session && S.session.sellerId ? { sellerId: S.session.sellerId } : {});
+    const scope = syncScope();
     // En la primera descarga de un equipo llega todo el historial: no se avisa pedido por pedido
-    const firstSync = !(await DB.getMeta('syncCursor', null));
+    const firstSync = !(await Sync.hasCursor(scope));
     const r = await Sync.syncNow(scope);
     lastSyncResult = r;
-    if (r.ok && r.pulled) {
+    // También se recarga si el servidor devolvió su versión de algo rechazado:
+    // si no, la pantalla seguiría mostrando (y volvería a guardar) la copia vieja.
+    if (r.ok && (r.pulled || r.reverted)) {
       const before = new Map(S.orders.map((o) => [o.id, o]));
       await loadAll();
       if (!firstSync) await detectNotifs(before);
@@ -203,11 +206,13 @@
   async function updateSyncPill() {
     const el = $('#syncPill');
     if (!el) return;
-    const pending = await Sync.pendingCount();
+    const pending = await Sync.pendingCount(syncScope());
     const online = navigator.onLine;
     const serverDown = lastSyncResult && !lastSyncResult.ok && !lastSyncResult.offline;
     el.className = 'pill' + (!online || serverDown ? ' offline' : '') + (pending ? ' pending' : '');
-    el.innerHTML = '<span class="dot"></span>' + (!online ? 'Sin señal' : serverDown ? 'Sin servidor' : 'En línea') +
+    const r = lastSyncResult || {};
+    const label = !online ? 'Sin señal' : r.noKey ? 'Falta clave' : r.status === 401 ? 'Clave inválida' : serverDown ? 'Sin servidor' : 'En línea';
+    el.innerHTML = '<span class="dot"></span>' + label +
       (pending ? ' · ' + pending : '');
     el.title = lastSyncResult && lastSyncResult.error ? lastSyncResult.error : 'Tocar para sincronizar';
   }
@@ -720,7 +725,17 @@
     if (bc) bc.onmessage = async () => { await loadAll(); refreshAfterRemote(); };
     app.addEventListener('focusout', flushDeferredRender);
     if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-      navigator.serviceWorker.register('./sw.js').catch((e) => console.warn('SW no registrado', e));
+      // Versión nueva publicada: el service worker toma el control y la página se
+      // recarga una vez (los datos viven en IndexedDB, no se pierde nada).
+      const hadController = !!navigator.serviceWorker.controller;
+      let reloading = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (!hadController || reloading) return;
+        reloading = true; location.reload();
+      });
+      navigator.serviceWorker.register('./sw.js').then((reg) => {
+        document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
+      }).catch((e) => console.warn('SW no registrado', e));
     }
     render();
     scheduleSync(1200);

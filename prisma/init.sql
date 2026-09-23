@@ -22,7 +22,15 @@ CREATE INDEX IF NOT EXISTS "DistDoc_kind_syncedAt_idx" ON "DistDoc"("kind", "syn
 -- CreateIndex
 CREATE INDEX IF NOT EXISTS "DistDoc_kind_sellerId_routeDate_idx" ON "DistDoc"("kind", "sellerId", "routeDate");
 
+-- CreateTable
+CREATE TABLE IF NOT EXISTS "DistCounter" (
+    "name" TEXT NOT NULL,
+    "value" INTEGER NOT NULL DEFAULT 0,
+
+    CONSTRAINT "DistCounter_pkey" PRIMARY KEY ("name")
+);
 
 -- Supabase publica las tablas de "public" en su API REST: sin políticas, RLS
 -- deja la tabla cerrada a esa API. La app entra como dueño y no le afecta.
 ALTER TABLE "DistDoc" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "DistCounter" ENABLE ROW LEVEL SECURITY;

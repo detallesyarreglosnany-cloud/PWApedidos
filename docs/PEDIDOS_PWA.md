@@ -99,9 +99,12 @@ abierto ─cierra y envía─▶ enviado ─armado automático─▶ hoja "Esper
 | `config` | `{company, routes[], dispatchers[], rubros[], load{limit, maxClients, measure}, exchangeRate, counters{load, note}}` | un solo documento, compartido por todos los equipos |
 
 El servidor guarda cada documento en `DistDoc` (Prisma/PostgreSQL) con índices por vendedor, fecha y estado.
-- Gana la escritura más reciente según `updatedAt`.
+- Gana la escritura más reciente según `updatedAt`, comprobado en la propia escritura (dos equipos a la vez no se pisan). Cada equipo ajusta su reloj al del servidor.
 - Solo la clave admin puede publicar catálogo, vendedores, cargas y configuración.
-- Cada teléfono baja solo su cartera y sus pedidos.
+- Cada teléfono baja y sube solo la cartera y los pedidos del vendedor que está usando la app. El servidor rechaza cualquier pedido o cliente a nombre de otro vendedor, y nunca reasigna un cliente.
+- La alerta de cliente duplicado la calcula el servidor en cada sincronización; no modifica ningún pedido.
+- Los números de carga (`C-00001`) y de nota (`NE-000001`) los entrega el servidor (`/api/pedidos/numbers`, tabla `DistCounter`), de forma atómica: nunca se repiten aunque varias PCs aprueben a la vez. Aprobar o cerrar una carga requiere internet.
+- Un archivo importado (WhatsApp/USB) solo actualiza lo que sea más nuevo y nunca deshace lo que decidió la oficina.
 
 ## 4. Exportación a Excel/VBA
 - **Copiar para Excel:** texto con tabuladores, se pega directo con Ctrl+V.
@@ -113,6 +116,7 @@ El servidor guarda cada documento en `DistDoc` (Prisma/PostgreSQL) con índices 
 Ver el [README](../README.md). Al publicar cambios en `public/pedidos`, sube `CACHE_VERSION` en `sw.js`.
 
 ## 6. Límites conocidos
-- Los números de carga y de nota los asigna el equipo que aprueba. Si dos PCs aprueban a la vez sin haber sincronizado, podrían repetir número. Recomendación: aprobar desde una sola PC.
+- Aprobar o cerrar una carga necesita internet (para recibir los números del servidor). Tomar pedidos no: el vendedor trabaja sin señal.
+- La clave de sincronización es compartida: quien la tenga puede declararse cualquier vendedor. El servidor impide que se mezclen pedidos y clientes entre vendedores, pero no identifica a la persona. Siguiente paso recomendado: una clave por vendedor.
 - El stock que ve el vendedor no descuenta lo que ya está en hojas pendientes de aprobar; los faltantes se ven en la oficina.
 - `vendor/xlsx.full.min.js` es SheetJS 0.18.5, la última versión en npm, y tiene avisos de seguridad conocidos. Solo lo usa la oficina, para leer archivos propios. Conviene actualizarlo a 0.20.x desde cdn.sheetjs.com cuando sea posible.

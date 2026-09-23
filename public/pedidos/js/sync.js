@@ -39,14 +39,37 @@
     return String(a && a.updatedAt || '') > String(b && b.updatedAt || '');
   }
 
-  /** Fusiona documentos remotos en el store local. Devuelve cuántos cambió. */
-  async function mergeRemote(store, remoteDocs, isAdmin, markDirty) {
+  // Campos de un pedido que decide la oficina (espejo del servidor)
+  const OFFICE_ORDER_FIELDS = ['loadId', 'locked', 'loadStatusName', 'noteNumber', 'loadNumber', 'dispatchedAt', 'officeEdited', 'heldAt'];
+  const OFFICE_ORDER_STATUS = ['en_carga', 'en_espera', 'despachado'];
+
+  /**
+   * Fusiona documentos remotos en el store local. Devuelve cuántos cambió.
+   * fromFile: el documento viene de un archivo (WhatsApp/USB), no del servidor.
+   *   Solo entra si es más nuevo que el local, y un pedido que llega de un
+   *   teléfono nunca deshace lo que decidió la oficina (hoja, bloqueo, número).
+   */
+  async function mergeRemote(store, remoteDocs, isAdmin, markDirty, fromFile) {
     if (!remoteDocs || !remoteDocs.length) return 0;
     const locals = await DB.getAll(store);
     const byId = new Map(locals.map((d) => [d.id, d]));
     const toPut = [];
-    remoteDocs.forEach((r) => {
+    remoteDocs.forEach((r0) => {
+      let r = r0;
+      if (!r || typeof r.id !== 'string' || !r.updatedAt) return;
       const l = byId.get(r.id);
+      if (fromFile && l) {
+        if (!newer(r, l)) return; // el archivo trae una versión igual o más vieja
+        if (store === 'orders') {
+          if (isLocked(l) && !isAdmin) return;
+          if (isAdmin && (isLocked(l) || l.loadId || OFFICE_ORDER_STATUS.includes(l.status))) {
+            if (isLocked(l)) return; // pedido ya aprobado/despachado: no lo cambia un archivo
+            r = { ...r };
+            OFFICE_ORDER_FIELDS.forEach((f) => { if (l[f] !== undefined) r[f] = l[f]; });
+            if (OFFICE_ORDER_STATUS.includes(l.status)) r.status = l.status;
+          }
+        }
+      }
       if (l && l.dirty) {
         if (store === 'orders') {
           const frozen = isLocked(r) && !isAdmin;
@@ -72,11 +95,17 @@
     await DB.putMany(store, toPut);
   }
 
-  async function collectDirty(isAdmin) {
-    const strip = (d) => { const c = { ...d }; delete c.dirty; return c; };
+  /**
+   * Lo pendiente de subir. Un teléfono solo sube pedidos y clientes del vendedor
+   * que está usando la app: si antes lo usó otro vendedor, lo de ese vendedor
+   * queda guardado hasta que él vuelva a entrar (nunca se mezcla).
+   */
+  async function collectDirty(isAdmin, sellerId) {
+    const strip = (d) => { const c = { ...d }; delete c.dirty; delete c.dupWith; return c; };
+    const mine = (k, d) => isAdmin || (k !== 'orders' && k !== 'clients') || (sellerId && d.sellerId === sellerId);
     const out = {};
     for (const k of KINDS) {
-      out[k] = (!isAdmin && ADMIN_KINDS.includes(k)) ? [] : (await DB.getAll(k)).filter((d) => d.dirty).map(strip);
+      out[k] = (!isAdmin && ADMIN_KINDS.includes(k)) ? [] : (await DB.getAll(k)).filter((d) => d.dirty && mine(k, d)).map(strip);
     }
     return out;
   }
@@ -103,6 +132,7 @@
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 30000);
     let res;
+    const t0 = Date.now();
     try {
       res = await fetch(url, { method: 'POST', headers, signal: ctrl.signal, credentials: 'same-origin', body: JSON.stringify(body) });
     } catch (e) {
@@ -114,7 +144,9 @@
       if (res.status === 401 && msg === 'Error 401') msg = 'Sesión vencida: recarga la página y vuelve a entrar';
       return { ok: false, error: msg, status: res.status };
     }
-    return { ok: true, data: await res.json() };
+    const data = await res.json();
+    if (data && data.serverTime) DB.setClockOffset(Date.parse(data.serverTime) - (t0 + Date.now()) / 2);
+    return { ok: true, data };
   }
 
   /**
@@ -126,10 +158,13 @@
     running = (async () => {
       if (!navigator.onLine) return { ok: false, offline: true };
       const cfg = await settings();
+      if (!cfg.syncKey) return { ok: false, noKey: true, error: 'Falta la clave de sincronización (☰ → Conexión, o Ajustes en la oficina)' };
       const url = cfg.syncUrl || DEFAULT_SYNC_URL;
       const isAdmin = !!cfg.adminKey;
-      const since = await DB.getMeta('syncCursor', null);
-      const push = await collectDirty(isAdmin);
+      const sellerId = scope && scope.sellerId || null;
+      const cursorKey = cursorKeyOf(scope);
+      const since = await DB.getMeta(cursorKey, null);
+      const push = await collectDirty(isAdmin, sellerId);
 
       const headers = { 'Content-Type': 'application/json' };
       if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
@@ -138,7 +173,7 @@
       // Vercel rechaza cuerpos de más de 4,5 MB: la subida va por tandas y solo
       // la última trae la bajada (así el cursor avanza una sola vez).
       const batches = splitPush(push);
-      const base = { deviceId: await deviceId(), since, sinceDays: since ? null : INITIAL_ORDER_DAYS, sellerId: scope && scope.sellerId || null };
+      const base = { deviceId: await deviceId(), since, sinceDays: since ? null : INITIAL_ORDER_DAYS, sellerId };
       let data = null;
       const rejected = [];
       for (let i = 0; i < batches.length; i++) {
@@ -166,21 +201,55 @@
         changed += await mergeRemote(k, data.pull[k] || [], isAdmin);
       }
 
-      await DB.setMeta('syncCursor', data.serverTime);
+      // 4) Alertas de cliente duplicado: solo en este equipo, sin tocar la versión del pedido
+      if (data.dups && data.dups.map) changed += await applyDups(data.dups, sellerId);
+
+      await DB.setMeta(cursorKey, data.serverTime);
       await DB.setMeta('lastSyncAt', new Date().toISOString());
       return {
         ok: true,
         pushed: total(push),
         pulled: changed,
         rejected: rejectedOrders.length,
+        reverted: back.length,
       };
     })();
     try { return await running; } finally { running = null; }
   }
 
-  async function pendingCount() {
+  // Un marcador por perfil: si en el mismo teléfono entra otro vendedor (u
+  // Oficina), baja completo lo suyo en vez de continuar el marcador del anterior.
+  const cursorKeyOf = (scope) => 'syncCursor:' + (scope && scope.sellerId ? scope.sellerId : 'all');
+  async function hasCursor(scope) { return !!(await DB.getMeta(cursorKeyOf(scope), null)); }
+
+  async function applyDups(dups, sellerId) {
+    const orders = await DB.getAll('orders');
+    const toPut = [];
+    orders.forEach((o) => {
+      if (!o.routeDate || o.routeDate < dups.from || (sellerId && o.sellerId !== sellerId)) return;
+      const next = (dups.map[o.id] || []).filter(Boolean);
+      if (JSON.stringify(next) !== JSON.stringify(o.dupWith || [])) toPut.push({ ...o, dupWith: next });
+    });
+    await DB.putMany('orders', toPut);
+    return toPut.length;
+  }
+
+  async function pendingCount(scope) {
     const cfg = await settings();
-    return total(await collectDirty(!!cfg.adminKey));
+    return total(await collectDirty(!!cfg.adminKey, scope && scope.sellerId || null));
+  }
+
+  /** Reserva números de carga y de notas en el servidor (solo oficina, con internet). */
+  async function reserveNumbers(need, floor) {
+    if (!navigator.onLine) return { ok: false, error: 'Sin internet' };
+    const cfg = await settings();
+    if (!cfg.adminKey) return { ok: false, error: 'Falta la clave admin en Ajustes' };
+    const headers = { 'Content-Type': 'application/json', 'x-admin-key': cfg.adminKey };
+    if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
+    const url = (cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/numbers');
+    const r = await post(url, headers, { load: need.load, note: need.note, floor: { load: +floor.load || 0, note: +floor.note || 0 } });
+    if (!r.ok) return r;
+    return { ok: true, load: r.data.load, notes: r.data.notes || [] };
   }
 
   /* ---------------- Canal 2: paquete de archivo ---------------- */
@@ -221,13 +290,13 @@
       throw new Error('Archivo no reconocido (formato inválido)');
     }
     let n = 0;
-    for (const k of ['config', 'products', 'sellers', 'loads']) n += await mergeRemote(k, bundle[k] || [], false, isAdmin);
+    for (const k of ['config', 'products', 'sellers', 'loads']) n += await mergeRemote(k, bundle[k] || [], isAdmin, isAdmin, true);
     // markDirty: si este equipo también sincroniza con servidor, los pedidos y
     // clientes recibidos por archivo se reenvían en el próximo sync.
-    n += await mergeRemote('clients', bundle.clients || [], isAdmin, isAdmin);
-    n += await mergeRemote('orders', bundle.orders || [], isAdmin, true);
+    n += await mergeRemote('clients', bundle.clients || [], isAdmin, isAdmin, true);
+    n += await mergeRemote('orders', bundle.orders || [], isAdmin, true, true);
     return n;
   }
 
-  global.Sync = { KINDS, isLocked, syncNow, pendingCount, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
+  global.Sync = { KINDS, isLocked, syncNow, pendingCount, hasCursor, reserveNumbers, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
 })(window);

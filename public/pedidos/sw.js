@@ -5,7 +5,7 @@
  *  - /api/*: siempre red (los datos viven en IndexedDB, no en caché HTTP).
  * Subir CACHE_VERSION en cada despliegue para forzar la actualización.
  * ========================================================================= */
-const CACHE_VERSION = 'pedidos-v6';
+const CACHE_VERSION = 'pedidos-v7';
 const SHELL = [
   './index.html', './styles.css', './manifest.webmanifest',
   './js/db.js', './js/seed.js', './js/matrix.js', './js/sync.js', './js/loads.js', './js/print.js',

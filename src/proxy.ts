@@ -4,8 +4,8 @@ import { ACCESS_COOKIE, accessEnabled, validToken } from '@/lib/access';
 // Protección de la PWA de pedidos (public/pedidos) y su API.
 //
 // 1. Sin la cookie de acceso (se obtiene en /acceso con usuario y clave) no se
-//    descarga NI el código de la app. La API de sincronización tiene su propia
-//    clave (x-sync-key), así que no depende de la cookie.
+//    descarga NI el código de la app. La API (/api/pedidos/*) tiene sus propias
+//    claves (x-sync-key, x-admin-key), así que no depende de la cookie.
 // 2. Cabeceras de seguridad: no indexar, no embeber en otros sitios, CSP
 //    estricta (solo recursos propios), sin sniffing de tipos.
 
@@ -39,8 +39,9 @@ export async function proxy(req: NextRequest) {
   const path = req.nextUrl.pathname;
   // Íconos y manifest no son sensibles: Android los pide sin cookie al instalar la app
   const isPublic = path.startsWith('/pedidos/icons/') || path === '/pedidos/manifest.webmanifest';
-  const isSync = path === '/api/pedidos/sync' && !!SYNC_KEY;
-  if (accessEnabled() && !isPublic && !isSync && !(await validToken(req.cookies.get(ACCESS_COOKIE)?.value))) {
+  // La API tiene sus propias claves (x-sync-key, x-admin-key): no depende de la cookie
+  const isKeyedApi = path.startsWith('/api/pedidos/') && !!SYNC_KEY;
+  if (accessEnabled() && !isPublic && !isKeyedApi && !(await validToken(req.cookies.get(ACCESS_COOKIE)?.value))) {
     if (wantsPage(req)) {
       const url = new URL('/acceso', req.url);
       url.searchParams.set('next', path === '/' || path === '/pedidos' ? '/pedidos/index.html' : path);

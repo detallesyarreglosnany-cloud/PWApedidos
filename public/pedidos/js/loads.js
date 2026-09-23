@@ -202,6 +202,17 @@
     return { ...load, sellerId: ids[0], sellerIds: ids, sellerName: names.join(' + ') };
   }
 
+  /** Cuántos números de carga y de nota necesita este cambio de estado (para reservarlos antes). */
+  function numbersNeeded(load, statusId, state) {
+    const st = statuses(state.config).find((x) => x.id === statusId);
+    if (!st) return { load: 0, note: 0 };
+    const os = loadOrders(load, new Map(state.orders.map((o) => [o.id, o])));
+    return {
+      load: st.locked && !load.number ? 1 : 0,
+      note: st.closing && !isClosed(load) ? os.filter((o) => !o.noteNumber).length : 0,
+    };
+  }
+
   /**
    * Cambiar el estado de la hoja. Aplica efectos una sola vez:
    *  - primer estado bloqueado → número de carga
@@ -217,9 +228,22 @@
     const os = loadOrders(load, ordersById);
     const cfg = { ...config, counters: { load: 0, note: 0, ...(config.counters || {}) } };
     let cfgChanged = false;
+    // Números reservados en el servidor (opts.numbers): únicos aunque haya varias PCs
+    const numbers = opts.numbers || { load: null, notes: [] };
+    const notesLeft = (numbers.notes || []).slice();
+    const nextNote = () => {
+      if (!notesLeft.length) throw new Error('Faltan números de nota reservados');
+      const n = notesLeft.shift();
+      if (n > cfg.counters.note) { cfg.counters.note = n; cfgChanged = true; }
+      return n;
+    };
     const ts = DB.now();
     let l = { ...load, status: st.id, statusHistory: (load.statusHistory || []).concat({ id: st.id, name: st.name, at: ts }) };
-    if (st.locked && !l.number) { cfg.counters.load += 1; l.number = cfg.counters.load; cfgChanged = true; }
+    if (st.locked && !l.number) {
+      if (!numbers.load) throw new Error('Falta el número de carga reservado');
+      l.number = numbers.load;
+      if (l.number > cfg.counters.load) { cfg.counters.load = l.number; cfgChanged = true; }
+    }
 
     const productsById = new Map(products.map((p) => [p.id, p]));
     const delta = new Map();
@@ -233,7 +257,7 @@
       l.date = l.date || (opts.today || ts.slice(0, 10));
       updOrders = os.map((o) => {
         addDelta(o, -1);
-        const n = o.noteNumber || (cfg.counters.note += 1, cfgChanged = true, cfg.counters.note);
+        const n = o.noteNumber || nextNote();
         return { ...o, status: 'despachado', locked: true, loadStatusName: st.name, dispatchedAt: ts, noteNumber: n, loadNumber: l.number };
       });
       const tot = updOrders.reduce((a, o) => {
@@ -277,7 +301,7 @@
 
   global.Loads = {
     DEFAULT_STATUSES, ORDER_LABEL, statuses, statusOf, isOpen, isClosed, limits, measure, usage, loadOrders,
-    autoPack, hold, release, moveOrder, merge, setStatus, shortages, initials, sellerIdsOf, labelOf, autoLabel, orderDateRange,
+    autoPack, hold, release, moveOrder, merge, setStatus, numbersNeeded, shortages, initials, sellerIdsOf, labelOf, autoLabel, orderDateRange,
     loadCode: (l) => (l.number ? 'C-' + fmtNum(l.number) : 'Borrador'),
     noteCode: (n) => 'NE-' + fmtNum(n, 6),
     /** Etiqueta del estado de un pedido para el vendedor. */
