@@ -25,6 +25,7 @@ Detalle funcional: [docs/PEDIDOS_PWA.md](docs/PEDIDOS_PWA.md) · Primer uso: [do
    | `PEDIDOS_BASIC_PASS` | clave larga para abrir la app |
    | `PEDIDOS_SYNC_KEY` | clave larga de sincronización |
    | `PEDIDOS_ADMIN_KEY` | clave larga, **solo oficina** |
+   | `PEDIDOS_SUPERVISOR_KEY` | opcional: ve todo, no puede cambiar nada |
 
 5. **Deploy.** La dirección raíz (`https://…vercel.app/`) abre la app directamente.
 

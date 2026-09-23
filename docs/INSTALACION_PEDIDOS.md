@@ -14,6 +14,7 @@
 | `PEDIDOS_BASIC_USER` / `PEDIDOS_BASIC_PASS` | Usuario y clave para **abrir** la app. Sin ellas no se descarga ni una línea del código. Se escriben una vez por equipo y quedan recordadas un año; si las cambias en Vercel, todos los equipos deben volver a entrar | Todos (oficina y vendedores) |
 | `PEDIDOS_SYNC_KEY` | Permite sincronizar pedidos | Todos |
 | `PEDIDOS_ADMIN_KEY` | Permite publicar precios, catálogo, clientes y cerrar cargas | **Solo la oficina** |
+| `PEDIDOS_SUPERVISOR_KEY` | Ve todos los pedidos, clientes, historial y reportes. No puede crear, editar ni eliminar nada. Opcional | Gerencia / supervisión |
 | `DATABASE_URL` / `DIRECT_URL` | Conexión a la base de datos (Supabase) | Solo el servidor |
 
 ## Despliegue
@@ -38,6 +39,14 @@ Sigue la guía del [README](../README.md): Vercel + Supabase (Postgres).
 2. Menú → **Agregar a pantalla de inicio**.
 3. Elige su nombre → ☰ → **Conexión**, escribe la **clave de sync** → **Guardar**. Su cartera y el catálogo se descargan solos.
 4. **Nunca le des la clave admin a un vendedor.**
+
+### Supervisor (solo consulta, para gerencia)
+En el login, botón **👁 Supervisor · Solo consulta**. Pide la clave de sincronización y la clave de supervisor (`PEDIDOS_SUPERVISOR_KEY`, si la configuraste en Vercel). Desde ahí se ve, de todos los vendedores:
+- **Resumen** del día.
+- **Reportes**: elige un rango de fechas (hoy, últimos 7/15/30 días, o cualquier rango) y sale el total y el desglose por vendedor, por despachador/ruta y por categoría de producto, más el detalle de cada pedido y descarga en Excel.
+- **Historial**: la misma actividad que ve la oficina.
+
+Nunca puede crear, editar ni eliminar nada — ni siquiera si alguien intenta forzarlo, el servidor lo rechaza.
 
 ### Eliminar un pedido hecho por error (vendedor)
 Toca el cliente en la fila de clientes de hoy → **Ver pedido** → **Eliminar**. Se puede mientras su hoja de carga no esté aprobada (🔒). Si ya está aprobada, lo quita la oficina.
