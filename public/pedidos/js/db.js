@@ -8,6 +8,7 @@
  *   orders   : un pedido = 1 vendedor + 1 cliente + 1 fecha de ruta
  *   loads    : hojas de carga (máx. N bultos / N clientes) y su archivo
  *   config   : doc único "main": empresa, rutas, despachadores, límites, tasa
+ *   events   : historial de actividad (quién, cuándo, qué); solo se agrega
  *   meta     : { key, value } → ajustes locales, deviceId, cursor, sesión
  *
  * Cada documento sincronizable lleva:
@@ -19,9 +20,9 @@
   'use strict';
 
   const DB_NAME = 'distribuidora-pedidos';
-  const DB_VERSION = 2;
+  const DB_VERSION = 3;
   // Stores sincronizables (mismo nombre que "kind" en el servidor)
-  const STORES = ['products', 'sellers', 'orders', 'clients', 'loads', 'config'];
+  const STORES = ['products', 'sellers', 'orders', 'clients', 'loads', 'config', 'events'];
   const LS_PREFIX = 'dp:';
 
   let dbPromise = null;
@@ -65,11 +66,23 @@
         if (!db.objectStoreNames.contains('meta')) {
           db.createObjectStore('meta', { keyPath: 'key' });
         }
+        // v3: historial de actividad
+        if (!db.objectStoreNames.contains('events')) {
+          const s = db.createObjectStore('events', { keyPath: 'id' });
+          s.createIndex('day', 'day', { unique: false });
+        }
       };
-      req.onsuccess = () => resolve(req.result);
+      req.onsuccess = () => {
+        const db = req.result;
+        // Si otra pestaña abre una versión nueva, esta suelta la base y se recarga
+        db.onversionchange = () => { db.close(); location.reload(); };
+        resolve(db);
+      };
       // Safari en modo privado / cuota bloqueada → localStorage
       req.onerror = () => { useFallback = true; resolve(null); };
-      req.onblocked = () => { useFallback = true; resolve(null); };
+      // Otra pestaña con la versión anterior sigue abierta: se espera a que la
+      // suelte (se recarga sola). Nunca se cambia a un almacenamiento vacío.
+      req.onblocked = () => { console.warn('Base local ocupada por otra pestaña: esperando'); };
     });
     return dbPromise;
   }

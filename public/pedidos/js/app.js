@@ -166,6 +166,32 @@
   async function saveSettings(patch) { S.settings = { ...S.settings, ...patch }; await DB.setMeta('settings', S.settings); }
   async function setSession(sess) { S.session = sess; await DB.setMeta('session', sess); }
 
+  /* ====================== Historial de actividad ====================== */
+  // Cada acción queda con hora, quién y equipo. Solo se agrega: nadie la edita.
+  const lastLogged = new Map();
+  async function logEvent(type, text, extra, opts) {
+    try {
+      const office = isOffice();
+      const sid = office ? 'oficina' : (S.session && S.session.sellerId);
+      if (!sid) return;
+      // Evita repetir el mismo aviso (p. ej. cada toque de cantidad): una vez cada X minutos
+      const k = (opts && opts.onceKey) || '';
+      if (k && Date.now() - (lastLogged.get(k) || 0) < (opts.everyMin || 10) * 60000) return;
+      if (k) lastLogged.set(k, Date.now());
+      const seller = office ? null : sellerById(sid);
+      const at = DB.now();
+      const d = new Date(Date.parse(at));
+      const day = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+      await DB.put('events', {
+        id: DB.uid('ev'), at, day, type, text: String(text).slice(0, 300),
+        sellerId: sid, sellerName: office ? 'Oficina' : (seller ? seller.name : sid),
+        deviceId: await Sync.deviceId(), ...(extra || {}), updatedAt: at, dirty: true,
+      });
+      notifyChange();
+    } catch (e) { console.warn('historial', e); }
+  }
+  const orderSummary = (o) => { const t = Matrix.orderTotals(o); return `${t.items} ítems · ${t.cajas} cj + ${t.unidades} un · ${usd(t.monto)}`; };
+
   let changeTimer;
   function notifyChange() {
     updateSyncPill();
@@ -322,6 +348,7 @@
         route: same && S.session.route ? S.session.route : ((s.routes && s.routes[0]) || ''),
       });
       location.hash = '#/ruta';
+      await logEvent('entrada', `Entró a su ruta${S.session.route ? ' ' + S.session.route : ''}`);
       runSync(false);
     };
   }
@@ -367,6 +394,7 @@
         client = { id: DB.uid('c'), rif: '', name, phone: '', address: '', group: '', creditDays: 0,
           sellerId: seller.id, route: S.session.route || '', active: true, source: 'campo', deleted: false };
         await saveDocs('clients', client);
+        await logEvent('cliente_nuevo', `Creó el cliente nuevo ${client.name}`, { clientId: client.id, clientName: client.name });
       }
       o = {
         id: DB.uid('o'), sellerId: seller.id, sellerName: seller.name,
@@ -376,6 +404,7 @@
         createdAt: DB.now(), deviceId: await Sync.deviceId(), deleted: false,
       };
       await saveOrder(o);
+      await logEvent('pedido_nuevo', `Abrió pedido de ${client.name}`, { orderId: o.id, clientId: client.id, clientName: client.name });
       toast('Cliente: ' + client.name, 'ok');
     }
     await setSession({ ...S.session, activeOrderId: o.id });
@@ -592,8 +621,13 @@
     };
     line[kind] = value;
     if (!line.cajas && !line.unidades) delete o.lines[pid]; else o.lines[pid] = line;
-    if (o.status === 'enviado') { o.status = 'abierto'; toast('Pedido reabierto: recuerda enviarlo de nuevo'); }
-    else if (o.loadId || o.status === 'en_espera') o.sellerEdited = DB.now(); // la oficina ve "modificado por el vendedor"
+    if (o.status === 'enviado') {
+      o.status = 'abierto'; toast('Pedido reabierto: recuerda enviarlo de nuevo');
+      logEvent('pedido_reabierto', `Reabrió el pedido de ${o.clientName} para modificarlo`, { orderId: o.id, clientName: o.clientName });
+    } else if (o.loadId || o.status === 'en_espera') {
+      o.sellerEdited = DB.now(); // la oficina ve "modificado por el vendedor"
+      logEvent('pedido_modificado', `Modificó el pedido de ${o.clientName} (ya estaba en hoja de carga)`, { orderId: o.id, clientName: o.clientName }, { onceKey: 'mod:' + o.id });
+    }
     await saveOrder(o);
     const card = $(`#plist [data-pid="${CSS.escape(pid)}"]`);
     if (card) {
@@ -650,6 +684,7 @@
       o.notes = notes.value.slice(0, 300);
       o.status = 'enviado'; o.sentAt = DB.now();
       await saveOrder(o);
+      await logEvent('pedido_enviado', `Envió el pedido de ${o.clientName} · ${orderSummary(o)}`, { orderId: o.id, clientName: o.clientName, amount: Matrix.orderTotals(o).monto });
       await setSession({ ...S.session, activeOrderId: null });
       sh.close(); renderSeller();
       toast('Pedido enviado. ' + (navigator.onLine ? 'Subiendo…' : 'Se subirá al tener señal.'), 'ok');
@@ -660,6 +695,7 @@
       if (!confirm('¿Eliminar el pedido de ' + o.clientName + '?')) return;
       o.deleted = true;
       await saveOrder(o);
+      await logEvent('pedido_eliminado', `Eliminó el pedido de ${o.clientName} · ${orderSummary(o)}`, { orderId: o.id, clientName: o.clientName });
       await setSession({ ...S.session, activeOrderId: null });
       sh.close(); renderSeller(); toast('Pedido eliminado');
       runSync(false);
@@ -704,7 +740,7 @@
       await saveSettings({ syncKey: $('#mKey', sh.el).value.trim(), syncUrl: $('#mUrl', sh.el).value.trim() });
       toast('Conexión guardada', 'ok'); runSync(true);
     };
-    $('#mOut', sh.el).onclick = async () => { await setSession(null); sh.close(); location.hash = '#/'; };
+    $('#mOut', sh.el).onclick = async () => { await logEvent('salida', 'Salió de su ruta (cambiar de vendedor)'); await setSession(null); sh.close(); location.hash = '#/'; };
   }
 
   /* =============================== Arranque =============================== */
@@ -721,7 +757,13 @@
     window.addEventListener('hashchange', render);
     window.addEventListener('online', () => { updateSyncPill(); runSync(false); });
     window.addEventListener('offline', updateSyncPill);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) runSync(false); });
+    let hiddenAt = 0;
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { hiddenAt = Date.now(); return; }
+      if (hiddenAt && Date.now() - hiddenAt > 15 * 60000) logEvent('regreso', 'Volvió a la app');
+      hiddenAt = 0;
+      runSync(false);
+    });
     if (bc) bc.onmessage = async () => { await loadAll(); refreshAfterRemote(); };
     app.addEventListener('focusout', flushDeferredRender);
     if ('serviceWorker' in navigator && location.protocol !== 'file:') {
@@ -738,6 +780,7 @@
       }).catch((e) => console.warn('SW no registrado', e));
     }
     render();
+    logEvent('apertura', isOffice() ? 'Abrió la oficina' : 'Abrió la app');
     scheduleSync(1200);
   }
   // Arranque: lo invoca index.html después de cargar office.js
@@ -745,7 +788,7 @@
   window.PV = {
     S, $, $$, esc, nf2, nf0, usd, bs, int, dec, norm, slug, today, fmtDate, fmtStock, hasStock, productSort, productLabel, rubroIcon,
     toast, openSheet, copyText, saveFile, pickFile, brandHeader, creditFooter,
-    loadAll, saveDocs, saveOrder, saveSettings, setSession, runSync, updateSyncPill, render, updateBell, beep,
+    loadAll, saveDocs, saveOrder, saveSettings, setSession, runSync, updateSyncPill, render, updateBell, beep, logEvent,
     productById, sellerById, orderById, clientById, rubros, orderLinesHTML,
     boot,
   };
