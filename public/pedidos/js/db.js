@@ -72,17 +72,22 @@
           s.createIndex('day', 'day', { unique: false });
         }
       };
+      let settled = false;
+      const finish = (v) => { if (settled) return; settled = true; clearTimeout(blockedTimer); resolve(v); };
       req.onsuccess = () => {
         const db = req.result;
         // Si otra pestaña abre una versión nueva, esta suelta la base y se recarga
         db.onversionchange = () => { db.close(); location.reload(); };
-        resolve(db);
+        finish(db);
       };
       // Safari en modo privado / cuota bloqueada → localStorage
-      req.onerror = () => { useFallback = true; resolve(null); };
-      // Otra pestaña con la versión anterior sigue abierta: se espera a que la
-      // suelte (se recarga sola). Nunca se cambia a un almacenamiento vacío.
-      req.onblocked = () => { console.warn('Base local ocupada por otra pestaña: esperando'); };
+      req.onerror = () => { useFallback = true; finish(null); };
+      // Otra pestaña con la versión anterior sigue abierta: normalmente se cierra
+      // sola (ve onversionchange) y esto sigue en 1-2 s. Si no (pestaña vieja sin
+      // ese código, o colgada), no se deja la app esperando para siempre: pasa a
+      // localStorage para no bloquear el login ni la sincronización.
+      const blockedTimer = setTimeout(() => { useFallback = true; finish(null); }, 4000);
+      req.onblocked = () => console.warn('Base local ocupada por otra pestaña: esperando');
     });
     return dbPromise;
   }

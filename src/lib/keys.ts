@@ -5,13 +5,14 @@ const SYNC_KEY = process.env.PEDIDOS_SYNC_KEY || '';
 const ADMIN_KEY = process.env.PEDIDOS_ADMIN_KEY || '';
 const SUPERVISOR_KEY = process.env.PEDIDOS_SUPERVISOR_KEY || '';
 
-function safeEqual(a: string, b: string) {
+export function safeEqual(a: string, b: string) {
   const ba = Buffer.from(a);
   const bb = Buffer.from(b);
   return ba.length === bb.length && timingSafeEqual(ba, bb);
 }
 
-function syncOk(req: NextRequest) {
+/** Clave de sincronización correcta (o sin exigir ninguna, si no está configurada). */
+export function syncOk(req: NextRequest) {
   return !SYNC_KEY || safeEqual(req.headers.get('x-sync-key') || '', SYNC_KEY);
 }
 

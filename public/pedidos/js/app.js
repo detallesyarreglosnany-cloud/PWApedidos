@@ -259,22 +259,33 @@
       });
     } catch (e) { /* sin audio */ }
   }
+  const NOTIF_TITLE = { pedido: '🧾 Nuevo pedido', editado: '✏️ Pedido modificado', duplicado: '⚠️ Cliente duplicado' };
   /** Compara antes/después de un sync y avisa: pedido nuevo, modificado por vendedor, cliente duplicado. */
   async function detectNotifs(before) {
     if (!isOffice()) return;
     const out = [];
     S.orders.forEach((o) => {
       const p = before.get(o.id), who = o.sellerName;
-      if (o.status === 'enviado' && (!p || p.status !== 'enviado')) out.push({ icon: '🧾', msg: `Nuevo pedido de ${who}: ${o.clientName}` });
-      else if (o.sellerEdited && (!p || p.sellerEdited !== o.sellerEdited)) out.push({ icon: '✏️', msg: `${who} modificó el pedido de ${o.clientName}` });
-      if ((o.dupWith || []).length && !(p && (p.dupWith || []).length)) out.push({ icon: '⚠️', warn: true, msg: `Cliente duplicado: ${o.clientName} (${who} y ${o.dupWith.map((d) => d.sellerName).join(', ')})` });
+      if (o.status === 'enviado' && (!p || p.status !== 'enviado')) out.push({ icon: '🧾', kind: 'pedido', msg: `Nuevo pedido de ${who}: ${o.clientName}` });
+      else if (o.sellerEdited && (!p || p.sellerEdited !== o.sellerEdited)) out.push({ icon: '✏️', kind: 'editado', msg: `${who} modificó el pedido de ${o.clientName}` });
+      if ((o.dupWith || []).length && !(p && (p.dupWith || []).length)) out.push({ icon: '⚠️', kind: 'duplicado', warn: true, msg: `Cliente duplicado: ${o.clientName} (${who} y ${o.dupWith.map((d) => d.sellerName).join(', ')})` });
     });
     if (!out.length) return;
     const at = new Date().toISOString();
     S.notifs = out.map((n) => ({ ...n, at, read: false })).concat(S.notifs || []).slice(0, 80);
     await DB.setMeta('notifs', S.notifs);
     beep();
-    try { if (document.hidden && 'Notification' in window && Notification.permission === 'granted') new Notification('Puerto Venado', { body: out.map((n) => n.msg).join('\n'), icon: './icons/icon-192.png' }); } catch (e) { /* noop */ }
+    // Una notificación del sistema POR CADA aviso (no una sola con todo mezclado),
+    // con un tag único para que Android no descarte las que llegan juntas.
+    if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+      out.forEach((n, i) => {
+        try {
+          new Notification(NOTIF_TITLE[n.kind] || 'Puerto Venado', {
+            body: n.msg, icon: './icons/icon-192.png', tag: 'pv-' + at + '-' + i,
+          });
+        } catch (e) { /* noop */ }
+      });
+    }
     updateBell();
   }
   function updateBell() {

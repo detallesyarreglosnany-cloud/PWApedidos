@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { timingSafeEqual } from 'crypto';
 import { db } from '@/lib/db';
+import { requireAdmin } from '@/lib/keys';
 
 // Reserva de números de carga y de notas de entrega (solo oficina).
 //
@@ -15,15 +15,7 @@ import { db } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
-const SYNC_KEY = process.env.PEDIDOS_SYNC_KEY || '';
-const ADMIN_KEY = process.env.PEDIDOS_ADMIN_KEY || '';
 const MAX_NOTES = 500;
-
-function safeEqual(a: string, b: string) {
-  const ba = Buffer.from(a);
-  const bb = Buffer.from(b);
-  return ba.length === bb.length && timingSafeEqual(ba, bb);
-}
 
 const int = (v: unknown) => (Number.isInteger(v) && (v as number) >= 0 ? (v as number) : 0);
 
@@ -37,13 +29,8 @@ async function take(name: string, count: number, floor: number) {
 }
 
 export async function POST(req: NextRequest) {
-  if (SYNC_KEY && !safeEqual(req.headers.get('x-sync-key') || '', SYNC_KEY)) {
-    return NextResponse.json({ error: 'Clave de sincronización inválida' }, { status: 401 });
-  }
-  const admin = req.headers.get('x-admin-key') || '';
-  if (!ADMIN_KEY || !safeEqual(admin, ADMIN_KEY)) {
-    return NextResponse.json({ error: 'Solo la oficina puede numerar cargas y notas' }, { status: 401 });
-  }
+  const denied = requireAdmin(req);
+  if (denied) return denied;
   let body: { load?: unknown; note?: unknown; floor?: { load?: unknown; note?: unknown } };
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }); }
   const loadCount = Math.min(int(body.load), 1);
