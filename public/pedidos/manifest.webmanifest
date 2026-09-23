@@ -1,0 +1,16 @@
+{
+  "name": "Puerto Venado · Pedidos",
+  "short_name": "Puerto Venado",
+  "description": "Toma de pedidos, hojas de carga y despacho de Distribuidora de Suministros Puerto Venado",
+  "lang": "es-VE",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0b0b0c",
+  "theme_color": "#5a040b",
+  "icons": [
+    { "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
