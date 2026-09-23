@@ -442,7 +442,15 @@
     } else if (st.locked && !cur.locked) {
       if (!confirm(`${st.name}: vendedores y oficina ya no podrán modificar estos ${os.length} pedidos. ¿Continuar?`)) return back();
     }
-    const r = Loads.setStatus(load, statusId, { orders: S.orders, products: S.products, config: S.config }, { today: today() });
+    // Los números de carga y de nota los entrega el servidor: nunca se repiten entre PCs
+    const need = Loads.numbersNeeded(load, statusId, { orders: S.orders, config: S.config });
+    let numbers = { load: null, notes: [] };
+    if (need.load || need.note) {
+      const res = await Sync.reserveNumbers(need, (S.config && S.config.counters) || {});
+      if (!res.ok) { toast(res.error + ' · Se necesita internet para numerar cargas y notas.', 'err'); return back(); }
+      numbers = res;
+    }
+    const r = Loads.setStatus(load, statusId, { orders: S.orders, products: S.products, config: S.config }, { today: today(), numbers });
     if (r.config) await saveDocs('config', r.config);
     await saveDocs('orders', r.orders);
     await saveDocs('products', r.products);

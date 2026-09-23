@@ -148,11 +148,22 @@
       : Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
     return (prefix ? prefix + '_' : '') + rnd;
   }
-  function now() { return new Date().toISOString(); }
+  // Diferencia con el reloj del servidor (se mide en cada sincronización): un
+  // teléfono con la hora mal puesta no pierde ni pisa ediciones de otros.
+  let clockOffset = 0;
+  try { clockOffset = +localStorage.getItem('pvClockOffset') || 0; } catch (e) { /* sin storage */ }
+  function setClockOffset(ms) {
+    if (!Number.isFinite(ms) || Math.abs(ms) > 7 * 86400000) return;
+    clockOffset = Math.round(ms);
+    try { localStorage.setItem('pvClockOffset', String(clockOffset)); } catch (e) { /* sin storage */ }
+  }
+  function now() { return new Date(Date.now() + clockOffset).toISOString(); }
 
   /** Marca un documento como modificado localmente (pendiente de sync). */
   function touch(doc) {
-    doc.updatedAt = now();
+    const t = now();
+    // Una edición siempre es posterior a la versión que se editó
+    doc.updatedAt = doc.updatedAt && doc.updatedAt >= t ? new Date(Date.parse(doc.updatedAt) + 1).toISOString() : t;
     doc.dirty = true;
     return doc;
   }
@@ -169,7 +180,7 @@
 
   global.DB = {
     STORES, open, getAll, get, put, putMany, remove, getMeta, setMeta,
-    uid, now, touch, requestPersistence,
+    uid, now, touch, setClockOffset, requestPersistence,
     get isFallback() { return useFallback; },
   };
 })(window);

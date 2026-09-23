@@ -25,3 +25,10 @@ model DistDoc {
   @@index([kind, syncedAt])
   @@index([kind, sellerId, routeDate])
 }
+
+// Numeración de cargas y notas de entrega. La entrega el servidor de forma
+// atómica: dos PCs de oficina nunca imprimen el mismo número.
+model DistCounter {
+  name  String @id // load | note
+  value Int    @default(0)
+}

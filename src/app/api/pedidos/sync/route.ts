@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { timingSafeEqual } from 'crypto';
+import { Prisma } from '@prisma/client';
 import { db } from '@/lib/db';
 
 // Sincronización de la PWA de pedidos (public/pedidos).
@@ -7,19 +8,24 @@ import { db } from '@/lib/db';
 // POST /api/pedidos/sync
 //   headers: x-sync-key  (obligatoria si PEDIDOS_SYNC_KEY está definida)
 //            x-admin-key (oficina: permite escribir catálogo y vendedores)
-//   body:    { deviceId, since, sinceDays, sellerId, push: { <kind>: docs[] } }
+//   body:    { deviceId, since, sinceDays, sellerId, noPull, push: { <kind>: docs[] } }
 //   kinds:   orders, clients, products, sellers, loads, config
-//   resp:    { serverTime, accepted: {kind: ids[]}, rejected: [{kind,id,reason,doc}], pull: {kind: docs[]} }
+//   resp:    { serverTime, accepted: {kind: ids[]}, rejected: [{kind,id,reason,doc}], pull: {kind: docs[]}, dups }
 //
 // Reglas (espejo de public/pedidos/js/sync.js):
-//   - Last-write-wins por updatedAt del documento.
+//   - Last-write-wins por updatedAt del documento, garantizado en la propia
+//     escritura (ON CONFLICT … WHERE), no solo en la lectura previa.
 //   - products/sellers/loads/config solo se escriben con clave admin.
-//   - Un pedido bloqueado (su hoja pasó a un estado bloqueado: aprobada para
-//     carga, cerrada, despachada…) no puede ser modificado por un vendedor.
-//     Mientras la hoja esté en un estado editable, vendedor y oficina editan.
-//   - Un teléfono (sellerId) solo baja sus pedidos y su cartera de clientes.
+//   - Un teléfono solo escribe pedidos y clientes de SU vendedor y nunca los
+//     reasigna a otro vendedor.
+//   - Un pedido bloqueado (hoja aprobada, cerrada, despachada…) no lo modifica
+//     un vendedor. Los campos de la oficina nunca los pisa un teléfono.
+//   - La alerta de cliente duplicado se calcula al bajar (campo `dups`) y NO se
+//     guarda dentro de los pedidos: así nunca cambia la versión de un pedido
+//     ajeno ni descarta la edición pendiente de otro equipo.
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 const SYNC_KEY = process.env.PEDIDOS_SYNC_KEY || '';
 const ADMIN_KEY = process.env.PEDIDOS_ADMIN_KEY || '';
@@ -31,11 +37,18 @@ type Kind = (typeof KINDS)[number];
 // (aunque su copia local esté atrasada y no sepa que el pedido ya está en una hoja).
 const OFFICE_ORDER_FIELDS = ['loadId', 'locked', 'loadStatusName', 'noteNumber', 'loadNumber', 'dispatchedAt', 'officeEdited', 'heldAt'];
 const OFFICE_ORDER_STATUS: readonly string[] = ['en_carga', 'en_espera', 'despachado'];
-const MAX_BODY_BYTES = 15 * 1024 * 1024; // primera publicación: catálogo con fotos + cartera
+// Solo se guardan en el equipo: el servidor calcula dupWith en cada bajada
+const LOCAL_ONLY_FIELDS = ['dirty', 'dupWith'];
+const MAX_BODY_BYTES = 4 * 1024 * 1024; // Vercel corta en 4,5 MB; el cliente envía tandas de ~2,5 MB
 const MAX_DOCS_PER_KIND = 5000;
 const MAX_DOC_BYTES = 256 * 1024; // productos con foto comprimida
+const CHUNK = 200; // documentos por consulta
+// La bajada relee este margen hacia atrás: una escritura que empezó antes del
+// cursor pero terminó después no se pierde (fusionar dos veces no cambia nada).
+const PULL_OVERLAP_MS = 5 * 60_000;
 
 type Doc = Record<string, unknown> & { id: string; updatedAt: string; deleted?: boolean };
+type Row = { kind: string; id: string; data: string; sellerId: string | null; routeDate: string | null; status: string | null; deleted: boolean; updatedAt: string };
 
 function safeEqual(a: string, b: string) {
   const ba = Buffer.from(a);
@@ -57,6 +70,59 @@ function parseDoc(data: string): Doc {
 function daysAgo(n: number) {
   const d = new Date(Date.now() - n * 86400000);
   return d.toISOString().slice(0, 10);
+}
+
+function toRow(kind: Kind, doc: Doc): Row {
+  return {
+    kind,
+    id: doc.id,
+    data: JSON.stringify(doc),
+    sellerId: kind === 'orders' || kind === 'clients' || kind === 'loads' ? String(doc.sellerId || '') : null,
+    routeDate: kind === 'orders' ? String(doc.routeDate || '') : null,
+    status: kind === 'orders' ? String(doc.status || '') : null,
+    deleted: !!doc.deleted,
+    updatedAt: doc.updatedAt,
+  };
+}
+
+/** Upsert por lotes. Solo escribe si la versión que llega no es más vieja. Devuelve los ids escritos. */
+async function writeRows(rows: Row[]) {
+  if (!rows.length) return new Set<string>();
+  const values = rows.map((r) => Prisma.sql`(${r.kind}, ${r.id}, ${r.data}, ${r.sellerId}, ${r.routeDate}, ${r.status}, ${r.deleted}, ${r.updatedAt}, now())`);
+  const out = await db.$queryRaw<{ id: string }[]>`
+    INSERT INTO "DistDoc" ("kind", "id", "data", "sellerId", "routeDate", "status", "deleted", "updatedAt", "syncedAt")
+    VALUES ${Prisma.join(values)}
+    ON CONFLICT ("kind", "id") DO UPDATE SET
+      "data" = EXCLUDED."data", "sellerId" = EXCLUDED."sellerId", "routeDate" = EXCLUDED."routeDate",
+      "status" = EXCLUDED."status", "deleted" = EXCLUDED."deleted", "updatedAt" = EXCLUDED."updatedAt", "syncedAt" = now()
+    WHERE "DistDoc"."updatedAt" <= EXCLUDED."updatedAt"
+    RETURNING "id"`;
+  return new Set(out.map((r) => r.id));
+}
+
+/** Alertas de cliente duplicado el mismo día (mismo u otro vendedor), para los pedidos recientes del alcance. */
+async function duplicates(sellerId: string | null) {
+  const from = daysAgo(3);
+  const recent = await db.distDoc.findMany({ where: { kind: 'orders', deleted: false, routeDate: { gte: from } } });
+  const orders = recent.map((r) => parseDoc(r.data) as Record<string, unknown>).filter((o) => !o.deleted);
+  const keysOf = (o: Record<string, unknown>) => {
+    const k: string[] = [];
+    if (o.clientId) k.push(o.routeDate + '|i|' + o.clientId);
+    if (o.clientKey) k.push(o.routeDate + '|k|' + o.clientKey);
+    return k;
+  };
+  const groups = new Map<string, Record<string, unknown>[]>();
+  for (const o of orders) for (const k of keysOf(o)) { const g = groups.get(k) || []; g.push(o); groups.set(k, g); }
+  const dups: Record<string, { id: string; sellerName: string }[]> = {};
+  for (const o of orders) {
+    if (sellerId && o.sellerId !== sellerId) continue;
+    const seen = new Map<string, { id: string; sellerName: string }>();
+    for (const k of keysOf(o)) for (const x of groups.get(k) || []) {
+      if (x.id !== o.id) seen.set(String(x.id), { id: String(x.id), sellerName: String(x.sellerName || '') });
+    }
+    dups[String(o.id)] = [...seen.values()];
+  }
+  return { from, map: dups };
 }
 
 export async function GET() {
@@ -84,14 +150,15 @@ export async function POST(req: NextRequest) {
     since?: string | null;
     sinceDays?: number | null;
     sellerId?: string | null;
-    push?: Partial<Record<Kind, unknown[]>>;
     noPull?: boolean;
+    push?: Partial<Record<Kind, unknown[]>>;
   };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: 'JSON inválido' }, { status: 400 });
   }
+  const sellerId = typeof body.sellerId === 'string' && body.sellerId ? body.sellerId : null;
 
   const accepted = Object.fromEntries(KINDS.map((k) => [k, [] as string[]])) as Record<Kind, string[]>;
   const rejected: { kind: Kind; id: string; reason: string; doc?: Doc }[] = [];
@@ -99,52 +166,68 @@ export async function POST(req: NextRequest) {
 
   try {
     for (const kind of KINDS) {
-      const incoming = Array.isArray(body.push?.[kind]) ? body.push![kind]! : [];
+      // Si el mismo documento viene repetido, gana su versión más reciente
+      const newest = new Map<string, Doc>();
+      for (const d of (Array.isArray(body.push?.[kind]) ? body.push![kind]! : []).filter(isDoc)) {
+        const prev = newest.get(d.id);
+        if (!prev || prev.updatedAt < d.updatedAt) newest.set(d.id, d);
+      }
+      const incoming = [...newest.values()];
       if (!incoming.length) continue;
       if (incoming.length > MAX_DOCS_PER_KIND) {
         return NextResponse.json({ error: `Demasiados documentos en ${kind}` }, { status: 413 });
       }
-      if (ADMIN_KINDS.includes(kind) && !isAdmin) {
-        // Un teléfono nunca publica catálogo ni cargas: se ignora sin error.
-        continue;
-      }
+      // Un teléfono nunca publica catálogo ni cargas: se ignora sin error.
+      if (ADMIN_KINDS.includes(kind) && !isAdmin) continue;
+      // Un teléfono sin vendedor elegido no escribe pedidos ni clientes (quedan pendientes).
+      if (!isAdmin && !sellerId) continue;
 
-      await db.$transaction(async (tx) => {
-        for (const raw of incoming) {
-          if (!isDoc(raw)) continue;
+      for (let i = 0; i < incoming.length; i += CHUNK) {
+        const part = incoming.slice(i, i + CHUNK);
+        const existingRows = await db.distDoc.findMany({ where: { kind, id: { in: part.map((d) => d.id) } } });
+        const existingById = new Map(existingRows.map((r) => [r.id, r]));
+        const toWrite: Row[] = [];
+
+        for (const raw of part) {
           const doc: Doc = { ...raw };
-          delete (doc as Record<string, unknown>).dirty;
+          for (const f of LOCAL_ONLY_FIELDS) delete (doc as Record<string, unknown>)[f];
           // Un reloj de teléfono adelantado no puede "ganar" para siempre.
           if (doc.updatedAt > maxTs) doc.updatedAt = serverTime.toISOString();
           if (JSON.stringify(doc).length > MAX_DOC_BYTES) {
             rejected.push({ kind, id: doc.id, reason: 'too_large' });
             continue;
           }
+          const existing = existingById.get(doc.id);
+          const cur = existing ? parseDoc(existing.data) : null;
 
-          const existing = await tx.distDoc.findUnique({ where: { kind_id: { kind, id: doc.id } } });
-          if (existing) {
+          if (!isAdmin && (kind === 'orders' || kind === 'clients')) {
+            // Nunca se escribe ni se reasigna un pedido o cliente de otro vendedor
+            if (String(doc.sellerId || '') !== sellerId || (cur && String(cur.sellerId || '') !== sellerId)) {
+              rejected.push({ kind, id: doc.id, reason: 'foreign', doc: cur || undefined });
+              continue;
+            }
+          }
+
+          if (existing && cur) {
             if (kind === 'orders' && !isAdmin) {
-              const cur = parseDoc(existing.data);
               if (cur.locked === true || existing.status === 'despachado') {
                 rejected.push({ kind, id: doc.id, reason: 'locked', doc: cur });
                 continue;
               }
-            }
-            if (kind === 'orders' && !isAdmin) {
-              const cur = parseDoc(existing.data) as Record<string, unknown>;
+              const c = cur as Record<string, unknown>;
               const d = doc as Record<string, unknown>;
               let changed = false;
               for (const f of OFFICE_ORDER_FIELDS) {
-                if (cur[f] !== undefined && d[f] !== cur[f]) { d[f] = cur[f]; changed = true; }
+                if (c[f] !== undefined && d[f] !== c[f]) { d[f] = c[f]; changed = true; }
               }
-              if (OFFICE_ORDER_STATUS.includes(String(cur.status)) && d.status !== cur.status) { d.status = cur.status; changed = true; }
+              if (OFFICE_ORDER_STATUS.includes(String(c.status)) && d.status !== c.status) { d.status = c.status; changed = true; }
               // La oficina ve que el vendedor tocó un pedido que ya estaba en una hoja
-              if (cur.loadId && JSON.stringify(d.lines) !== JSON.stringify(cur.lines)) d.sellerEdited = serverTime.toISOString();
+              if (c.loadId && JSON.stringify(d.lines) !== JSON.stringify(c.lines)) d.sellerEdited = serverTime.toISOString();
               // Nueva versión con hora del servidor para que el teléfono la vuelva a bajar corregida
               if (changed && existing.updatedAt <= doc.updatedAt) doc.updatedAt = serverTime.toISOString();
             }
             if (existing.updatedAt > doc.updatedAt) {
-              rejected.push({ kind, id: doc.id, reason: 'stale', doc: parseDoc(existing.data) });
+              rejected.push({ kind, id: doc.id, reason: 'stale', doc: cur });
               continue;
             }
             if (existing.updatedAt === doc.updatedAt) {
@@ -152,74 +235,49 @@ export async function POST(req: NextRequest) {
               continue;
             }
           }
-
-          // Alerta de cliente duplicado el mismo día (mismo u otro vendedor): no bloquea
-          if (kind === 'orders' && doc.routeDate) {
-            const key = (o: Record<string, unknown>) => String(o.clientId || o.clientKey || '');
-            const d = doc as Record<string, unknown>;
-            const same = (await tx.distDoc.findMany({ where: { kind: 'orders', routeDate: String(doc.routeDate), deleted: false } }))
-              .filter((r) => r.id !== doc.id).map((r) => ({ row: r, o: parseDoc(r.data) as Record<string, unknown> }))
-              .filter(({ o }) => !o.deleted && key(o) && (key(o) === key(d) || (o.clientKey && o.clientKey === d.clientKey)));
-            const dup = doc.deleted ? [] : same.map(({ o }) => ({ id: String(o.id), sellerName: String(o.sellerName || '') }));
-            if (JSON.stringify(dup) !== JSON.stringify(d.dupWith || [])) {
-              d.dupWith = dup;
-              if (!isAdmin || existing) doc.updatedAt = serverTime.toISOString(); // que el teléfono baje la alerta
-            }
-            // Marcar también los otros pedidos del mismo cliente
-            for (const { row, o } of same) {
-              const list = ((o.dupWith as { id: string }[]) || []).filter((x) => x.id !== doc.id);
-              if (!doc.deleted) list.push({ id: doc.id, sellerName: String(d.sellerName || '') } as { id: string });
-              if (JSON.stringify(list) !== JSON.stringify(o.dupWith || [])) {
-                const upd = { ...o, dupWith: list, updatedAt: serverTime.toISOString() };
-                await tx.distDoc.update({ where: { kind_id: { kind: 'orders', id: row.id } }, data: { data: JSON.stringify(upd), updatedAt: upd.updatedAt } });
-              }
-            }
-          }
-          const data = JSON.stringify(doc);
-          const cols = {
-            data,
-            deleted: !!doc.deleted,
-            updatedAt: doc.updatedAt,
-            sellerId: kind === 'orders' || kind === 'clients' || kind === 'loads' ? String(doc.sellerId || '') : null,
-            routeDate: kind === 'orders' ? String(doc.routeDate || '') : null,
-            status: kind === 'orders' ? String(doc.status || '') : null,
-          };
-          await tx.distDoc.upsert({
-            where: { kind_id: { kind, id: doc.id } },
-            create: { kind, id: doc.id, ...cols },
-            update: cols,
-          });
-          accepted[kind].push(doc.id);
+          toWrite.push(toRow(kind, doc));
         }
-      });
+
+        const written = await writeRows(toWrite);
+        const lost = toWrite.filter((r) => !written.has(r.id));
+        for (const r of toWrite) if (written.has(r.id)) accepted[kind].push(r.id);
+        if (lost.length) {
+          // Otro equipo escribió una versión más nueva entre la lectura y la escritura
+          const now = await db.distDoc.findMany({ where: { kind, id: { in: lost.map((r) => r.id) } } });
+          for (const r of now) rejected.push({ kind, id: r.id, reason: 'stale', doc: parseDoc(r.data) });
+        }
+      }
     }
 
     // Tandas intermedias de una subida grande: la bajada va en la última
     if (body.noPull) return NextResponse.json({ serverTime: serverTime.toISOString(), accepted, rejected, pull: {} });
 
     // ---- Bajada ----
-    const since = body.since && !Number.isNaN(Date.parse(body.since)) ? new Date(body.since) : null;
+    const since = body.since && !Number.isNaN(Date.parse(body.since)) ? new Date(Date.parse(body.since) - PULL_OVERLAP_MS) : null;
     const syncedAt = since ? { gte: since } : undefined;
-    const sellerId = typeof body.sellerId === 'string' && body.sellerId ? body.sellerId : null;
     const sinceDays = !since && typeof body.sinceDays === 'number' && body.sinceDays > 0
       ? Math.min(body.sinceDays, 365) : null;
 
     const bySeller = sellerId ? { sellerId } : {};
-    const [products, sellers, config, clients, loads, orders] = await Promise.all([
+    // Un teléfono sin vendedor elegido solo baja catálogo, vendedores y ajustes
+    const noScope = !isAdmin && !sellerId;
+    const none = Promise.resolve([] as Awaited<ReturnType<typeof db.distDoc.findMany>>);
+    const [products, sellers, config, clients, loads, orders, dups] = await Promise.all([
       db.distDoc.findMany({ where: { kind: 'products', syncedAt } }),
       db.distDoc.findMany({ where: { kind: 'sellers', syncedAt } }),
       db.distDoc.findMany({ where: { kind: 'config', syncedAt } }),
-      db.distDoc.findMany({ where: { kind: 'clients', syncedAt, ...bySeller } }),
+      noScope ? none : db.distDoc.findMany({ where: { kind: 'clients', syncedAt, ...bySeller } }),
       // Las hojas de carga solo interesan a la oficina
-      sellerId ? Promise.resolve([]) : db.distDoc.findMany({ where: { kind: 'loads', syncedAt } }),
-      db.distDoc.findMany({
+      sellerId || noScope ? none : db.distDoc.findMany({ where: { kind: 'loads', syncedAt } }),
+      noScope ? none : db.distDoc.findMany({
         where: {
           kind: 'orders',
           syncedAt,
-          ...(sellerId ? { sellerId } : {}),
+          ...bySeller,
           ...(sinceDays ? { routeDate: { gte: daysAgo(sinceDays) } } : {}),
         },
       }),
+      noScope ? Promise.resolve(null) : duplicates(sellerId),
     ]);
 
     return NextResponse.json({
@@ -234,6 +292,7 @@ export async function POST(req: NextRequest) {
         loads: loads.map((d) => parseDoc(d.data)),
         orders: orders.map((d) => parseDoc(d.data)),
       },
+      dups,
     });
   } catch (error) {
     console.error('[pedidos/sync]', error);
