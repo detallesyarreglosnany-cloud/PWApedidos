@@ -3,7 +3,7 @@
 PWA de toma de pedidos, hojas de carga y despacho de Distribuidora de Suministros Puerto Venado.
 
 - La app vive en `public/pedidos/` (HTML + CSS + JS, funciona sin internet).
-- El servidor (Next.js) solo hace dos cosas: pide usuario y clave (`src/proxy.ts`) y sincroniza los datos (`src/app/api/pedidos/sync/route.ts`).
+- El servidor (Next.js) solo hace dos cosas: pide usuario y clave una sola vez en `/acceso` y deja una cookie de un año (`src/proxy.ts`, `src/app/acceso/route.ts`) y sincroniza los datos (`src/app/api/pedidos/sync/route.ts`).
 - Los datos se guardan en PostgreSQL (Supabase), en una sola tabla: `DistDoc`.
 
 Detalle funcional: [docs/PEDIDOS_PWA.md](docs/PEDIDOS_PWA.md) · Primer uso: [docs/INSTALACION_PEDIDOS.md](docs/INSTALACION_PEDIDOS.md)
@@ -13,7 +13,7 @@ Detalle funcional: [docs/PEDIDOS_PWA.md](docs/PEDIDOS_PWA.md) · Primer uso: [do
 1. **Supabase → Connect → Direct connection string.** Copia dos cadenas y reemplaza `[YOUR-PASSWORD]` por la clave de la base de datos:
    - *Transaction pooler* (puerto **6543**) → `DATABASE_URL`, y agrega al final `?pgbouncer=true&connection_limit=1`
    - *Session pooler* (puerto **5432**) → `DIRECT_URL`
-2. **Crea la tabla** (una sola vez): Supabase → SQL Editor → pega `prisma/init.sql` → Run.
+2. **La tabla se crea sola** en cada despliegue (`prisma db push` dentro de `npm run build`, usando `DIRECT_URL`). Si prefieres hacerlo a mano: Supabase → SQL Editor → pega `prisma/init.sql` → Run.
 3. **Vercel → Add New → Project →** importa `PWApedidos`. Framework: Next.js. No cambies nada más.
 4. **Environment Variables** (Production, Preview y Development):
 

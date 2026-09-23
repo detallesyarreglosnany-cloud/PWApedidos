@@ -82,6 +82,41 @@
   }
   const total = (push) => KINDS.reduce((a, k) => a + push[k].length, 0);
 
+  const MAX_BATCH_CHARS = 2500000;
+  /** Parte la subida en tandas que caben en una petición a Vercel. */
+  function splitPush(push) {
+    const empty = () => Object.fromEntries(KINDS.map((k) => [k, []]));
+    const out = [empty()];
+    let size = 0;
+    for (const k of KINDS) {
+      for (const d of push[k]) {
+        const n = JSON.stringify(d).length;
+        if (size && size + n > MAX_BATCH_CHARS) { out.push(empty()); size = 0; }
+        out[out.length - 1][k].push(d);
+        size += n;
+      }
+    }
+    return out;
+  }
+
+  async function post(url, headers, body) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 30000);
+    let res;
+    try {
+      res = await fetch(url, { method: 'POST', headers, signal: ctrl.signal, credentials: 'same-origin', body: JSON.stringify(body) });
+    } catch (e) {
+      return { ok: false, error: 'Sin conexión con el servidor' };
+    } finally { clearTimeout(timer); }
+    if (!res.ok) {
+      let msg = 'Error ' + res.status;
+      try { msg = (await res.json()).error || msg; } catch (e) { /* noop */ }
+      if (res.status === 401 && msg === 'Error 401') msg = 'Sesión vencida: recarga la página y vuelve a entrar';
+      return { ok: false, error: msg, status: res.status };
+    }
+    return { ok: true, data: await res.json() };
+  }
+
   /**
    * Sincroniza contra el servidor. scope = { sellerId } para teléfonos
    * (solo baja sus propios pedidos) o {} para la oficina (todos).
@@ -100,42 +135,30 @@
       if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
       if (cfg.adminKey) headers['x-admin-key'] = cfg.adminKey;
 
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 20000);
-      let res;
-      try {
-        res = await fetch(url, {
-          method: 'POST', headers, signal: ctrl.signal,
-          body: JSON.stringify({
-            deviceId: await deviceId(),
-            since,
-            sinceDays: since ? null : INITIAL_ORDER_DAYS,
-            sellerId: scope && scope.sellerId || null,
-            push,
-          }),
-        });
-      } catch (e) {
-        return { ok: false, error: 'Sin conexión con el servidor' };
-      } finally { clearTimeout(timer); }
-
-      if (!res.ok) {
-        let msg = 'Error ' + res.status;
-        try { msg = (await res.json()).error || msg; } catch (e) { /* noop */ }
-        return { ok: false, error: msg, status: res.status };
-      }
-      const data = await res.json();
-
-      // 1) Lo aceptado por el servidor deja de estar pendiente
-      for (const k of KINDS) {
-        const ok = new Set((data.accepted && data.accepted[k]) || []);
-        await clearDirty(k, push[k].filter((d) => ok.has(d.id)));
+      // Vercel rechaza cuerpos de más de 4,5 MB: la subida va por tandas y solo
+      // la última trae la bajada (así el cursor avanza una sola vez).
+      const batches = splitPush(push);
+      const base = { deviceId: await deviceId(), since, sinceDays: since ? null : INITIAL_ORDER_DAYS, sellerId: scope && scope.sellerId || null };
+      let data = null;
+      const rejected = [];
+      for (let i = 0; i < batches.length; i++) {
+        const last = i === batches.length - 1;
+        const r = await post(url, headers, { ...base, push: batches[i], noPull: !last });
+        if (!r.ok) return r;
+        // 1) Lo aceptado por el servidor deja de estar pendiente
+        for (const k of KINDS) {
+          const ok = new Set((r.data.accepted && r.data.accepted[k]) || []);
+          await clearDirty(k, batches[i][k].filter((d) => ok.has(d.id)));
+        }
+        rejected.push(...(r.data.rejected || []));
+        if (last) data = r.data;
       }
 
       // 2) Lo rechazado vuelve con la versión del servidor (ya despachado, o
       //    el servidor tiene una edición más reciente)
-      const rejected = (data.rejected || []).filter((r) => r.doc && KINDS.includes(r.kind));
-      for (const r of rejected) await DB.put(r.kind, { ...r.doc, dirty: false });
-      const rejectedOrders = rejected.filter((r) => r.kind === 'orders');
+      const back = rejected.filter((r) => r.doc && KINDS.includes(r.kind));
+      for (const r of back) await DB.put(r.kind, { ...r.doc, dirty: false });
+      const rejectedOrders = back.filter((r) => r.kind === 'orders');
 
       // 3) Bajar cambios remotos
       let changed = 0;
