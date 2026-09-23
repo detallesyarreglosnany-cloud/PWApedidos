@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { timingSafeEqual } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { db } from '@/lib/db';
+import { isAdminReq, isSupervisorReq, syncOk } from '@/lib/keys';
 
 // Sincronización de la PWA de pedidos (public/pedidos).
 //
@@ -33,9 +33,6 @@ import { db } from '@/lib/db';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-const SYNC_KEY = process.env.PEDIDOS_SYNC_KEY || '';
-const ADMIN_KEY = process.env.PEDIDOS_ADMIN_KEY || '';
-const SUPERVISOR_KEY = process.env.PEDIDOS_SUPERVISOR_KEY || '';
 const KINDS = ['orders', 'clients', 'products', 'sellers', 'loads', 'config', 'events'] as const;
 const ADMIN_KINDS: readonly string[] = ['products', 'sellers', 'loads', 'config'];
 
@@ -59,12 +56,6 @@ const EVENTS_DAYS = 31; // historial que baja una oficina nueva
 
 type Doc = Record<string, unknown> & { id: string; updatedAt: string; deleted?: boolean };
 type Row = { kind: string; id: string; data: string; sellerId: string | null; routeDate: string | null; status: string | null; deleted: boolean; updatedAt: string };
-
-function safeEqual(a: string, b: string) {
-  const ba = Buffer.from(a);
-  const bb = Buffer.from(b);
-  return ba.length === bb.length && timingSafeEqual(ba, bb);
-}
 
 function isDoc(d: unknown): d is Doc {
   if (!d || typeof d !== 'object') return false;
@@ -142,18 +133,18 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const serverTime = new Date();
 
-  if (SYNC_KEY && !safeEqual(req.headers.get('x-sync-key') || '', SYNC_KEY)) {
+  if (!syncOk(req)) {
     return NextResponse.json({ error: 'Clave de sincronización inválida' }, { status: 401 });
   }
   const adminHeader = req.headers.get('x-admin-key');
-  const isAdmin = !!ADMIN_KEY && !!adminHeader && safeEqual(adminHeader, ADMIN_KEY);
+  const isAdmin = isAdminReq(req);
   if (adminHeader && !isAdmin) {
     return NextResponse.json({ error: 'Clave admin inválida' }, { status: 401 });
   }
   // Supervisor: ve todo (igual que la oficina para la bajada), pero nunca puede
-  // escribir nada — ninguna ruta de abajo lo trata como isAdmin.
+  // escribir nada — el bloqueo está más abajo, en el propio bucle de escritura.
   const supHeader = req.headers.get('x-supervisor-key');
-  const isSupervisor = !!SUPERVISOR_KEY && !!supHeader && safeEqual(supHeader, SUPERVISOR_KEY);
+  const isSupervisor = isSupervisorReq(req);
   if (supHeader && !isSupervisor) {
     return NextResponse.json({ error: 'Clave de supervisor inválida' }, { status: 401 });
   }
@@ -197,8 +188,10 @@ export async function POST(req: NextRequest) {
       }
       // Un teléfono nunca publica catálogo ni cargas: se ignora sin error.
       if (ADMIN_KINDS.includes(kind) && !isAdmin) continue;
+      // El supervisor NUNCA escribe nada, sea cual sea el sellerId que mande.
+      if (isSupervisor) continue;
       // Un teléfono sin vendedor elegido no escribe pedidos ni clientes (quedan pendientes).
-      if (!isAdmin && !sellerId) continue; // el supervisor nunca sube nada (isAdmin=false aquí)
+      if (!isAdmin && !sellerId) continue;
 
       for (let i = 0; i < incoming.length; i += CHUNK) {
         const part = incoming.slice(i, i + CHUNK);
