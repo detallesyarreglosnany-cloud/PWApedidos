@@ -85,6 +85,7 @@ export async function POST(req: NextRequest) {
     sinceDays?: number | null;
     sellerId?: string | null;
     push?: Partial<Record<Kind, unknown[]>>;
+    noPull?: boolean;
   };
   try {
     body = await req.json();
@@ -192,6 +193,9 @@ export async function POST(req: NextRequest) {
         }
       });
     }
+
+    // Tandas intermedias de una subida grande: la bajada va en la última
+    if (body.noPull) return NextResponse.json({ serverTime: serverTime.toISOString(), accepted, rejected, pull: {} });
 
     // ---- Bajada ----
     const since = body.since && !Number.isNaN(Date.parse(body.since)) ? new Date(body.since) : null;

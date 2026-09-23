@@ -11,7 +11,7 @@
 
 | Variable | Para qué sirve | Quién la conoce |
 |---|---|---|
-| `PEDIDOS_BASIC_USER` / `PEDIDOS_BASIC_PASS` | Usuario y clave para **abrir** la app. Sin ellas no se descarga ni una línea del código | Todos (oficina y vendedores) |
+| `PEDIDOS_BASIC_USER` / `PEDIDOS_BASIC_PASS` | Usuario y clave para **abrir** la app. Sin ellas no se descarga ni una línea del código. Se escriben una vez por equipo y quedan recordadas un año; si las cambias en Vercel, todos los equipos deben volver a entrar | Todos (oficina y vendedores) |
 | `PEDIDOS_SYNC_KEY` | Permite sincronizar pedidos | Todos |
 | `PEDIDOS_ADMIN_KEY` | Permite publicar precios, catálogo, clientes y cerrar cargas | **Solo la oficina** |
 | `DATABASE_URL` / `DIRECT_URL` | Conexión a la base de datos (Supabase) | Solo el servidor |
@@ -25,7 +25,7 @@ Sigue la guía del [README](../README.md): Vercel + Supabase (Postgres).
 ## Primer uso (igual con A o B)
 
 ### PC de la oficina
-1. Abre `https://TU-DOMINIO/pedidos` y escribe el usuario y la clave de acceso. Marca "recordar".
+1. Abre `https://TU-DOMINIO/pedidos` y escribe el usuario y la clave en la pantalla **Acceso a Pedidos**. El equipo los recuerda por un año, aunque se cierre la app o se reinicie el teléfono.
 2. Entra en **Oficina** → **Cargar paquete de arranque** → elige `puerto-venado-arranque.json`.
 3. Ve a **Ajustes → Sincronización**, escribe la **clave de sync** y la **clave admin**, y pulsa **Guardar y sincronizar**.
 4. En **Ajustes → Seguridad de la oficina**, crea tu **PIN**. La oficina se bloqueará al salir y tras 15 minutos sin uso.
@@ -34,10 +34,13 @@ Sigue la guía del [README](../README.md): Vercel + Supabase (Postgres).
 7. Toca la 🔔 y pulsa **Activar avisos del sistema**, para recibir alertas aunque la pestaña esté en segundo plano.
 
 ### Teléfono de cada vendedor
-1. Abre `https://TU-DOMINIO/pedidos` en Chrome (Android) o Safari (iPhone) y escribe el usuario y la clave.
+1. Abre `https://TU-DOMINIO/pedidos` en Chrome (Android) o Safari (iPhone) y escribe el usuario y la clave en la pantalla **Acceso a Pedidos** (solo la primera vez).
 2. Menú → **Agregar a pantalla de inicio**.
 3. Elige su nombre → ☰ → **Conexión**, escribe la **clave de sync** → **Guardar**. Su cartera y el catálogo se descargan solos.
 4. **Nunca le des la clave admin a un vendedor.**
+
+### Eliminar un pedido hecho por error (vendedor)
+Toca el cliente en la fila de clientes de hoy → **Ver pedido** → **Eliminar**. Se puede mientras su hoja de carga no esté aprobada (🔒). Si ya está aprobada, lo quita la oficina.
 
 ## Imprimir y descargar
 - **Hoja de carga y notas:** botón **🖨 Imprimir / PDF**. En la ventana que abre el navegador:

@@ -180,12 +180,14 @@
 
   async function runSync(manual) {
     const scope = isOffice() ? {} : (S.session && S.session.sellerId ? { sellerId: S.session.sellerId } : {});
+    // En la primera descarga de un equipo llega todo el historial: no se avisa pedido por pedido
+    const firstSync = !(await DB.getMeta('syncCursor', null));
     const r = await Sync.syncNow(scope);
     lastSyncResult = r;
     if (r.ok && r.pulled) {
       const before = new Map(S.orders.map((o) => [o.id, o]));
       await loadAll();
-      await detectNotifs(before);
+      if (!firstSync) await detectNotifs(before);
       refreshAfterRemote();
     }
     if (manual) {
@@ -227,7 +229,7 @@
   }
   /** Compara antes/después de un sync y avisa: pedido nuevo, modificado por vendedor, cliente duplicado. */
   async function detectNotifs(before) {
-    if (!isOffice() || !before.size) return;
+    if (!isOffice()) return;
     const out = [];
     S.orders.forEach((o) => {
       const p = before.get(o.id), who = o.sellerName;
@@ -321,7 +323,8 @@
 
   /* ========================== Módulo de campo ========================== */
   const editable = (o) => Loads.editable(o);
-  const canDelete = (o) => o && (o.status === 'abierto' || o.status === 'enviado');
+  // Mientras la hoja no esté aprobada (🔒), el vendedor puede borrar un pedido hecho por error
+  const canDelete = (o) => editable(o);
 
   function myOrdersToday() {
     const sid = S.session.sellerId, d = today();
@@ -654,6 +657,7 @@
       await saveOrder(o);
       await setSession({ ...S.session, activeOrderId: null });
       sh.close(); renderSeller(); toast('Pedido eliminado');
+      runSync(false);
     };
   }
 
