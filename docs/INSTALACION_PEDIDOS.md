@@ -42,6 +42,22 @@ Sigue la guía del [README](../README.md): Vercel + Supabase (Postgres).
 ### Eliminar un pedido hecho por error (vendedor)
 Toca el cliente en la fila de clientes de hoy → **Ver pedido** → **Eliminar**. Se puede mientras su hoja de carga no esté aprobada (🔒). Si ya está aprobada, lo quita la oficina.
 
+### Cliente que aún no paga (pedido en la hoja de carga)
+En **Cargas**, abre la hoja → en la fila del cliente toca **⏸ Espera**. El pedido sale de la hoja **sin perderse** y queda en «Clientes en espera». Cuando pague, toca **↩ Reincorporar** y vuelve a la cola de carga. No lo elimines: eliminarlo borra el pedido.
+
+### Pasar un cliente a otro vendedor (o asignar uno sin vendedor)
+**Clientes** → busca el cliente → cambia el **Vendedor**. En la próxima sincronización aparece en el teléfono del nuevo vendedor y desaparece del anterior. El filtro **— Sin vendedor —** muestra los clientes sin asignar.
+
+### Historial de actividad
+**Historial** muestra, por día, qué hizo cada vendedor y la oficina, con la hora: abrió la app, entró a su ruta, abrió, envió, modificó o eliminó pedidos, cambios de estado de las hojas, clientes reasignados. Arriba hay un resumen por persona (primera y última actividad, pedidos enviados, monto). Se exporta a Excel. Nadie puede editarlo ni borrarlo. Si un vendedor estuvo sin señal, sus acciones llegan con su hora real al recuperarla.
+
+### Respaldo (obligatorio, una vez por semana)
+**Ajustes → Servidor y respaldo**:
+- **Revisar estado del servidor**: confirma que la base de datos responde, que tiene sus tablas y cuántos registros hay.
+- **Descargar respaldo del servidor**: un archivo con todo (pedidos, clientes, cargas, catálogo, historial). Guárdalo fuera de la PC (Drive, correo, USB). Se restaura con «Importar paquete».
+
+El plan gratuito de Supabase no incluye copias de seguridad descargables; por eso este respaldo semanal es obligatorio (o pasar a Supabase Pro, que hace copias diarias).
+
 ## Imprimir y descargar
 - **Hoja de carga y notas:** botón **🖨 Imprimir / PDF**. En la ventana que abre el navegador:
   - elige tu impresora para imprimir;

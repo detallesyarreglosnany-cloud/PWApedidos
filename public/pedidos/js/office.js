@@ -19,7 +19,8 @@
   const U = () => S.ui.office;
 
   const TABS = [['cargas', '🚚 Cargas'], ['pedidos', '🧾 Pedidos'], ['archivo', '🗄 Archivo'], ['inventario', '📦 Inventario'],
-    ['clientes', '👥 Clientes'], ['vendedores', '🧑‍💼 Vendedores'], ['ajustes', '⚙ Ajustes']];
+    ['clientes', '👥 Clientes'], ['vendedores', '🧑‍💼 Vendedores'], ['historial', '🕘 Historial'], ['ajustes', '⚙ Ajustes']];
+  const log = (type, text, extra) => PV.logEvent(type, text, extra);
 
   const productRank = () => Object.fromEntries(S.products.map((p) => [p.id, +p.sort || 9999]));
   const byIdMap = (arr) => new Map(arr.map((x) => [x.id, x]));
@@ -77,7 +78,7 @@
     const body = $('#officeBody');
     if (!S.products.length && tab !== 'ajustes') body.insertAdjacentHTML('beforebegin', setupBanner());
     ({ cargas: renderLoads, pedidos: renderOrders, archivo: renderArchive, inventario: renderInventory,
-      clientes: renderClients, vendedores: renderSellers, ajustes: renderSettings })[tab](body);
+      clientes: renderClients, vendedores: renderSellers, historial: renderHistory, ajustes: renderSettings })[tab](body);
     const sb = $('#setupImport');
     if (sb) sb.onclick = importStarter;
   };
@@ -206,7 +207,9 @@
       if (mv) { moveDialog(orderById(mv.dataset.move), null, () => renderLoads(root)); return; }
       const rl = e.target.closest('[data-release]');
       if (rl) {
-        await saveOrder(Loads.release(orderById(rl.dataset.release)));
+        const ro = orderById(rl.dataset.release);
+        await saveOrder(Loads.release(ro));
+        await log('reincorporado', `Reincorporó a ${ro.clientName} (${ro.sellerName}) a la cola de carga`, { orderId: ro.id, clientName: ro.clientName });
         autoPack(); renderLoads(root); toast('Cliente reincorporado a la cola de carga', 'ok');
       }
     };
@@ -241,6 +244,8 @@
       const r = Loads.moveOrder(order, fromLoad, target, { sellers: S.sellers, config: S.config });
       await saveDocs('loads', r.loads.map((l) => (l.orderIds.length || !fromLoad || l.id !== fromLoad.id ? l : { ...l, deleted: true })));
       await saveOrder(r.order);
+      const to = r.loads[r.loads.length - 1];
+      await log('movido', `Movió a ${order.clientName} (${order.sellerName}) a la hoja ${Loads.labelOf(to)}`, { orderId: order.id, clientName: order.clientName });
       sh.close(); toast(order.clientName + ' movido', 'ok'); onDone && onDone();
     };
   }
@@ -394,6 +399,7 @@
         const r = Loads.hold(cur(), o);
         await saveOrder(r.order);
         await saveDocs('loads', r.load);
+        await log('espera', `Puso en espera a ${o.clientName} (${o.sellerName}), sacándolo de la hoja ${Loads.labelOf(r.load)}`, { orderId: o.id, clientName: o.clientName });
         refresh(); toast(o.clientName + ' pasó a espera', 'ok');
       }
     };
@@ -420,6 +426,7 @@
     lines[pid] = { ...line, [kind]: Math.max(0, Math.min(99999, value)) };
     if (!lines[pid].cajas && !lines[pid].unidades) delete lines[pid];
     await saveOrder({ ...o, lines, officeEdited: DB.now() });
+    PV.logEvent('pedido_editado_oficina', `Ajustó cantidades del pedido de ${o.clientName} (${o.sellerName})`, { orderId: o.id, clientName: o.clientName }, { onceKey: 'ofed:' + o.id });
   }
 
   /** Cambio de estado con las confirmaciones y efectos que correspondan. */
@@ -456,6 +463,7 @@
     await saveDocs('products', r.products);
     await saveDocs('loads', r.load);
     U().editQty = false;
+    await log('carga_estado', `Hoja ${Loads.labelOf(r.load)} (${r.load.sellerName}) → ${st.name}${r.load.number ? ' · ' + Loads.loadCode(r.load) : ''}${closing ? ` · notas ${Loads.noteCode(r.load.firstNote)} a ${Loads.noteCode(r.load.lastNote)}` : ''}`, { loadId: r.load.id });
     toast(`Estado: ${st.name}`, 'ok');
     if (closing) {
       back();
@@ -974,7 +982,7 @@
   function renderClients(root) {
     const q = U().cliQ || '', sid = U().cliSeller || '';
     const tokens = norm(q).split(' ').filter(Boolean);
-    const all = S.clients.filter((c) => (!sid || c.sellerId === sid) && tokens.every((t) => norm(c.name + ' ' + c.rif + ' ' + c.address + ' ' + c.phone).includes(t)))
+    const all = S.clients.filter((c) => (!sid || (sid === '__none' ? !sellerById(c.sellerId) : c.sellerId === sid)) && tokens.every((t) => norm(c.name + ' ' + c.rif + ' ' + c.address + ' ' + c.phone).includes(t)))
       .sort((a, b) => a.name.localeCompare(b.name, 'es'));
     const list = all.slice(0, 300);
     const count = (id) => S.clients.filter((c) => c.sellerId === id).length;
@@ -982,7 +990,8 @@
       <div class="toolbar">
         <label class="field grow"><span>Buscar</span><input id="cq" class="input" type="search" value="${esc(q)}" placeholder="Nombre, RIF, dirección o teléfono"></label>
         <label class="field"><span>Vendedor</span><select id="cs" class="select"><option value="">Todos (${S.clients.length})</option>
-          ${S.sellers.map((s) => `<option value="${esc(s.id)}" ${s.id === sid ? 'selected' : ''}>${esc(s.name)} (${count(s.id)})</option>`).join('')}</select></label>
+          ${S.sellers.map((s) => `<option value="${esc(s.id)}" ${s.id === sid ? 'selected' : ''}>${esc(s.name)} (${count(s.id)})</option>`).join('')}
+          <option value="__none" ${sid === '__none' ? 'selected' : ''}>— Sin vendedor — (${S.clients.filter((c) => !sellerById(c.sellerId)).length})</option></select></label>
         <button class="btn btn-primary" id="cNew">＋ Nuevo</button>
         <button class="btn" id="cImp">⇧ Importar Excel</button>
       </div>
@@ -992,7 +1001,7 @@
         <tbody>${list.map((c) => `<tr data-cid="${esc(c.id)}" class="${c.active === false ? 'inactive' : ''}">
           <td><b>${esc(c.name)}</b>${c.source === 'campo' ? ' <span class="status abierto">campo</span>' : ''}<div class="muted">${esc(c.address || '')}</div></td>
           <td class="mono" data-l="RIF">${esc(c.rif || '')}</td><td data-l="Tel.">${esc(c.phone || '')}</td>
-          <td data-l="Vendedor"><select class="select sm" data-cf="sellerId">${S.sellers.map((s) => `<option value="${esc(s.id)}" ${s.id === c.sellerId ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></td>
+          <td data-l="Vendedor"><select class="select sm" data-cf="sellerId">${sellerOptions(c.sellerId)}</select></td>
           <td data-l="Ruta"><select class="select sm" data-cf="route"><option value="">—</option>${(S.config.routes || []).map((r) => `<option ${r === c.route ? 'selected' : ''}>${esc(r)}</option>`).join('')}</select></td>
           <td><button class="btn btn-sm" data-cedit="${esc(c.id)}">Editar</button></td></tr>`).join('')}</tbody></table></div>`;
     let t;
@@ -1003,14 +1012,84 @@
     root.onchange = async (e) => {
       const s = e.target.closest('[data-cf]'); if (!s) return;
       const c = clientById(s.closest('[data-cid]').dataset.cid);
-      await saveDocs('clients', { ...c, [s.dataset.cf]: s.value }); toast('Cliente actualizado', 'ok');
+      const upd = { ...c, [s.dataset.cf]: s.value };
+      await saveClient(c, upd); toast('Cliente actualizado', 'ok');
+      if (s.dataset.cf === 'sellerId') renderClients(root);
     };
     root.onclick = (e) => { const b = e.target.closest('[data-cedit]'); if (b) clientForm(clientById(b.dataset.cedit), root); };
   }
 
+  /** Opciones de vendedor para un cliente, con "Sin vendedor" (nunca se muestra uno que no tiene). */
+  function sellerOptions(cur) {
+    const known = sellerById(cur);
+    return `<option value="" ${known ? '' : 'selected'}>— Sin vendedor —</option>` +
+      S.sellers.map((s) => `<option value="${esc(s.id)}" ${s.id === cur ? 'selected' : ''}>${esc(s.name)}${s.active === false ? ' (inactivo)' : ''}</option>`).join('');
+  }
+  /**
+   * Guarda un cliente. Si cambia de vendedor, recuerda el anterior
+   * (formerSellerIds): así su teléfono también se entera y deja de mostrarlo.
+   */
+  async function saveClient(prev, next) {
+    const from = prev && prev.sellerId, to = next.sellerId;
+    if (prev && from && from !== to) next.formerSellerIds = [...new Set([...(prev.formerSellerIds || []), from])].filter((x) => x !== to);
+    await saveDocs('clients', next);
+    if (prev && from !== to) {
+      const name = (id) => (sellerById(id) || {}).name || 'sin vendedor';
+      await log('cliente_reasignado', `Cliente ${next.name}: ${name(from)} → ${name(to)}`, { clientId: next.id, clientName: next.name });
+    }
+  }
+
+  /* ============================== HISTORIAL ============================== */
+  const EVENT_LABEL = {
+    apertura: 'Abrió la app', regreso: 'Volvió', entrada: 'Entró a su ruta', salida: 'Salió', cliente_nuevo: 'Cliente nuevo',
+    pedido_nuevo: 'Abrió pedido', pedido_enviado: 'Envió pedido', pedido_reabierto: 'Reabrió pedido', pedido_modificado: 'Modificó pedido',
+    pedido_eliminado: 'Eliminó pedido', espera: 'Puso en espera', reincorporado: 'Reincorporó', movido: 'Movió de hoja',
+    pedido_editado_oficina: 'Ajuste de oficina', carga_estado: 'Estado de hoja', cliente_reasignado: 'Reasignó cliente', respaldo: 'Respaldo',
+  };
+  async function renderHistory(root) {
+    const f = U().hist || (U().hist = { day: today(), who: '', type: '' });
+    const dayEvents = (await DB.getAll('events')).filter((e) => e.day === f.day).sort((a, b) => String(a.at).localeCompare(String(b.at)));
+    const list = dayEvents.filter((e) => (!f.who || e.sellerId === f.who) && (!f.type || e.type === f.type));
+    const hhmm = (iso) => new Date(iso).toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit' });
+    const whoOpts = [['', 'Todos'], ...S.sellers.map((s) => [s.id, s.name]), ['oficina', 'Oficina']];
+    // Resumen del día por persona
+    const people = new Map();
+    dayEvents.forEach((e) => {
+      const p = people.get(e.sellerId) || { name: e.sellerName, first: e.at, last: e.at, sent: 0, del: 0, amount: 0, n: 0 };
+      p.last = e.at; p.n++;
+      if (e.type === 'pedido_enviado') { p.sent++; p.amount += +e.amount || 0; }
+      if (e.type === 'pedido_eliminado') p.del++;
+      people.set(e.sellerId, p);
+    });
+    const opt = (arr, cur) => arr.map(([v, l]) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`).join('');
+    root.innerHTML = `
+      <div class="toolbar" id="hFilters">
+        <label class="field"><span>Día</span><input type="date" class="input" data-h="day" value="${esc(f.day)}"></label>
+        <label class="field"><span>Quién</span><select class="select" data-h="who">${opt(whoOpts, f.who)}</select></label>
+        <label class="field"><span>Acción</span><select class="select" data-h="type"><option value="">Todas</option>${opt(Object.entries(EVENT_LABEL), f.type)}</select></label>
+        <button class="btn" id="hCsv" ${list.length ? '' : 'disabled'}>⇩ Exportar CSV</button>
+      </div>
+      <p class="muted">Lo registra cada teléfono y PC con su hora; llega al sincronizar (si un vendedor estuvo sin señal, aparece cuando la recupere). Nadie puede editarlo ni borrarlo.</p>
+      ${people.size ? `<div class="card" style="overflow:auto"><table class="inv"><thead><tr><th>Quién</th><th>Primera actividad</th><th>Última</th><th>Pedidos enviados</th><th>Eliminados</th><th>Monto enviado</th></tr></thead><tbody>
+        ${[...people.values()].sort((a, b) => a.first.localeCompare(b.first)).map((p) => `<tr><td><b>${esc(p.name)}</b></td><td data-l="Primera actividad">${hhmm(p.first)}</td><td data-l="Última">${hhmm(p.last)}</td><td class="n" data-l="Pedidos enviados">${p.sent}</td><td class="n" data-l="Eliminados">${p.del}</td><td class="n" data-l="Monto enviado">${usd(p.amount)}</td></tr>`).join('')}
+        </tbody></table></div>` : ''}
+      ${list.length ? `<div class="card" style="overflow:auto;margin-top:12px"><table class="inv"><thead><tr><th>Hora · Quién</th><th>Acción</th><th>Detalle</th></tr></thead><tbody>
+        ${list.map((e) => `<tr><td class="mono"><b>${hhmm(e.at)}</b> · ${esc(e.sellerName)}</td><td data-l="Acción">${esc(EVENT_LABEL[e.type] || e.type)}</td><td>${esc(e.text)}</td></tr>`).join('')}
+        </tbody></table></div>` : '<div class="empty card"><strong>Sin actividad</strong>ese día con esos filtros.</div>'}`;
+    $('#hFilters').onchange = (e) => { const k = e.target.dataset.h; if (k) { f[k] = e.target.value; renderHistory(root); } };
+    $('#hCsv').onclick = () => {
+      const sep = S.settings.csvSep;
+      const q = (v) => { let x = String(v == null ? '' : v); if (/^[=+\-@]/.test(x)) x = "'" + x; return x.includes(sep) || x.includes('"') ? '"' + x.replace(/"/g, '""') + '"' : x; };
+      const rows = [['FECHA', 'HORA', 'QUIEN', 'ACCION', 'DETALLE', 'EQUIPO'].join(sep)]
+        .concat(list.map((e) => [e.day, hhmm(e.at), q(e.sellerName), q(EVENT_LABEL[e.type] || e.type), q(e.text), q(e.deviceId)].join(sep)));
+      saveFile('historial_' + f.day + '.csv', '\ufeff' + rows.join('\r\n'), 'text/csv;charset=utf-8');
+    };
+  }
+
   function clientForm(c, root) {
     const isNew = !c;
-    c = c || { name: '', rif: '', phone: '', address: '', group: '', creditDays: 0, sellerId: U().cliSeller || (S.sellers[0] && S.sellers[0].id), route: '', active: true };
+    const prev = c;
+    c = c || { name: '', rif: '', phone: '', address: '', group: '', creditDays: 0, sellerId: U().cliSeller && U().cliSeller !== '__none' ? U().cliSeller : '', route: '', active: true };
     const sh = openSheet(`
       <div class="row"><h2 class="grow">${isNew ? 'Nuevo cliente' : esc(c.name)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
       <form id="cf" class="form-grid" autocomplete="off">
@@ -1018,7 +1097,7 @@
         <div class="grid2"><label class="field"><span>RIF / C.I.</span><input name="rif" class="input mono" maxlength="20" value="${esc(c.rif)}"></label>
           <label class="field"><span>Teléfono</span><input name="phone" class="input" maxlength="40" value="${esc(c.phone)}"></label></div>
         <label class="field"><span>Dirección</span><input name="address" class="input" maxlength="120" value="${esc(c.address)}"></label>
-        <div class="grid3"><label class="field"><span>Vendedor</span><select name="sellerId" class="select">${S.sellers.map((s) => `<option value="${esc(s.id)}" ${s.id === c.sellerId ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>
+        <div class="grid3"><label class="field"><span>Vendedor</span><select name="sellerId" class="select">${sellerOptions(c.sellerId)}</select></label>
           <label class="field"><span>Ruta</span><select name="route" class="select"><option value="">—</option>${(S.config.routes || []).map((r) => `<option ${r === c.route ? 'selected' : ''}>${esc(r)}</option>`).join('')}</select></label>
           <label class="field"><span>Días de crédito</span><input name="creditDays" class="input" inputmode="numeric" value="${c.creditDays || 0}"></label></div>
         <label class="row"><input type="checkbox" name="active" ${c.active !== false ? 'checked' : ''} style="width:22px;height:22px"> Activo</label>
@@ -1026,7 +1105,7 @@
       </form>`, { wide: true });
     $('#cf', sh.el).onsubmit = async (e) => {
       e.preventDefault(); const f = e.target;
-      await saveDocs('clients', { ...c, id: c.id || DB.uid('c'), name: f.name.value.trim(), rif: f.rif.value.trim(), phone: f.phone.value.trim(),
+      await saveClient(prev, { ...c, id: c.id || DB.uid('c'), name: f.name.value.trim(), rif: f.rif.value.trim(), phone: f.phone.value.trim(),
         address: f.address.value.trim(), sellerId: f.sellerId.value, route: f.route.value, creditDays: int(f.creditDays.value),
         active: f.active.checked, source: c.source === 'campo' ? 'campo-revisado' : (c.source || 'oficina'), deleted: false });
       sh.close(); renderClients(root); toast('Cliente guardado', 'ok');
@@ -1092,7 +1171,13 @@
         <section class="card card-pad"><h3>Paquete de arranque / respaldo</h3>
           <p class="muted">Carga el catálogo, la cartera de clientes, las rutas y los despachadores de una sola vez, o importa los pedidos que un vendedor envió por WhatsApp.</p>
           <div class="row wrap"><button class="btn btn-primary" id="bImp">⇩ Importar paquete (.json)</button>
-            <button class="btn" id="bAll">⇪ Respaldo completo</button><button class="btn" id="bCat">⇪ Paquete para teléfonos</button></div></section>
+            <button class="btn" id="bAll">⇪ Respaldo de este equipo</button><button class="btn" id="bCat">⇪ Paquete para teléfonos</button></div></section>
+
+        <section class="card card-pad"><h3>🛡 Servidor y respaldo</h3>
+          <p class="muted">Comprueba que la base de datos (Supabase) responde y tiene todo guardado, y descarga un <b>respaldo completo del servidor</b>: todos los pedidos, clientes, cargas, catálogo e historial de todos los equipos. Guárdalo al menos una vez por semana fuera de la PC (Drive, correo, USB). Se restaura con «Importar paquete».</p>
+          <div class="row wrap"><button class="btn" id="hCheck">🔎 Revisar estado del servidor</button>
+            <button class="btn btn-primary" id="hBackup">⇩ Descargar respaldo del servidor</button></div>
+          <div id="hOut" class="muted" style="margin-top:10px"></div></section>
 
         <section class="card card-pad"><h3>Hoja de carga</h3>
           <div class="grid3">
@@ -1232,6 +1317,26 @@
       await PV.runSync(true); renderSettings(root);
     };
     $('#bImp').onclick = importStarter;
+    const KIND_LABEL = { orders: 'Pedidos', clients: 'Clientes', products: 'Productos', sellers: 'Vendedores', loads: 'Hojas de carga', config: 'Configuración', events: 'Historial' };
+    $('#hCheck').onclick = async () => {
+      const out = $('#hOut'); out.textContent = 'Consultando…';
+      const r = await Sync.adminCall('health');
+      if (!r.ok) { out.innerHTML = `<b style="color:var(--danger,#e5484d)">✗ ${esc(r.error)}</b>`; return; }
+      const d = r.data, tablesOk = ['DistCounter', 'DistDoc'].every((t) => d.tables.includes(t));
+      out.innerHTML = `<div>${tablesOk ? '✅' : '❌'} Base de datos ${tablesOk ? 'con todas sus tablas' : 'SIN tablas: ' + esc(d.tables.join(', ') || 'ninguna')} · respuesta en ${d.latencyMs} ms</div>
+        <table class="inv" style="margin-top:8px"><thead><tr><th>Tipo</th><th>Guardados</th><th>Eliminados</th><th>Último cambio</th></tr></thead><tbody>
+        ${d.kinds.map((k) => `<tr><td>${esc(KIND_LABEL[k.kind] || k.kind)}</td><td class="n">${nf0.format(k.total)}</td><td class="n">${nf0.format(k.deleted)}</td><td>${k.last ? esc(new Date(k.last).toLocaleString('es-VE')) : ''}</td></tr>`).join('')}
+        </tbody></table>
+        <div style="margin-top:6px">Última carga numerada: <b>${d.counters.load ? esc(Loads.loadCode(d.counters.load)) : '—'}</b> · última nota: <b>${d.counters.note ? esc(Loads.noteCode(d.counters.note)) : '—'}</b></div>`;
+    };
+    $('#hBackup').onclick = async () => {
+      const out = $('#hOut'); out.textContent = 'Descargando respaldo…';
+      const r = await Sync.serverBackup((n) => { out.textContent = `Descargando respaldo… ${nf0.format(n)} registros`; });
+      if (!r.ok) { out.innerHTML = `<b style="color:var(--danger,#e5484d)">✗ ${esc(r.error)}</b>`; return; }
+      await saveFile('respaldo_servidor_' + today() + '.json', JSON.stringify(r.bundle), 'application/json');
+      await log('respaldo', `Descargó el respaldo completo del servidor (${r.count} registros)`);
+      out.textContent = `✓ Respaldo descargado: ${nf0.format(r.count)} registros. Guárdalo fuera de esta PC.`;
+    };
     $('#bAll').onclick = async () => saveFile('respaldo_' + today() + '.json', JSON.stringify(await Sync.exportBundle({ includeCatalog: true, includeLoads: true })), 'application/json');
     $('#bCat').onclick = async () => saveFile('catalogo_telefonos_' + today() + '.json', JSON.stringify(await Sync.exportBundle({ sellerId: '__none__', includeCatalog: true })), 'application/json');
   }

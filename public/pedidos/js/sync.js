@@ -17,7 +17,7 @@
   'use strict';
 
   const DEFAULT_SYNC_URL = '/api/pedidos/sync';
-  const KINDS = ['orders', 'clients', 'products', 'sellers', 'loads', 'config'];
+  const KINDS = ['orders', 'clients', 'products', 'sellers', 'loads', 'config', 'events'];
   // Solo la oficina (clave admin) publica estos tipos
   const ADMIN_KINDS = ['products', 'sellers', 'loads', 'config'];
   // Un pedido bloqueado (hoja aprobada/cerrada) ya no lo puede pisar el teléfono
@@ -102,7 +102,7 @@
    */
   async function collectDirty(isAdmin, sellerId) {
     const strip = (d) => { const c = { ...d }; delete c.dirty; delete c.dupWith; return c; };
-    const mine = (k, d) => isAdmin || (k !== 'orders' && k !== 'clients') || (sellerId && d.sellerId === sellerId);
+    const mine = (k, d) => isAdmin || (k !== 'orders' && k !== 'clients' && k !== 'events') || (sellerId && d.sellerId === sellerId);
     const out = {};
     for (const k of KINDS) {
       out[k] = (!isAdmin && ADMIN_KINDS.includes(k)) ? [] : (await DB.getAll(k)).filter((d) => d.dirty && mine(k, d)).map(strip);
@@ -170,41 +170,50 @@
       if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
       if (cfg.adminKey) headers['x-admin-key'] = cfg.adminKey;
 
-      // Vercel rechaza cuerpos de más de 4,5 MB: la subida va por tandas y solo
-      // la última trae la bajada (así el cursor avanza una sola vez).
+      // Vercel rechaza cuerpos de más de 4,5 MB en ambos sentidos: la subida va
+      // por tandas y la bajada por páginas. El cursor avanza solo al terminar.
       const batches = splitPush(push);
       const base = { deviceId: await deviceId(), since, sinceDays: since ? null : INITIAL_ORDER_DAYS, sellerId };
-      let data = null;
+      const empty = Object.fromEntries(KINDS.map((k) => [k, []]));
       const rejected = [];
-      for (let i = 0; i < batches.length; i++) {
-        const last = i === batches.length - 1;
-        const r = await post(url, headers, { ...base, push: batches[i], noPull: !last });
+      let first = null;
+      let changed = 0;
+      let dups = null;
+      let page = null;
+      for (let i = 0; ; i++) {
+        const pushing = i < batches.length;
+        const last = !pushing || i === batches.length - 1;
+        const r = await post(url, headers, { ...base, push: pushing ? batches[i] : empty, noPull: !last, page });
         if (!r.ok) return r;
-        // 1) Lo aceptado por el servidor deja de estar pendiente
-        for (const k of KINDS) {
-          const ok = new Set((r.data.accepted && r.data.accepted[k]) || []);
-          await clearDirty(k, batches[i][k].filter((d) => ok.has(d.id)));
+        if (pushing) {
+          // 1) Lo aceptado por el servidor deja de estar pendiente
+          for (const k of KINDS) {
+            const ok = new Set((r.data.accepted && r.data.accepted[k]) || []);
+            await clearDirty(k, batches[i][k].filter((d) => ok.has(d.id)));
+          }
+          rejected.push(...(r.data.rejected || []));
         }
-        rejected.push(...(r.data.rejected || []));
-        if (last) data = r.data;
+        if (!last) continue;
+        // 2) Bajar cambios remotos (una página)
+        first = first || r.data;
+        for (const k of ['config', 'products', 'sellers', 'clients', 'loads', 'orders', 'events']) {
+          changed += await mergeRemote(k, (r.data.pull && r.data.pull[k]) || [], isAdmin);
+        }
+        if (!r.data.more) { dups = r.data.dups; break; }
+        page = r.data.page;
       }
 
-      // 2) Lo rechazado vuelve con la versión del servidor (ya despachado, o
+      // 3) Lo rechazado vuelve con la versión del servidor (ya despachado, o
       //    el servidor tiene una edición más reciente)
       const back = rejected.filter((r) => r.doc && KINDS.includes(r.kind));
       for (const r of back) await DB.put(r.kind, { ...r.doc, dirty: false });
       const rejectedOrders = back.filter((r) => r.kind === 'orders');
 
-      // 3) Bajar cambios remotos
-      let changed = 0;
-      for (const k of ['config', 'products', 'sellers', 'clients', 'loads', 'orders']) {
-        changed += await mergeRemote(k, data.pull[k] || [], isAdmin);
-      }
-
       // 4) Alertas de cliente duplicado: solo en este equipo, sin tocar la versión del pedido
-      if (data.dups && data.dups.map) changed += await applyDups(data.dups, sellerId);
+      if (dups && dups.map) changed += await applyDups(dups, sellerId);
 
-      await DB.setMeta(cursorKey, data.serverTime);
+      // El cursor es la hora de la PRIMERA página: nada escrito durante la bajada se pierde
+      await DB.setMeta(cursorKey, first.serverTime);
       await DB.setMeta('lastSyncAt', new Date().toISOString());
       return {
         ok: true,
@@ -237,6 +246,33 @@
   async function pendingCount(scope) {
     const cfg = await settings();
     return total(await collectDirty(!!cfg.adminKey, scope && scope.sellerId || null));
+  }
+
+  /** Llamada a una ruta de oficina (/api/pedidos/<name>) con las claves guardadas. */
+  async function adminCall(name, body) {
+    if (!navigator.onLine) return { ok: false, error: 'Sin internet' };
+    const cfg = await settings();
+    if (!cfg.adminKey) return { ok: false, error: 'Falta la clave admin en Ajustes' };
+    const headers = { 'Content-Type': 'application/json', 'x-admin-key': cfg.adminKey };
+    if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
+    return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/' + name), headers, body || {});
+  }
+
+  /** Respaldo completo del servidor, en el formato del paquete de arranque (se restaura con "Cargar paquete"). */
+  async function serverBackup(onProgress) {
+    const bundle = { format: 'distribuidora-pedidos/v1', kind: 'respaldo-servidor', exportedAt: new Date().toISOString(), deviceId: await deviceId() };
+    KINDS.forEach((k) => { bundle[k] = []; });
+    let after = null, n = 0;
+    for (;;) {
+      const r = await adminCall('backup', { after });
+      if (!r.ok) return r;
+      r.data.docs.forEach(({ kind, doc }) => { (bundle[kind] = bundle[kind] || []).push(doc); });
+      n += r.data.docs.length;
+      if (onProgress) onProgress(n);
+      if (!r.data.next) { bundle.counters = r.data.counters || {}; break; }
+      after = r.data.next;
+    }
+    return { ok: true, bundle, count: n };
   }
 
   /** Reserva números de carga y de notas en el servidor (solo oficina, con internet). */
@@ -298,5 +334,5 @@
     return n;
   }
 
-  global.Sync = { KINDS, isLocked, syncNow, pendingCount, hasCursor, reserveNumbers, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
+  global.Sync = { KINDS, isLocked, syncNow, pendingCount, hasCursor, reserveNumbers, adminCall, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
 })(window);

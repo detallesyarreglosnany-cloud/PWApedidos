@@ -103,6 +103,10 @@ El servidor guarda cada documento en `DistDoc` (Prisma/PostgreSQL) con índices 
 - Solo la clave admin puede publicar catálogo, vendedores, cargas y configuración.
 - Cada teléfono baja y sube solo la cartera y los pedidos del vendedor que está usando la app. El servidor rechaza cualquier pedido o cliente a nombre de otro vendedor, y nunca reasigna un cliente.
 - La alerta de cliente duplicado la calcula el servidor en cada sincronización; no modifica ningún pedido.
+- Un cliente reasignado guarda sus vendedores anteriores (`formerSellerIds`): el teléfono del vendedor anterior lo recibe con el vendedor nuevo y deja de mostrarlo.
+- La bajada va por páginas de ~3 MB (el límite de Vercel es 4,5 MB), así que el catálogo con fotos no rompe la sincronización.
+- Historial (`events`): cada equipo registra sus acciones con hora; solo se agregan (nunca se editan) y solo la oficina los baja (últimos 31 días al configurar una PC nueva).
+- `/api/pedidos/health` y `/api/pedidos/backup` (clave admin): estado de la base de datos y respaldo completo por páginas, desde Ajustes → Servidor y respaldo.
 - Los números de carga (`C-00001`) y de nota (`NE-000001`) los entrega el servidor (`/api/pedidos/numbers`, tabla `DistCounter`), de forma atómica: nunca se repiten aunque varias PCs aprueben a la vez. Aprobar o cerrar una carga requiere internet.
 - Un archivo importado (WhatsApp/USB) solo actualiza lo que sea más nuevo y nunca deshace lo que decidió la oficina.
 
