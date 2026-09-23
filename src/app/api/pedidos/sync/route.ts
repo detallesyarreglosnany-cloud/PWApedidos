@@ -35,6 +35,7 @@ export const maxDuration = 60;
 
 const SYNC_KEY = process.env.PEDIDOS_SYNC_KEY || '';
 const ADMIN_KEY = process.env.PEDIDOS_ADMIN_KEY || '';
+const SUPERVISOR_KEY = process.env.PEDIDOS_SUPERVISOR_KEY || '';
 const KINDS = ['orders', 'clients', 'products', 'sellers', 'loads', 'config', 'events'] as const;
 const ADMIN_KINDS: readonly string[] = ['products', 'sellers', 'loads', 'config'];
 
@@ -149,6 +150,13 @@ export async function POST(req: NextRequest) {
   if (adminHeader && !isAdmin) {
     return NextResponse.json({ error: 'Clave admin inválida' }, { status: 401 });
   }
+  // Supervisor: ve todo (igual que la oficina para la bajada), pero nunca puede
+  // escribir nada — ninguna ruta de abajo lo trata como isAdmin.
+  const supHeader = req.headers.get('x-supervisor-key');
+  const isSupervisor = !!SUPERVISOR_KEY && !!supHeader && safeEqual(supHeader, SUPERVISOR_KEY);
+  if (supHeader && !isSupervisor) {
+    return NextResponse.json({ error: 'Clave de supervisor inválida' }, { status: 401 });
+  }
 
   const len = Number(req.headers.get('content-length') || 0);
   if (len > MAX_BODY_BYTES) {
@@ -190,7 +198,7 @@ export async function POST(req: NextRequest) {
       // Un teléfono nunca publica catálogo ni cargas: se ignora sin error.
       if (ADMIN_KINDS.includes(kind) && !isAdmin) continue;
       // Un teléfono sin vendedor elegido no escribe pedidos ni clientes (quedan pendientes).
-      if (!isAdmin && !sellerId) continue;
+      if (!isAdmin && !sellerId) continue; // el supervisor nunca sube nada (isAdmin=false aquí)
 
       for (let i = 0; i < incoming.length; i += CHUNK) {
         const part = incoming.slice(i, i + CHUNK);
@@ -275,8 +283,8 @@ export async function POST(req: NextRequest) {
     const sinceDays = !since && typeof body.sinceDays === 'number' && body.sinceDays > 0
       ? Math.min(body.sinceDays, 365) : null;
     // Un teléfono sin vendedor elegido solo baja catálogo, vendedores y ajustes
-    const noScope = !isAdmin && !sellerId;
-    const office = isAdmin && !sellerId;
+    const noScope = !isAdmin && !isSupervisor && !sellerId;
+    const office = (isAdmin || isSupervisor) && !sellerId;
 
     const whereOf = (kind: Kind): Prisma.DistDocWhereInput | null => {
       switch (kind) {

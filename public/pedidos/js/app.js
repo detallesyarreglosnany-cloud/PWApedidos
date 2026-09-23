@@ -122,7 +122,7 @@
     config: null, settings: {}, session: null,
     ui: { q: '', cat: '', onlyInOrder: false, office: {} },
   };
-  const DEFAULT_SETTINGS = { csvSep: ';', csvDecimal: ',', syncUrl: '', syncKey: '', adminKey: '' };
+  const DEFAULT_SETTINGS = { csvSep: ';', csvDecimal: ',', syncUrl: '', syncKey: '', adminKey: '', supervisorKey: '' };
   const bc = ('BroadcastChannel' in window) ? new BroadcastChannel('pedidos') : null;
 
   async function loadAll() {
@@ -204,7 +204,8 @@
   const isOffice = () => location.hash.startsWith('#/oficina');
   function scheduleSync(ms) { clearTimeout(syncTimer); syncTimer = setTimeout(runSync, ms); }
 
-  const syncScope = () => (isOffice() ? {} : (S.session && S.session.sellerId ? { sellerId: S.session.sellerId } : {}));
+  const isSupervisor = () => location.hash.startsWith('#/supervisor');
+  const syncScope = () => (isOffice() || isSupervisor() ? {} : (S.session && S.session.sellerId ? { sellerId: S.session.sellerId } : {}));
   async function runSync(manual) {
     const scope = syncScope();
     // En la primera descarga de un equipo llega todo el historial: no se avisa pedido por pedido
@@ -300,6 +301,7 @@
   function render() {
     const h = location.hash || '#/';
     if (h.startsWith('#/oficina')) return PV.renderOffice(h.split('/')[2] || 'cargas');
+    if (h.startsWith('#/supervisor')) return PV.renderSupervisor(h.split('/')[2] || 'resumen');
     if (h === '#/ruta' && S.session && sellerById(S.session.sellerId)) return renderSeller();
     return renderLogin();
   }
@@ -333,6 +335,7 @@
           <button id="enterBtn" class="btn btn-primary btn-block" ${last ? '' : 'disabled'}>Entrar a mi ruta →</button>
           <div class="divider">o</div>
           <a class="btn btn-block" href="#/oficina/cargas">🖥️ Oficina · Administración</a>
+          <a class="btn btn-block" href="#/supervisor" style="margin-top:8px">👁 Supervisor · Solo consulta</a>
         </div>
         ${creditFooter()}
       </section>`;
@@ -793,7 +796,7 @@
       }).catch((e) => console.warn('SW no registrado', e));
     }
     render();
-    logEvent('apertura', isOffice() ? 'Abrió la oficina' : 'Abrió la app');
+    logEvent('apertura', isOffice() ? 'Abrió la oficina' : isSupervisor() ? 'Entró como supervisor' : 'Abrió la app');
     scheduleSync(1200);
   }
   // Arranque: lo invoca index.html después de cargar office.js
@@ -801,7 +804,7 @@
   window.PV = {
     S, $, $$, esc, nf2, nf0, usd, bs, int, dec, norm, slug, today, fmtDate, fmtStock, hasStock, productSort, productLabel, rubroIcon,
     toast, openSheet, copyText, saveFile, pickFile, brandHeader, creditFooter,
-    loadAll, saveDocs, saveOrder, saveSettings, setSession, runSync, updateSyncPill, render, updateBell, beep, logEvent,
+    loadAll, saveDocs, saveOrder, saveSettings, setSession, runSync, updateSyncPill, render, updateBell, beep, logEvent, isSupervisor,
     productById, sellerById, orderById, clientById, rubros, orderLinesHTML,
     boot,
   };

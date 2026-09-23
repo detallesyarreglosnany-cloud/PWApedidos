@@ -161,6 +161,8 @@
       if (!cfg.syncKey) return { ok: false, noKey: true, error: 'Falta la clave de sincronización (☰ → Conexión, o Ajustes en la oficina)' };
       const url = cfg.syncUrl || DEFAULT_SYNC_URL;
       const isAdmin = !!cfg.adminKey;
+      const isSupervisor = !isAdmin && !!cfg.supervisorKey;
+      const fullRead = isAdmin || isSupervisor; // el supervisor lee todo, pero jamás publica nada
       const sellerId = scope && scope.sellerId || null;
       const cursorKey = cursorKeyOf(scope);
       const since = await DB.getMeta(cursorKey, null);
@@ -169,6 +171,7 @@
       const headers = { 'Content-Type': 'application/json' };
       if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
       if (cfg.adminKey) headers['x-admin-key'] = cfg.adminKey;
+      if (cfg.supervisorKey) headers['x-supervisor-key'] = cfg.supervisorKey;
 
       // Vercel rechaza cuerpos de más de 4,5 MB en ambos sentidos: la subida va
       // por tandas y la bajada por páginas. El cursor avanza solo al terminar.
@@ -197,7 +200,7 @@
         // 2) Bajar cambios remotos (una página)
         first = first || r.data;
         for (const k of ['config', 'products', 'sellers', 'clients', 'loads', 'orders', 'events']) {
-          changed += await mergeRemote(k, (r.data.pull && r.data.pull[k]) || [], isAdmin);
+          changed += await mergeRemote(k, (r.data.pull && r.data.pull[k]) || [], fullRead);
         }
         if (!r.data.more) { dups = r.data.dups; break; }
         page = r.data.page;
@@ -257,6 +260,20 @@
     if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
     return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/' + name), headers, body || {});
   }
+
+  /** Llamada de solo lectura: sirve con la clave admin o con la de supervisor. */
+  async function readerCall(name, body) {
+    if (!navigator.onLine) return { ok: false, error: 'Sin internet' };
+    const cfg = await settings();
+    if (!cfg.adminKey && !cfg.supervisorKey) return { ok: false, error: 'Falta la clave de acceso' };
+    const headers = { 'Content-Type': 'application/json' };
+    if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
+    if (cfg.adminKey) headers['x-admin-key'] = cfg.adminKey;
+    if (cfg.supervisorKey) headers['x-supervisor-key'] = cfg.supervisorKey;
+    return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/' + name), headers, body || {});
+  }
+  /** Reporte de ventas del servidor para un rango de fechas (sin límite de historial local). */
+  const report = (from, to) => readerCall('report', { from, to });
 
   /** Respaldo completo del servidor, en el formato del paquete de arranque (se restaura con "Cargar paquete"). */
   async function serverBackup(onProgress) {
@@ -334,5 +351,5 @@
     return n;
   }
 
-  global.Sync = { KINDS, isLocked, syncNow, pendingCount, hasCursor, reserveNumbers, adminCall, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
+  global.Sync = { KINDS, isLocked, syncNow, pendingCount, hasCursor, reserveNumbers, adminCall, readerCall, report, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
 })(window);

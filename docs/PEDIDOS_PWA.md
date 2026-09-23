@@ -107,6 +107,7 @@ El servidor guarda cada documento en `DistDoc` (Prisma/PostgreSQL) con índices 
 - La bajada va por páginas de ~3 MB (el límite de Vercel es 4,5 MB), así que el catálogo con fotos no rompe la sincronización.
 - Historial (`events`): cada equipo registra sus acciones con hora; solo se agregan (nunca se editan) y solo la oficina los baja (últimos 31 días al configurar una PC nueva).
 - `/api/pedidos/health` y `/api/pedidos/backup` (clave admin): estado de la base de datos y respaldo completo por páginas, desde Ajustes → Servidor y respaldo.
+- Rol **Supervisor** (`PEDIDOS_SUPERVISOR_KEY`, opcional): solo lectura de todo (pedidos, clientes, historial), calculado en el servidor igual que la oficina pero SIN permiso de escritura — el propio servidor lo impide aunque el cliente intente enviar algo. `/api/pedidos/report` (clave admin o supervisor): totales y desglose por vendedor, despachador/ruta, categoría y día, para cualquier rango de fechas (sin el límite de 14 días que guarda cada teléfono).
 - Los números de carga (`C-00001`) y de nota (`NE-000001`) los entrega el servidor (`/api/pedidos/numbers`, tabla `DistCounter`), de forma atómica: nunca se repiten aunque varias PCs aprueben a la vez. Aprobar o cerrar una carga requiere internet.
 - Un archivo importado (WhatsApp/USB) solo actualiza lo que sea más nuevo y nunca deshace lo que decidió la oficina.
 
