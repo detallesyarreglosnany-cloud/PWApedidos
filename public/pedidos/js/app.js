@@ -206,7 +206,25 @@
 
   const isSupervisor = () => location.hash.startsWith('#/supervisor');
   const syncScope = () => (isOffice() || isSupervisor() ? {} : (S.session && S.session.sellerId ? { sellerId: S.session.sellerId } : {}));
-  async function runSync(manual) {
+  // Una sola sincronización a la vez: si llega otra (aviso push, volver a la app,
+  // temporizador) espera la que está en curso en vez de procesar dos veces.
+  let syncing = null, again = false;
+  function runSync(manual) {
+    if (syncing) again = true; // p. ej. llegó un aviso push a mitad: se baja de nuevo al terminar
+    else {
+      syncing = runSyncNow().finally(() => {
+        syncing = null;
+        if (again) { again = false; setTimeout(() => runSync(false), 0); }
+      });
+    }
+    return syncing.then((r) => { if (manual) syncToast(r); return r; });
+  }
+  function syncToast(r) {
+    if (r.ok) toast('Sincronizado · ↑' + r.pushed + ' ↓' + r.pulled + (r.rejected ? ' · ' + r.rejected + ' ya en manos de la oficina' : ''), 'ok');
+    else if (r.offline) toast('Sin internet: todo queda guardado en el equipo', 'err');
+    else toast(r.error || 'No se pudo sincronizar', 'err');
+  }
+  async function runSyncNow() {
     const scope = syncScope();
     // En la primera descarga de un equipo llega todo el historial: no se avisa pedido por pedido
     const firstSync = !(await Sync.hasCursor(scope));
@@ -220,13 +238,8 @@
       if (!firstSync) await detectNotifs(before);
       refreshAfterRemote();
     }
-    if (manual) {
-      if (r.ok) toast('Sincronizado · ↑' + r.pushed + ' ↓' + r.pulled + (r.rejected ? ' · ' + r.rejected + ' ya en manos de la oficina' : ''), 'ok');
-      else if (r.offline) toast('Sin internet: todo queda guardado en el equipo', 'err');
-      else toast(r.error || 'No se pudo sincronizar', 'err');
-    }
     updateSyncPill();
-    scheduleSync(isOffice() ? 20000 : 45000);
+    scheduleSync(isOffice() ? 10000 : 30000);
     return r;
   }
 
@@ -259,34 +272,145 @@
       });
     } catch (e) { /* sin audio */ }
   }
-  const NOTIF_TITLE = { pedido: '🧾 Nuevo pedido', editado: '✏️ Pedido modificado', duplicado: '⚠️ Cliente duplicado' };
-  /** Compara antes/después de un sync y avisa: pedido nuevo, modificado por vendedor, cliente duplicado. */
+  const NOTIF_TITLE = {
+    pedido: '🧾 Nuevo pedido', editado: '✏️ Pedido modificado', duplicado: '⚠️ Cliente duplicado', borrado: '🗑 Pedido eliminado',
+    aprobado: '✅ Pedido aprobado', espera: '⏸ Pedido en espera', despachado: '🚚 Pedido despachado', ajustado: '✏️ Pedido ajustado',
+  };
+  // Mismo tag que usa el servidor en el aviso push: si llegan los dos, se ve uno solo
+  const NOTIF_EV = { pedido: 'new', editado: 'mod', borrado: 'del', aprobado: 'apr', espera: 'esp', despachado: 'desp', ajustado: 'aj', duplicado: 'dup' };
+  const SENT = ['enviado', 'en_carga', 'en_espera', 'despachado'];
+  const isSent = (x) => !!x && !x.deleted && SENT.includes(x.status);
+  /**
+   * Compara antes/después de un sync y avisa.
+   * Oficina: pedido nuevo (aunque otro equipo ya lo haya metido en una hoja),
+   * modificado o eliminado por el vendedor, cliente duplicado.
+   * Vendedor: su pedido fue aprobado, puesto en espera, despachado, ajustado o eliminado por la oficina.
+   */
   async function detectNotifs(before) {
-    if (!isOffice()) return;
+    const office = isOffice();
+    const sid = S.session && S.session.sellerId;
+    if (!office && (!sid || isSupervisor())) return;
     const out = [];
-    S.orders.forEach((o) => {
-      const p = before.get(o.id), who = o.sellerName;
-      if (o.status === 'enviado' && (!p || p.status !== 'enviado')) out.push({ icon: '🧾', kind: 'pedido', msg: `Nuevo pedido de ${who}: ${o.clientName}` });
-      else if (o.sellerEdited && (!p || p.sellerEdited !== o.sellerEdited)) out.push({ icon: '✏️', kind: 'editado', msg: `${who} modificó el pedido de ${o.clientName}` });
-      if ((o.dupWith || []).length && !(p && (p.dupWith || []).length)) out.push({ icon: '⚠️', kind: 'duplicado', warn: true, msg: `Cliente duplicado: ${o.clientName} (${who} y ${o.dupWith.map((d) => d.sellerName).join(', ')})` });
+    const add = (kind, o, msg, warn) => out.push({ icon: NOTIF_TITLE[kind].split(' ')[0], kind, orderId: o.id, msg, warn: !!warn });
+    const all = await DB.getAll('orders');
+    all.forEach((o) => {
+      const p = before.get(o.id);
+      if (office) {
+        const who = o.sellerName;
+        if (isSent(o) && !isSent(p)) add('pedido', o, `Nuevo pedido de ${who}: ${o.clientName}`);
+        else if (o.deleted && isSent(p)) add('borrado', o, `${who} eliminó el pedido de ${o.clientName}`);
+        else if (!o.deleted && o.sellerEdited && p && p.sellerEdited !== o.sellerEdited) add('editado', o, `${who} modificó el pedido de ${o.clientName}`);
+        if (!o.deleted && (o.dupWith || []).length && !(p && (p.dupWith || []).length)) add('duplicado', o, `Cliente duplicado: ${o.clientName} (${who} y ${o.dupWith.map((d) => d.sellerName).join(', ')})`, true);
+        return;
+      }
+      if (o.sellerId !== sid || !p) return;
+      if (o.deleted && !p.deleted) add('borrado', o, `La oficina eliminó el pedido de ${o.clientName}`, true);
+      else if (o.status === 'despachado' && p.status !== 'despachado') add('despachado', o, `${o.clientName}${o.noteNumber ? ' · Nota ' + Loads.noteCode(o.noteNumber) : ''}`);
+      else if (o.status === 'en_espera' && p.status !== 'en_espera') add('espera', o, `${o.clientName}: la oficina lo dejó para otra carga`, true);
+      else if (o.locked === true && p.locked !== true) add('aprobado', o, `${o.clientName} · ${o.loadStatusName || 'Aprobado para carga'}`);
+      else if (o.officeEdited && o.officeEdited !== p.officeEdited) add('ajustado', o, `La oficina ajustó las cantidades de ${o.clientName}`, true);
     });
     if (!out.length) return;
     const at = new Date().toISOString();
     S.notifs = out.map((n) => ({ ...n, at, read: false })).concat(S.notifs || []).slice(0, 80);
     await DB.setMeta('notifs', S.notifs);
     beep();
-    // Una notificación del sistema POR CADA aviso (no una sola con todo mezclado),
-    // con un tag único para que Android no descarte las que llegan juntas.
+    // Una notificación del sistema POR CADA aviso, con el mismo tag que el push del
+    // servidor (si llegan los dos, el teléfono muestra uno solo).
     if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
-      out.forEach((n, i) => {
-        try {
-          new Notification(NOTIF_TITLE[n.kind] || 'Puerto Venado', {
-            body: n.msg, icon: './icons/icon-192.png', tag: 'pv-' + at + '-' + i,
-          });
-        } catch (e) { /* noop */ }
+      const viaPush = await pushActive();
+      out.filter((n) => !viaPush || n.kind === 'duplicado').forEach((n) => {
+        try { new Notification(NOTIF_TITLE[n.kind], { body: n.msg, icon: './icons/icon-192.png', tag: `o-${n.orderId}-${NOTIF_EV[n.kind]}` }); } catch (e) { /* noop */ }
       });
     }
+    if (!document.hidden) toast(out.length === 1 ? `${NOTIF_TITLE[out[0].kind]}: ${out[0].msg}` : `🔔 ${out.length} avisos nuevos`, 'ok');
     updateBell();
+  }
+  /** Lista de avisos (oficina y vendedor) con el botón para activar los avisos push. */
+  function notifSheet() {
+    const list = S.notifs || [];
+    const pushOk = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+    const sh = openSheet(`<div class="row"><h2 class="grow">🔔 Notificaciones</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      ${pushOk ? '<div id="nState" class="muted" style="margin:4px 0 10px">Revisando avisos…</div>'
+        : '<p class="muted">Este navegador no permite avisos con la app cerrada. En iPhone: instálala con «Agregar a pantalla de inicio».</p>'}
+      ${list.length ? `<div class="notif-list">${list.map((n) => `<div class="notif ${n.read ? '' : 'unread'} ${n.warn ? 'warn' : ''}"><span>${n.icon}</span><div class="grow">${esc(n.msg)}<small>${esc(new Date(n.at).toLocaleString('es-VE', { dateStyle: 'short', timeStyle: 'short' }))}</small></div></div>`).join('')}</div>
+        <div class="actions"><button class="btn" id="nClear">Borrar todo</button></div>`
+        : `<p class="muted">Sin notificaciones. ${isOffice() ? 'Aquí verás pedidos nuevos, modificados o eliminados por los vendedores y clientes duplicados.' : 'Aquí verás cuando tus pedidos sean aprobados, puestos en espera, ajustados o despachados.'}</p>`}`);
+    beep(); // habilita el audio del navegador tras un clic
+    S.notifs = list.map((n) => ({ ...n, read: true })); DB.setMeta('notifs', S.notifs); updateBell();
+    // Estado real: con permiso Y suscripción en este equipo (no basta el permiso)
+    const st = $('#nState', sh.el);
+    if (st) pushActive().then((on) => {
+      st.innerHTML = on ? '✅ Avisos activados en este equipo: llegan aunque la app esté cerrada.'
+        : '<button class="btn btn-primary btn-block" id="nPerm">🔔 Activar avisos en este equipo (llegan aunque la app esté cerrada)</button>';
+      const np = $('#nPerm', sh.el);
+      if (np) np.onclick = async () => {
+        np.disabled = true; np.textContent = 'Activando…';
+        const r = await enablePush(true);
+        pushKey = r.ok ? pushKey : '';
+        toast(r.ok ? '✅ Avisos activados' : (r.error || 'No se pudieron activar los avisos'), r.ok ? 'ok' : 'err');
+        sh.close();
+      };
+    });
+    const nc = $('#nClear', sh.el); if (nc) nc.onclick = () => { S.notifs = []; DB.setMeta('notifs', []); sh.close(); updateBell(); };
+  }
+
+  /* ----------------- Avisos push (con la app cerrada) ----------------- */
+  let pushKey = '';
+  function refreshPush() {
+    const k = (pushRole() || '') + '|' + ((S.session && S.session.sellerId) || '');
+    if (!pushRole() || k === pushKey || !('Notification' in window) || Notification.permission !== 'granted') return;
+    pushKey = k;
+    enablePush(false).then((r) => { if (!r.ok) pushKey = ''; });
+  }
+  const pushRole = () => (isOffice() ? 'office' : (S.session && S.session.sellerId && !isSupervisor() ? 'seller' : null));
+  function b64ToBytes(b64) {
+    const pad = '='.repeat((4 - (b64.length % 4)) % 4);
+    const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+    return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+  }
+  /**
+   * Suscribe este equipo (según el rol en pantalla) a los avisos push y lo
+   * registra en el servidor. ask=true pide permiso; sin ask solo renueva si ya
+   * estaba permitido (se llama en cada arranque y al cambiar de vendedor).
+   */
+  const pushRegKey = () => (pushRole() || '') + '|' + ((S.session && S.session.sellerId) || '');
+  function pushRegs() { try { return JSON.parse(localStorage.getItem('pvPushRegs') || '{}'); } catch (e) { return {}; } }
+  /** Avisos push activos para el rol que se usa AHORA en este equipo (no basta con tener suscripción). */
+  async function pushActive() {
+    try {
+      if (!pushRole() || Notification.permission !== 'granted') return false;
+      const reg = await Promise.race([navigator.serviceWorker.ready, new Promise((r) => setTimeout(() => r(null), 3000))]);
+      const sub = reg && await reg.pushManager.getSubscription();
+      return !!sub && pushRegs()[pushRegKey()] === sub.endpoint;
+    } catch (e) { return false; }
+  }
+  // Nunca deja la pantalla esperando: si el servicio de avisos no responde, se informa
+  const withTimeout = (pr, ms) => Promise.race([pr, new Promise((r) => setTimeout(() => r({ ok: false, error: 'El servicio de avisos no respondió. Intenta de nuevo con buena señal.' }), ms))]);
+  function enablePush(ask) { return withTimeout(enablePushNow(ask), 20000); }
+  async function enablePushNow(ask) {
+    try {
+      const role = pushRole();
+      if (!role) return { ok: false, error: 'Entra como oficina o como vendedor' };
+      if (!('serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window)) return { ok: false, error: 'Este navegador no permite avisos push' };
+      if (Notification.permission !== 'granted') {
+        if (!ask) return { ok: false };
+        if (await Notification.requestPermission() !== 'granted') return { ok: false, error: 'Permiso de notificaciones denegado en el navegador' };
+      }
+      if (!navigator.onLine) return { ok: false, error: 'Sin internet' };
+      const reg = await navigator.serviceWorker.ready;
+      const k = await Sync.pushCall({ action: 'key' });
+      if (!k.ok) return k;
+      const key = b64ToBytes(k.data.publicKey);
+      let sub = await reg.pushManager.getSubscription();
+      // Suscripción firmada con otra clave del servidor (p. ej. base restaurada): se renueva
+      const same = (a, b) => a && a.byteLength === b.length && new Uint8Array(a).every((x, i) => x === b[i]);
+      if (sub && !same(sub.options && sub.options.applicationServerKey, key)) { await sub.unsubscribe().catch(() => {}); sub = null; }
+      if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+      const r = await Sync.pushCall({ action: 'subscribe', role, sellerId: role === 'seller' ? S.session.sellerId : null, subscription: sub.toJSON() }, role === 'office');
+      if (r.ok) { try { localStorage.setItem('pvPushRegs', JSON.stringify({ ...pushRegs(), [pushRegKey()]: sub.endpoint })); } catch (e) { /* sin storage */ } }
+      return r;
+    } catch (e) { return { ok: false, error: 'No se pudieron activar los avisos: ' + (e.message || e) }; }
   }
   function updateBell() {
     const b = $('#bell'); if (!b) return;
@@ -313,6 +437,7 @@
     const h = location.hash || '#/';
     if (h.startsWith('#/oficina')) return PV.renderOffice(h.split('/')[2] || 'cargas');
     if (h.startsWith('#/supervisor')) return PV.renderSupervisor(h.split('/')[2] || 'resumen');
+    if (h === '#/ruta/pedidos' && S.session && sellerById(S.session.sellerId)) return renderSellerOrders();
     if (h === '#/ruta' && S.session && sellerById(S.session.sellerId)) return renderSeller();
     return renderLogin();
   }
@@ -508,7 +633,7 @@
     const clients = myClients();
     app.innerHTML = `
       ${brandHeader(seller.name, 'Ruta ' + (S.session.route || '—') + ' · ' + fmtDate(today()),
-        `<button id="syncPill" class="pill" type="button"></button><button class="icon-btn ghost" id="menuBtn" aria-label="Menú">☰</button>`)}
+        `<button id="bell" class="bell" type="button" aria-label="Notificaciones">🔔</button><button id="syncPill" class="pill" type="button"></button><button class="icon-btn ghost" id="menuBtn" aria-label="Menú">☰</button>`)}
       <section class="client-bar">
         <div class="row wrap client-row">
           ${routes.length > 1 ? `<select id="routeSel" class="select route-sel" aria-label="Ruta del día">
@@ -578,6 +703,8 @@
     };
     $('#syncPill').onclick = () => runSync(true);
     $('#menuBtn').onclick = sellerMenu;
+    $('#bell').onclick = notifSheet;
+    updateBell();
 
     const list = $('#plist');
     list.addEventListener('click', (e) => {
@@ -653,6 +780,8 @@
       logEvent('pedido_reabierto', `Reabrió el pedido de ${o.clientName} para modificarlo`, { orderId: o.id, clientName: o.clientName });
     } else if (o.loadId || o.status === 'en_espera') {
       o.sellerEdited = DB.now(); // la oficina ve "modificado por el vendedor"
+      // Lo que pide ahora el vendedor (su propio cambio no es un ajuste de oficina)
+      if (o.sentLines) { o.sentLines = { ...o.sentLines }; if (o.lines[pid]) o.sentLines[pid] = { ...o.lines[pid] }; else delete o.sentLines[pid]; }
       logEvent('pedido_modificado', `Modificó el pedido de ${o.clientName} (ya estaba en hoja de carga)`, { orderId: o.id, clientName: o.clientName }, { onceKey: 'mod:' + o.id });
     }
     await saveOrder(o);
@@ -710,6 +839,8 @@
     if (send) send.onclick = async () => {
       o.notes = notes.value.slice(0, 300);
       o.status = 'enviado'; o.sentAt = DB.now();
+      // Copia de lo que pidió el vendedor: luego ve qué ajustó la oficina
+      o.sentLines = JSON.parse(JSON.stringify(o.lines));
       await saveOrder(o);
       await logEvent('pedido_enviado', `Envió el pedido de ${o.clientName} · ${orderSummary(o)}`, { orderId: o.id, clientName: o.clientName, amount: Matrix.orderTotals(o).monto });
       await setSession({ ...S.session, activeOrderId: null });
@@ -729,6 +860,117 @@
     };
   }
 
+  /* ====================== Mis pedidos (seguimiento) ====================== */
+  // El vendedor sigue TODOS sus pedidos (no solo los de hoy): enviados, aprobados,
+  // en espera y despachados, con lo que ajustó la oficina, y las hojas de carga
+  // donde están sus clientes. Es su agenda de ventas (base de su comisión).
+  const MY_GROUPS = [['todos', 'Todos'], ['enviados', '📤 Enviados'], ['aprobados', '✅ Aprobados'], ['espera', '⏸ En espera'], ['despachados', '🚚 Despachados'], ['abiertos', '✏️ Sin enviar']];
+  const MY_RANGES = [['hoy', 'Hoy'], ['7', '7 días'], ['15', '15 días'], ['mes', 'Este mes'], ['todo', 'Todo']];
+  const groupOf = (o) => (o.status === 'abierto' ? 'abiertos' : o.status === 'despachado' ? 'despachados'
+    : o.status === 'en_espera' ? 'espera' : o.locked ? 'aprobados' : 'enviados');
+  const GROUP_TEXT = { abiertos: 'Sin enviar', enviados: 'Enviado · esperando aprobación', aprobados: 'Aprobado para carga', espera: 'En espera', despachados: 'Despachado' };
+  function dayMinus(n) { const d = new Date(); d.setDate(d.getDate() - n); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+  function inRange(day, r) {
+    day = String(day || '').slice(0, 10);
+    if (r === 'todo') return true;
+    if (r === 'hoy') return day === today();
+    if (r === 'mes') return day.slice(0, 7) === today().slice(0, 7);
+    return day >= dayMinus(+r - 1);
+  }
+  const loadOf = (o) => (o.loadId ? S.loads.find((l) => l.id === o.loadId) : null);
+  const qty = (l) => (l ? [l.cajas ? l.cajas + ' cj' : '', l.unidades ? l.unidades + ' un' : ''].filter(Boolean).join(' + ') || '—' : '—');
+
+  function renderSellerOrders() {
+    const seller = sellerById(S.session.sellerId), sid = seller.id;
+    const f = S.ui.myo || (S.ui.myo = { tab: 'pedidos', g: 'todos', r: '15' });
+    const mine = S.orders.filter((o) => o.sellerId === sid && inRange(o.routeDate, f.r));
+    const list = mine.filter((o) => f.g === 'todos' || groupOf(o) === f.g)
+      .sort((a, b) => String(b.routeDate).localeCompare(String(a.routeDate)) || String(b.sentAt || b.createdAt).localeCompare(String(a.sentAt || a.createdAt)));
+    const sent = mine.filter((o) => o.status !== 'abierto'), desp = mine.filter((o) => o.status === 'despachado');
+    const sum = (arr) => arr.reduce((a, o) => a + Matrix.orderTotals(o).monto, 0);
+    const count = (g) => mine.filter((o) => g === 'todos' || groupOf(o) === g).length;
+    const loads = S.loads.filter((l) => Loads.sellerIdsOf(l).includes(sid) || S.orders.some((o) => o.sellerId === sid && o.loadId === l.id))
+      .filter((l) => inRange(l.date || l.closedAt || l.createdAt, f.r))
+      .sort((a, b) => String(b.date || b.closedAt || b.createdAt).localeCompare(String(a.date || a.closedAt || a.createdAt)));
+    const chip = (key, cur, label, data) => `<button class="chip ${key === cur ? 'active' : ''}" ${data}="${key}">${label}</button>`;
+    const orderRow = (o) => {
+      const t = Matrix.orderTotals(o), l = loadOf(o), g = groupOf(o);
+      return `<tr data-myo="${esc(o.id)}" style="cursor:pointer">
+        <td><b>${esc(o.clientName)}</b><div class="muted" style="font-size:12px">${esc(fmtDate(o.routeDate))}${l ? ' · ' + esc(Loads.labelOf(l)) + (l.number ? ' · ' + esc(Loads.loadCode(l)) : '') : ''}${o.noteNumber ? ' · ' + esc(Loads.noteCode(o.noteNumber)) : ''}</div>
+          <span class="status ${g === 'aprobados' ? 'en_carga' : o.status}">${esc(GROUP_TEXT[g])}</span>${o.officeEdited ? ' <span class="status en_espera">ajustado por oficina</span>' : ''}</td>
+        <td class="n" data-l="Monto">${usd(t.monto)}</td></tr>`;
+    };
+    app.innerHTML = `
+      ${brandHeader(seller.name, 'Mis pedidos · seguimiento',
+        `<button id="bell" class="bell" type="button" aria-label="Notificaciones">🔔</button><button id="syncPill" class="pill" type="button"></button><a class="btn btn-sm" href="#/ruta">← Pedir</a>`)}
+      <div class="container">
+        <div class="chips" id="myRange">${MY_RANGES.map(([k, l]) => chip(k, f.r, l, 'data-r')).join('')}</div>
+        <div class="kpi-row" style="margin-top:10px">
+          <div class="kpi"><small>Pedidos enviados</small><b>${sent.length}</b></div>
+          <div class="kpi"><small>Monto enviado</small><b>${usd(sum(sent))}</b></div>
+          <div class="kpi"><small>Monto despachado</small><b>${usd(sum(desp))}</b></div>
+        </div>
+        <p class="muted" style="margin-top:-4px">Lo <b>despachado</b> es lo que realmente salió al cliente (base de tu comisión).</p>
+        <div class="chips" id="myTab">${chip('pedidos', f.tab, '🧾 Mis pedidos', 'data-t')}${chip('hojas', f.tab, '🚚 Hojas de carga', 'data-t')}</div>
+        ${f.tab === 'pedidos' ? `
+          <div class="chips" id="myGroup">${MY_GROUPS.map(([k, l]) => chip(k, f.g, `${l} <span class="badge">${count(k)}</span>`, 'data-g')).join('')}</div>
+          ${list.length ? `<div class="card" style="overflow:auto"><table class="inv"><tbody>${list.map(orderRow).join('')}</tbody></table></div>`
+            : '<div class="empty card"><strong>Sin pedidos</strong>en ese período con ese estado.</div>'}`
+        : (loads.length ? loads.map((l) => {
+            const os = S.orders.filter((o) => o.sellerId === sid && o.loadId === l.id);
+            const st = Loads.statusOf(l, S.config);
+            return `<div class="card card-pad" style="margin-bottom:10px">
+              <div class="row"><h3 class="grow" style="margin:0">${esc(Loads.labelOf(l))} ${l.number ? '<span class="mono muted">' + esc(Loads.loadCode(l)) + '</span>' : ''}</h3>
+                <span class="status ${st.locked ? 'en_carga' : 'enviado'}">${st.locked ? '🔒 ' : ''}${esc(st.name)}</span></div>
+              <div class="muted" style="margin:4px 0 8px">📅 ${esc(fmtDate(l.date || String(l.closedAt || l.createdAt).slice(0, 10)))} · Ruta ${esc(l.route || '—')} · Despachador: <b>${esc(l.dispatcherName || 'sin asignar')}</b>${l.firstNote ? ' · Notas ' + esc(Loads.noteCode(l.firstNote)) + ' a ' + esc(Loads.noteCode(l.lastNote)) : ''}</div>
+              ${os.length ? `<table class="inv"><tbody>${os.map(orderRow).join('')}</tbody></table>
+                <div class="row" style="justify-content:flex-end;margin-top:6px"><b>Tus clientes en esta hoja: ${os.length} · ${usd(sum(os))}</b></div>`
+                : '<p class="muted">Tus pedidos ya no están en esta hoja (se movieron o quedaron en espera).</p>'}
+            </div>`;
+          }).join('') : '<div class="empty card"><strong>Sin hojas de carga</strong>en ese período.</div>')}
+      </div>
+      ${creditFooter()}`;
+    $('#syncPill').onclick = () => runSync(true);
+    $('#bell').onclick = notifSheet;
+    updateSyncPill(); updateBell();
+    $('#myRange').onclick = (e) => { const b = e.target.closest('[data-r]'); if (b) { f.r = b.dataset.r; renderSellerOrders(); } };
+    $('#myTab').onclick = (e) => { const b = e.target.closest('[data-t]'); if (b) { f.tab = b.dataset.t; renderSellerOrders(); } };
+    const mg = $('#myGroup'); if (mg) mg.onclick = (e) => { const b = e.target.closest('[data-g]'); if (b) { f.g = b.dataset.g; renderSellerOrders(); } };
+    app.querySelectorAll('[data-myo]').forEach((tr) => { tr.onclick = () => myOrderSheet(orderById(tr.dataset.myo)); });
+  }
+
+  /** Detalle de un pedido para el vendedor: lo que pidió contra lo que queda/salió, hoja, despachador y nota. */
+  function myOrderSheet(o) {
+    if (!o) return;
+    const l = loadOf(o), g = groupOf(o), t = Matrix.orderTotals(o);
+    const sentL = o.sentLines || null;
+    const ids = [...new Set(Object.keys(sentL || {}).concat(Object.keys(o.lines || {})))];
+    const rows = ids.map((pid) => {
+      const fin = (o.lines || {})[pid], was = sentL ? sentL[pid] : null, ref = fin || was;
+      const changed = sentL && qty(was) !== qty(fin);
+      return `<tr${changed ? ' class="short"' : ''}><td><b>${esc(ref.name)} ${esc(ref.presentation || '')}</b><div class="muted mono" style="font-size:12px">${esc(ref.code || '')}</div></td>
+        ${sentL ? `<td class="num">${esc(qty(was))}</td>` : ''}<td class="num">${esc(qty(fin))}${changed ? ' ✏️' : ''}</td></tr>`;
+    }).join('');
+    const info = [
+      ['Fecha del pedido', fmtDate(o.routeDate)],
+      ['Enviado', o.sentAt ? new Date(o.sentAt).toLocaleString('es-VE', { dateStyle: 'short', timeStyle: 'short' }) : '—'],
+      ['Estado', GROUP_TEXT[g]],
+      ['Hoja de carga', l ? Loads.labelOf(l) + (l.number ? ' · ' + Loads.loadCode(l) : '') : '—'],
+      ['Estado de la hoja', l ? Loads.statusOf(l, S.config).name : '—'],
+      ['Despachador', (l && l.dispatcherName) || '—'],
+      ['Fecha de carga', l && (l.date || l.closedAt) ? fmtDate(l.date || String(l.closedAt).slice(0, 10)) : '—'],
+      ['Nota de entrega', o.noteNumber ? Loads.noteCode(o.noteNumber) : '—'],
+    ];
+    openSheet(`
+      <div class="row"><h2 class="grow">${esc(o.clientName)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <div class="grid2" style="margin:8px 0 12px">${info.map(([k, v]) => `<div><small class="muted">${esc(k)}</small><div><b>${esc(v)}</b></div></div>`).join('')}</div>
+      ${o.officeEdited ? `<div class="hint warn">✏️ La oficina ajustó este pedido${sentL ? ': las filas marcadas cambiaron respecto a lo que enviaste.' : '.'}</div>` : ''}
+      <table class="lines"><thead><tr><th style="text-align:left">Producto</th>${sentL ? '<th class="num">Pediste</th>' : ''}<th class="num">${g === 'despachados' ? 'Despachado' : 'Queda'}</th></tr></thead>
+        <tbody>${rows || '<tr><td class="muted">Sin productos</td></tr>'}</tbody></table>
+      <div class="row" style="justify-content:space-between;margin-top:10px;font-size:18px"><b>Total · ${t.cajas} cj + ${t.unidades} un</b><b>${usd(t.monto)}</b></div>
+      ${o.notes ? `<p class="muted">📝 ${esc(o.notes)}</p>` : ''}`, { cls: 'sheet-order' });
+  }
+
   function sellerMenu() {
     const orders = myOrdersToday();
     const total = orders.reduce((a, o) => a + Matrix.orderTotals(o).monto, 0);
@@ -738,6 +980,7 @@
       <p class="muted">${orders.length} clientes · <b>${usd(total)}</b></p>
       <table class="lines">${orders.map((o) => `<tr><td>${markOf(o)}${esc(o.clientName)}<div class="muted" style="font-size:12px">${esc(Loads.orderLabel(o))}</div></td><td class="num">${usd(Matrix.orderTotals(o).monto)}</td></tr>`).join('')}</table>
       <div class="actions" style="flex-direction:column">
+        <a class="btn btn-accent" href="#/ruta/pedidos" data-close>📋 Mis pedidos y cargas</a>
         <button class="btn btn-primary" id="mSync">⟳ Sincronizar ahora</button>
         <button class="btn" id="mExport">⇪ Enviar pedidos de hoy por archivo (WhatsApp)</button>
         <button class="btn" id="mImport">⇩ Cargar catálogo desde archivo</button>
@@ -781,7 +1024,7 @@
       return;
     }
     DB.requestPersistence();
-    window.addEventListener('hashchange', render);
+    window.addEventListener('hashchange', () => { render(); refreshPush(); });
     window.addEventListener('online', () => { updateSyncPill(); runSync(false); });
     window.addEventListener('offline', updateSyncPill);
     let hiddenAt = 0;
@@ -802,11 +1045,14 @@
         if (!hadController || reloading) return;
         reloading = true; location.reload();
       });
+      // Llegó un aviso push con la app abierta: sincroniza ya, sin esperar el turno
+      navigator.serviceWorker.addEventListener('message', (e) => { if (e.data && e.data.type === 'push') runSync(false); });
       navigator.serviceWorker.register('./sw.js').then((reg) => {
         document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
       }).catch((e) => console.warn('SW no registrado', e));
     }
     render();
+    refreshPush();
     logEvent('apertura', isOffice() ? 'Abrió la oficina' : isSupervisor() ? 'Entró como supervisor' : 'Abrió la app');
     scheduleSync(1200);
   }
@@ -815,7 +1061,8 @@
   window.PV = {
     S, $, $$, esc, nf2, nf0, usd, bs, int, dec, norm, slug, today, fmtDate, fmtStock, hasStock, productSort, productLabel, rubroIcon,
     toast, openSheet, copyText, saveFile, pickFile, brandHeader, creditFooter,
-    loadAll, saveDocs, saveOrder, saveSettings, setSession, runSync, updateSyncPill, render, updateBell, beep, logEvent, isSupervisor,
+    loadAll, saveDocs, saveOrder, saveSettings, setSession, runSync, updateSyncPill, render, refreshAfterRemote, updateBell, beep, logEvent, isSupervisor,
+    notifSheet, refreshPush,
     productById, sellerById, orderById, clientById, rubros, orderLinesHTML,
     boot,
   };

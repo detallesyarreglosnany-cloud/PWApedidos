@@ -32,3 +32,23 @@ model DistCounter {
   name  String @id // load | note
   value Int    @default(0)
 }
+
+// Suscripciones a notificaciones push (una por equipo y rol). El teléfono las
+// recibe aunque la app esté cerrada o la pantalla bloqueada.
+model DistPush {
+  endpoint  String   // URL del servicio push del navegador
+  role      String   // office | seller
+  sellerId  String?  // solo role = seller
+  data      String   // JSON de la suscripción (endpoint + claves)
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@id([endpoint, role])
+  @@index([role, sellerId])
+}
+
+// Ajustes internos del servidor (claves VAPID de las notificaciones push,
+// generadas una sola vez por el propio servidor).
+model DistSetting {
+  name  String @id
+  value String
+}
