@@ -350,6 +350,13 @@ table.grid td.tot, table.grid th.tot { position: sticky; right: 0; z-index: 2; b
 table.grid thead th.tot, table.grid tfoot td.tot { z-index: 6; }
 table.grid tfoot td.tot { background: #3a2f0e; }
 table.grid tr.ini-row th { background: #1c0508; color: var(--accent); font: 700 11px var(--display); letter-spacing: .06em; padding: 4px 6px; text-align: center; }
+/* Hoja de carga (pantalla): compacta — las columnas de clientes quedan pegadas
+   al producto, los nombres en 2-3 líneas y los totales resaltados */
+table.grid.sheet-grid { min-width: 0; }
+table.grid.sheet-grid thead th.client { writing-mode: horizontal-tb; transform: none; max-height: none; vertical-align: bottom; padding: 8px 4px; }
+table.grid.sheet-grid thead th.client div { writing-mode: vertical-rl; transform: rotate(180deg); white-space: normal; height: 130px; line-height: 1.15; text-align: left; display: inline-block; overflow-wrap: anywhere; }
+table.grid.sheet-grid .sticky-col .um { margin-left: 4px; }
+table.grid.sheet-grid td.tot, table.grid.sheet-grid th.tot, table.grid.sheet-grid tfoot td { font-size: 16px; }
 .tag { display: inline-block; font: 700 11px var(--display); letter-spacing: .05em; color: var(--accent); border: 1px solid rgba(255,180,0,.45); border-radius: 6px; padding: 1px 6px; margin-left: 4px; }
 .status.locked { background: rgba(255,255,255,.08); color: var(--ink-2); }
 .status.over { background: rgba(255, 77, 90, .18); color: var(--danger); }

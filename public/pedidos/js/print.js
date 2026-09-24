@@ -66,14 +66,14 @@
     const extra = cfg.sheetExtraCols || ['VACÍOS', 'DEVOLUCIÓN'];
     const blanks = extra.map(() => '<td class="blank"></td>').join('');
     let lastCat = null;
-    const colspan = m.cols.length + 3 + extra.length;
+    const colspan = m.cols.length + 2 + extra.length;
     const rows = m.rows.map((r) => {
       let head = '';
       if (r.category !== lastCat) { lastCat = r.category; head = `<tr class="cat"><td colspan="${colspan}">${esc(r.category || 'SIN RUBRO')}</td></tr>`; }
-      return head + `<tr><td class="p"><span class="muted">${esc(r.code)}</span> ${esc(r.name)} <b>${esc(r.presentation)}</b></td><td>${r.um}</td>
+      return head + `<tr><td class="p"><span class="muted">${esc(r.code)}</span> ${esc(r.name)} <b>${esc(r.presentation)}</b> <span class="um">${r.um}</span></td>
         ${r.cells.map((v) => `<td class="num${v ? ' has' : ''}">${v ? nf0.format(v) : ''}</td>`).join('')}<td class="num tot">${nf0.format(r.total)}</td>${blanks}</tr>`;
     }).join('');
-    const foot = m.footer.map((f) => `<tr class="tot"><td>${esc(f.label)}</td><td></td>${f.cells.map((v) => `<td class="num">${nf0.format(v)}</td>`).join('')}<td class="num">${nf0.format(f.total)}</td>${blanks}</tr>`).join('');
+    const foot = m.footer.map((f) => `<tr class="tot"><td>${esc(f.label)}</td>${f.cells.map((v) => `<td class="num">${nf0.format(v)}</td>`).join('')}<td class="num tot">${nf0.format(f.total)}</td>${blanks}</tr>`).join('');
     const code = load.number ? Loads.loadCode(load) : 'BORRADOR';
     const fecha = load.date || String(load.closedAt || '').slice(0, 10) || new Date().toISOString().slice(0, 10);
     const [yy, mm, dd] = fecha.split('-');
@@ -90,10 +90,10 @@
         <div><b>Clientes · ${u.measure === 'unidades' ? 'Unidades' : 'Bultos'}</b>${m.cols.length} / ${u.maxClients} · ${nf0.format(u.used)} / ${nf0.format(u.limit)}</div>
         <div><b>Notas de entrega</b>${load.firstNote ? esc(Loads.noteCode(load.firstNote) + ' a ' + Loads.noteCode(load.lastNote)) : '—'}</div>
       </div>
-      <table><thead>
-        <tr class="ini"><th style="text-align:right" colspan="2">VENDEDOR →</th>${m.cols.map((c) => `<th>${esc(Loads.initials(c.order.sellerName))}</th>`).join('')}<th></th>${extra.map(() => '<th></th>').join('')}</tr>
-        <tr><th style="text-align:left">PRODUCTO</th><th>UM</th>
-        ${m.cols.map((c, i) => `<th class="cl"><div>${i + 1}. ${esc(c.client)}</div></th>`).join('')}<th class="cl"><div>TOTAL</div></th>
+      <table class="load ${m.cols.length > 14 ? 'many' : ''}"><thead>
+        <tr class="ini"><th style="text-align:right">VENDEDOR →</th>${m.cols.map((c) => `<th>${esc(Loads.initials(c.order.sellerName))}</th>`).join('')}<th></th>${extra.map(() => '<th></th>').join('')}</tr>
+        <tr><th style="text-align:left">PRODUCTO</th>
+        ${m.cols.map((c, i) => `<th class="cl"><div>${i + 1}. ${esc(c.client)}</div></th>`).join('')}<th class="cl tcol"><div>TOTAL</div></th>
         ${extra.map((x) => `<th class="cl"><div>${esc(x)}</div></th>`).join('')}</tr></thead>
         <tbody>${rows}</tbody><tfoot>${foot}</tfoot></table>
       <p class="muted" style="margin:6px 0 0">CJ = cajas · UN = unidades sueltas. Clientes: ${m.cols.map((c, i) => `${i + 1}. ${esc(c.client)} (${esc(Loads.initials(c.order.sellerName))})`).join(' · ')}</p>
@@ -101,11 +101,26 @@
       </section>`;
   }
 
+  // Hoja de carga: SIN rellenos ni franjas (ahorra tinta), todo en negro, letra 12
+  // y totales a 14. La tabla toma solo el ancho que necesita: con pocos clientes
+  // las columnas quedan pegadas al producto. Los nombres de clientes se reparten
+  // en 2-3 líneas en vez de estirarse hacia arriba.
   const LOAD_CSS = `@page{size:letter landscape;margin:8mm} .sheet{page-break-after:always}
-    th.cl{height:120px;vertical-align:bottom;padding:2px 1px;width:22px}
-    th.cl div{writing-mode:vertical-rl;transform:rotate(180deg);white-space:nowrap;max-height:116px;overflow:hidden;font-size:9px}
-    td.p{white-space:nowrap;max-width:230px;overflow:hidden} td{font-size:10px}
-    tr.ini th{background:#fff;color:#730101;font-size:8px;border-color:#444} td.has{background:#fff4c2;font-weight:bold}
+    .sheet,.sheet *{color:#000 !important;background:transparent !important;-webkit-print-color-adjust:economy;print-color-adjust:economy}
+    .sheet .head{border-bottom:2px solid #000} .sheet .doc{border-color:#000}
+    table.load{width:auto} table.load.many{width:100%}
+    table.load th,table.load td{font-size:12px;border:1px solid #000;padding:2px 5px}
+    table.load th{font-weight:bold}
+    th.cl{vertical-align:bottom;padding:3px 2px;min-width:22px}
+    th.cl div{writing-mode:vertical-rl;transform:rotate(180deg);white-space:normal;height:110px;line-height:1.15;text-align:left;display:inline-block;overflow-wrap:anywhere}
+    table.load.many th.cl div{white-space:nowrap;overflow:hidden}
+    td.p{white-space:normal;max-width:280px}
+    .um{font-size:10px;font-weight:bold;border:1px solid #000;border-radius:3px;padding:0 3px;margin-left:3px}
+    tr.ini th{font-size:10px}
+    .cat td{font-weight:bold;font-size:12px;border-top:2px solid #000}
+    td.has{font-weight:bold}
+    table.load td.tot,table.load th.tcol{font-size:14px;font-weight:900;border-left:2px solid #000;border-right:2px solid #000}
+    table.load tfoot td{font-size:14px;font-weight:900;border-top:2px solid #000}
     td.blank{min-width:34px}`;
 
   function printLoadSheet(load, orders, ctx) {

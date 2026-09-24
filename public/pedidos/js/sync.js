@@ -22,7 +22,7 @@
   const ADMIN_KINDS = ['products', 'sellers', 'loads', 'config'];
   // Un pedido bloqueado (hoja aprobada/cerrada) ya no lo puede pisar el teléfono
   const isLocked = (o) => !!o && (o.locked === true || o.status === 'despachado');
-  const INITIAL_ORDER_DAYS = 14; // historial que baja un teléfono nuevo
+  const INITIAL_ORDER_DAYS = 60; // historial que baja un teléfono nuevo (seguimiento y comisiones)
   let running = null;
 
   async function settings() {
@@ -78,7 +78,10 @@
           return; // la oficina editó después: se subirá en el próximo push
         }
       }
-      if (l && !l.dirty && l.updatedAt === r.updatedAt) return; // idéntico
+      // Vista reducida de una hoja (la que baja un vendedor): nunca pisa la hoja
+      // completa que ya tiene este equipo si también se usa como oficina
+      if (l && r.partial && !l.partial) return;
+      if (l && !l.dirty && l.updatedAt === r.updatedAt && !!l.partial === !!r.partial) return; // idéntico
       toPut.push({ ...r, dirty: !!markDirty });
     });
     await DB.putMany(store, toPut);
@@ -231,7 +234,9 @@
 
   // Un marcador por perfil: si en el mismo teléfono entra otro vendedor (u
   // Oficina), baja completo lo suyo en vez de continuar el marcador del anterior.
-  const cursorKeyOf = (scope) => 'syncCursor:' + (scope && scope.sellerId ? scope.sellerId : 'all');
+  // v2: con la versión que trae las hojas de carga al vendedor y 60 días de
+  // historial, cada equipo hace UNA descarga completa (el cursor anterior no las incluía)
+  const cursorKeyOf = (scope) => 'syncCursor2:' + (scope && scope.sellerId ? scope.sellerId : 'all');
   async function hasCursor(scope) { return !!(await DB.getMeta(cursorKeyOf(scope), null)); }
 
   async function applyDups(dups, sellerId) {
@@ -272,6 +277,18 @@
     if (cfg.supervisorKey) headers['x-supervisor-key'] = cfg.supervisorKey;
     return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/' + name), headers, body || {});
   }
+  /** Suscripción a avisos push (/api/pedidos/push). La oficina se identifica con su clave admin. */
+  async function pushCall(body, asOffice) {
+    const cfg = await settings();
+    if (!cfg.syncKey) return { ok: false, error: 'Falta la clave de sincronización' };
+    const headers = { 'Content-Type': 'application/json', 'x-sync-key': cfg.syncKey };
+    if (asOffice) {
+      if (!cfg.adminKey) return { ok: false, error: 'Falta la clave admin en Ajustes' };
+      headers['x-admin-key'] = cfg.adminKey;
+    }
+    return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/push'), headers, body);
+  }
+
   /** Reporte de ventas del servidor para un rango de fechas (sin límite de historial local). */
   const report = (from, to) => readerCall('report', { from, to });
 
@@ -351,5 +368,5 @@
     return n;
   }
 
-  global.Sync = { KINDS, isLocked, syncNow, pendingCount, hasCursor, reserveNumbers, adminCall, readerCall, report, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
+  global.Sync = { KINDS, isLocked, syncNow, pendingCount, hasCursor, reserveNumbers, adminCall, readerCall, report, pushCall, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
 })(window);

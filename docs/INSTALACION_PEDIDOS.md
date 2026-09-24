@@ -57,6 +57,16 @@ En **Cargas**, abre la hoja → en la fila del cliente toca **⏸ Espera**. El p
 ### Pasar un cliente a otro vendedor (o asignar uno sin vendedor)
 **Clientes** → busca el cliente → cambia el **Vendedor**. En la próxima sincronización aparece en el teléfono del nuevo vendedor y desaparece del anterior. El filtro **— Sin vendedor —** muestra los clientes sin asignar.
 
+### Avisos en tiempo real (campanita 🔔)
+En cada equipo (oficina y cada vendedor): toca 🔔 → **Activar avisos en este equipo**. Desde ahí los avisos llegan aunque la app esté cerrada o la pantalla bloqueada:
+- **Oficina**: pedido nuevo, pedido modificado o eliminado por un vendedor.
+- **Vendedor**: su pedido fue aprobado, puesto en espera, ajustado por la oficina, despachado (con número de nota) o eliminado.
+
+Con la app abierta, la oficina revisa cada 10 s y el vendedor cada 30 s. En iPhone los avisos solo funcionan con la app instalada («Agregar a pantalla de inicio»).
+
+### Seguimiento del vendedor (Mis pedidos)
+☰ → **📋 Mis pedidos y cargas**. El vendedor ve TODOS sus pedidos (no solo los de hoy), por estado (enviados, aprobados, en espera, despachados, sin enviar) y por período (hoy, 7, 15 días, mes, todo), con el total enviado y el **total despachado** (base de su comisión). Al tocar un pedido ve lo que pidió contra lo que quedó o se despachó (si la oficina ajustó cantidades), la hoja, el número de carga, el despachador, la fecha de carga y la nota de entrega. En **Hojas de carga** ve cada hoja donde están sus clientes, con su estado en tiempo real.
+
 ### Historial de actividad
 **Historial** muestra, por día, qué hizo cada vendedor y la oficina, con la hora: abrió la app, entró a su ruta, abrió, envió, modificó o eliminó pedidos, cambios de estado de las hojas, clientes reasignados. Arriba hay un resumen por persona (primera y última actividad, pedidos enviados, monto). Se exporta a Excel. Nadie puede editarlo ni borrarlo. Si un vendedor estuvo sin señal, sus acciones llegan con su hora real al recuperarla.
 

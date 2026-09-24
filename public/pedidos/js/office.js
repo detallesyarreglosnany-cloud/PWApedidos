@@ -73,7 +73,7 @@
       ${PV.creditFooter()}`;
     $('#syncPill').onclick = () => PV.runSync(true);
     $('#offOut').onclick = () => lockOffice();
-    $('#bell').onclick = notifSheet;
+    $('#bell').onclick = PV.notifSheet;
     PV.updateSyncPill(); PV.updateBell();
     const body = $('#officeBody');
     if (!S.products.length && tab !== 'ajustes') body.insertAdjacentHTML('beforebegin', setupBanner());
@@ -82,18 +82,6 @@
     const sb = $('#setupImport');
     if (sb) sb.onclick = importStarter;
   };
-
-  function notifSheet() {
-    const list = S.notifs || [];
-    const sh = openSheet(`<div class="row"><h2 class="grow">🔔 Notificaciones</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
-      ${'Notification' in window && Notification.permission !== 'granted' ? '<button class="btn btn-sm" id="nPerm">Activar avisos del sistema (aunque la pestaña esté en segundo plano)</button>' : ''}
-      ${list.length ? `<div class="notif-list">${list.map((n) => `<div class="notif ${n.read ? '' : 'unread'} ${n.warn ? 'warn' : ''}"><span>${n.icon}</span><div class="grow">${esc(n.msg)}<small>${esc(new Date(n.at).toLocaleString('es-VE', { dateStyle: 'short', timeStyle: 'short' }))}</small></div></div>`).join('')}</div>
-        <div class="actions"><button class="btn" id="nClear">Borrar todo</button></div>` : '<p class="muted">Sin notificaciones. Aquí verás pedidos nuevos, pedidos modificados por los vendedores y clientes duplicados.</p>'}`);
-    PV.beep(); // habilita el audio del navegador tras un clic
-    S.notifs = list.map((n) => ({ ...n, read: true })); DB.setMeta('notifs', S.notifs); PV.updateBell();
-    const np = $('#nPerm', sh.el); if (np) np.onclick = () => Notification.requestPermission().then(() => sh.close());
-    const nc = $('#nClear', sh.el); if (nc) nc.onclick = () => { S.notifs = []; DB.setMeta('notifs', []); sh.close(); PV.updateBell(); };
-  }
 
   /** Pedidos del mismo cliente el mismo día (mismo u otro vendedor): alerta, no bloquea. */
   function dupIndex() {
@@ -129,12 +117,26 @@
     } catch (e) { toast(e.message || 'Archivo inválido', 'err'); }
   }
 
-  /** Arma hojas de carga con los pedidos enviados (solo en la oficina). */
-  function autoPack() {
-    const r = Loads.autoPack({ orders: S.orders, loads: S.loads, sellers: S.sellers, config: S.config });
-    if (!r.orders.length) return;
-    saveDocs('loads', r.loads);
-    saveDocs('orders', r.orders);
+  /**
+   * Arma hojas de carga con los pedidos enviados (solo en la oficina). Primero
+   * repara duplicados entre equipos. El candado evita que un segundo repintado
+   * de la pantalla arme otra vez los mismos pedidos mientras se guarda el primero.
+   */
+  let packing = false;
+  async function autoPack() {
+    // Una hoja en vista reducida (bajada como vendedor en este mismo equipo) no
+    // trae sus pedidos: no se arma nada hasta que llegue la versión completa
+    if (packing || S.loads.some((l) => l.partial)) return;
+    packing = true;
+    try {
+      const fix = Loads.repair({ orders: S.orders, loads: S.loads, config: S.config });
+      if (fix.loads.length) await saveDocs('loads', fix.loads);
+      if (fix.orders.length) await saveDocs('orders', fix.orders);
+      const r = Loads.autoPack({ orders: S.orders, loads: S.loads, sellers: S.sellers, config: S.config });
+      if (r.loads.length) await saveDocs('loads', r.loads);
+      if (r.orders.length) await saveDocs('orders', r.orders);
+      if (fix.loads.length || fix.orders.length || r.orders.length) PV.refreshAfterRemote();
+    } finally { packing = false; }
   }
 
   /* ============================== CARGAS ============================== */
@@ -285,23 +287,22 @@
     const shortIds = new Set(short.map((x) => x.product.id));
     const routes = [...new Set((S.config.routes || []).concat(load.route ? [load.route] : []))];
     let lastCat = null;
-    const colspan = m.cols.length + 3;
+    const colspan = m.cols.length + 2;
     const body = m.rows.map((r) => {
       let head = '';
       if (r.category !== lastCat) { lastCat = r.category; head = `<tr class="cat-row"><td class="sticky-col">${esc(r.category)}</td><td colspan="${colspan - 2}"></td><td class="tot"></td></tr>`; }
       const kind = r.um === 'CJ' ? 'cajas' : 'unidades';
       return head + `<tr class="${shortIds.has(r.productId) ? 'short' : ''}">
-        <td class="sticky-col" title="${esc(r.code + ' · ' + r.name + ' ' + r.presentation)}"><span class="mono muted">${esc(r.code)}</span> ${esc(r.name)} <b>${esc(r.presentation)}</b></td>
-        <td><span class="um ${r.um}">${r.um}</span></td>
+        <td class="sticky-col" title="${esc(r.code + ' · ' + r.name + ' ' + r.presentation)}"><span class="mono muted">${esc(r.code)}</span> ${esc(r.name)} <b>${esc(r.presentation)}</b> <span class="um ${r.um}">${r.um}</span></td>
         ${r.cells.map((v, i) => edit
           ? `<td class="n"><input class="cell-in" inputmode="numeric" value="${v || ''}" data-oid="${esc(m.cols[i].id)}" data-pid="${esc(r.productId)}" data-kind="${kind}" aria-label="${esc(m.cols[i].client)} ${esc(r.name)}"></td>`
           : `<td class="n ${v ? '' : 'zero'}">${v ? nf0.format(v) : '·'}</td>`).join('')}
         <td class="n tot">${nf0.format(r.total)}</td></tr>`;
     }).join('');
-    const foot = m.footer.map((f) => `<tr><td class="sticky-col">${esc(f.label)}</td><td></td>${f.cells.map((v) => `<td class="n">${nf0.format(v)}</td>`).join('')}<td class="n tot">${nf0.format(f.total)}</td></tr>`).join('');
+    const foot = m.footer.map((f) => `<tr><td class="sticky-col">${esc(f.label)}</td>${f.cells.map((v) => `<td class="n">${nf0.format(v)}</td>`).join('')}<td class="n tot">${nf0.format(f.total)}</td></tr>`).join('');
     const totalUSD = os.reduce((a, o) => a + Matrix.orderTotals(o).monto, 0);
     const dups = dupIndex();
-    const initialsRow = `<tr class="ini-row"><th class="sticky-col">Vendedor →</th><th></th>${m.cols.map((c) => `<th>${esc(Loads.initials(c.order.sellerName))}</th>`).join('')}<th class="tot"></th></tr>`;
+    const initialsRow = `<tr class="ini-row"><th class="sticky-col">Vendedor →</th>${m.cols.map((c) => `<th>${esc(Loads.initials(c.order.sellerName))}</th>`).join('')}<th class="tot"></th></tr>`;
 
     root.innerHTML = `
       <div class="toolbar no-print">
@@ -334,9 +335,9 @@
         <button class="btn" id="dCopy">📋 Copiar para Excel</button>
         ${editableLoad && !os.length ? '<button class="btn btn-danger" id="dDel">Eliminar hoja vacía</button>' : ''}
       </div>
-      ${os.length ? `<div class="table-wrap"><table class="grid">
-        <thead>${initialsRow}<tr><th class="sticky-col">Producto</th><th>UM</th>
-          ${m.cols.map((c, i) => `<th class="client" title="${esc(c.client)}">${i + 1}. ${esc(c.client)}</th>`).join('')}<th class="tot">TOTAL</th></tr></thead>
+      ${os.length ? `<div class="table-wrap"><table class="grid sheet-grid">
+        <thead>${initialsRow}<tr><th class="sticky-col">Producto</th>
+          ${m.cols.map((c, i) => `<th class="client" title="${esc(c.client)}"><div>${i + 1}. ${esc(c.client)}</div></th>`).join('')}<th class="tot">TOTAL</th></tr></thead>
         <tbody>${body}</tbody><tfoot>${foot}</tfoot></table></div>` : '<div class="empty card"><strong>Hoja vacía</strong>Mueve clientes aquí con ⇄ desde otra hoja o desde "Clientes en espera".</div>'}
       <div class="section-title">Clientes de la hoja (el orden es el de las columnas) · total ${usd(totalUSD)}</div>
       <div class="card"><table class="inv">

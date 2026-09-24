@@ -1,7 +1,8 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
 import { Prisma } from '@prisma/client';
 import { db } from '@/lib/db';
 import { isAdminReq, isSupervisorReq, syncOk } from '@/lib/keys';
+import { sendPush, type PushMsg } from '@/lib/push';
 
 // Sincronización de la PWA de pedidos (public/pedidos).
 //
@@ -19,7 +20,8 @@ import { isAdminReq, isSupervisorReq, syncOk } from '@/lib/keys';
 //     escritura (ON CONFLICT … WHERE), no solo en la lectura previa.
 //   - products/sellers/loads/config solo se escriben con clave admin.
 //   - Un teléfono solo escribe pedidos y clientes de SU vendedor y nunca los
-//     reasigna a otro vendedor.
+//     reasigna a otro vendedor. Baja también las hojas de carga donde están
+//     sus clientes, para seguir su despacho.
 //   - Un pedido bloqueado (hoja aprobada, cerrada, despachada…) no lo modifica
 //     un vendedor. Los campos de la oficina nunca los pisa un teléfono.
 //   - events (historial de actividad) solo se agregan: nunca se editan ni se
@@ -126,6 +128,59 @@ async function duplicates(sellerId: string | null) {
   return { from, map: dups };
 }
 
+// Lo que ve un vendedor de una hoja de carga: estado, número, fecha, ruta y
+// despachador. Nunca montos, notas ni pedidos de otros vendedores (hojas fusionadas).
+const SELLER_LOAD_FIELDS = ['id', 'label', 'number', 'status', 'route', 'date', 'createdAt', 'closedAt', 'dispatcherId', 'dispatcherName',
+  'firstNote', 'lastNote', 'sellerId', 'sellerIds', 'deleted', 'updatedAt'];
+function sellerLoadView(d: Doc): Doc {
+  return { ...Object.fromEntries(SELLER_LOAD_FIELDS.filter((f) => f in d).map((f) => [f, d[f]])), id: d.id, updatedAt: d.updatedAt, partial: true };
+}
+
+// ---- Avisos push según el cambio de un pedido ----
+type Notice = { to: 'office' | 'seller'; sellerId: string; msg: PushMsg };
+const SENT = ['enviado', 'en_carga', 'en_espera', 'despachado'];
+const isSent = (o: Record<string, unknown> | null) => !!o && !o.deleted && SENT.includes(String(o.status));
+
+function orderNotice(cur: Record<string, unknown> | null, doc: Record<string, unknown>, fromOffice: boolean): Notice | null {
+  const id = String(doc.id), sid = String(doc.sellerId || ''), who = String(doc.sellerName || ''), client = String(doc.clientName || '');
+  const office = (title: string, body: string, ev: string): Notice => ({ to: 'office', sellerId: sid, msg: { title, body, tag: `o-${id}-${ev}` } });
+  const seller = (title: string, body: string, ev: string): Notice => ({ to: 'seller', sellerId: sid, msg: { title, body, tag: `o-${id}-${ev}` } });
+  if (!fromOffice) {
+    if (isSent(doc) && !isSent(cur)) return office('🧾 Nuevo pedido', `${who}: ${client}`, 'new');
+    if (isSent(cur) && doc.deleted && !cur!.deleted) return office('🗑 Pedido eliminado', `${who} eliminó el pedido de ${client}`, 'del');
+    if (isSent(cur) && doc.sellerEdited && doc.sellerEdited !== cur!.sellerEdited) return office('✏️ Pedido modificado', `${who} modificó el pedido de ${client}`, 'mod');
+    return null;
+  }
+  if (!cur || !sid) return null;
+  if (doc.deleted && !cur.deleted) return seller('🗑 Pedido eliminado por oficina', client, 'del');
+  if (doc.status === 'despachado' && cur.status !== 'despachado') {
+    const nota = doc.noteNumber ? ` · Nota NE-${String(doc.noteNumber).padStart(6, '0')}` : '';
+    return seller('🚚 Pedido despachado', client + nota, 'desp');
+  }
+  if (doc.status === 'en_espera' && cur.status !== 'en_espera') return seller('⏸ Pedido en espera', `${client}: la oficina lo dejó para otra carga`, 'esp');
+  if (doc.locked === true && cur.locked !== true) return seller('✅ Pedido aprobado', `${client} · ${String(doc.loadStatusName || 'Aprobado para carga')}`, 'apr');
+  if (doc.officeEdited && doc.officeEdited !== cur.officeEdited) return seller('✏️ Pedido ajustado', `La oficina ajustó las cantidades de ${client}`, 'aj');
+  return null;
+}
+
+/** Agrupa: si un mismo destino recibe muchos avisos iguales de golpe, sale uno solo con la lista. */
+function grouped(list: Notice[]) {
+  const out = new Map<string, { to: 'office' | 'seller'; sellerId: string; msgs: PushMsg[] }>();
+  const byTitle = new Map<string, Notice[]>();
+  for (const n of list) {
+    const k = n.to + '|' + (n.to === 'seller' ? n.sellerId : '') + '|' + n.msg.title;
+    byTitle.set(k, (byTitle.get(k) || []).concat(n));
+  }
+  byTitle.forEach((ns, k) => {
+    const dest = k.split('|').slice(0, 2).join('|');
+    const g = out.get(dest) || { to: ns[0].to, sellerId: ns[0].sellerId, msgs: [] };
+    if (ns.length <= 3) g.msgs.push(...ns.map((n) => n.msg));
+    else g.msgs.push({ title: `${ns[0].msg.title} (${ns.length})`, body: ns.map((n) => n.msg.body).join(' · ').slice(0, 300), tag: `g-${Date.now()}-${k}` });
+    out.set(dest, g);
+  });
+  return [...out.values()];
+}
+
 export async function GET() {
   return NextResponse.json({ ok: true, service: 'pedidos-sync', time: new Date().toISOString() });
 }
@@ -171,6 +226,7 @@ export async function POST(req: NextRequest) {
 
   const accepted = Object.fromEntries(KINDS.map((k) => [k, [] as string[]])) as Record<Kind, string[]>;
   const rejected: { kind: Kind; id: string; reason: string; doc?: Doc }[] = [];
+  const notices: Notice[] = [];
   const maxTs = new Date(serverTime.getTime() + 60_000).toISOString();
 
   try {
@@ -198,6 +254,7 @@ export async function POST(req: NextRequest) {
         const existingRows = await db.distDoc.findMany({ where: { kind, id: { in: part.map((d) => d.id) } } });
         const existingById = new Map(existingRows.map((r) => [r.id, r]));
         const toWrite: Row[] = [];
+        const pending = new Map<string, Notice>();
 
         for (const raw of part) {
           const doc: Doc = { ...raw };
@@ -211,6 +268,12 @@ export async function POST(req: NextRequest) {
           const existing = existingById.get(doc.id);
           const cur = existing ? parseDoc(existing.data) : null;
 
+          // Una hoja en vista reducida (la del vendedor) nunca reemplaza a la real:
+          // se rechaza y el equipo recibe la hoja completa
+          if (kind === 'loads' && (doc as Record<string, unknown>).partial) {
+            rejected.push({ kind, id: doc.id, reason: 'partial', doc: cur || undefined });
+            continue;
+          }
           if (kind === 'events') {
             // Historial: solo se agrega. Un teléfono solo escribe eventos de su vendedor.
             if (!isAdmin && String(doc.sellerId || '') !== sellerId) { rejected.push({ kind, id: doc.id, reason: 'foreign' }); continue; }
@@ -253,18 +316,32 @@ export async function POST(req: NextRequest) {
               continue;
             }
           }
+          if (kind === 'orders') {
+            const n = orderNotice(cur as Record<string, unknown> | null, doc as Record<string, unknown>, isAdmin);
+            if (n) pending.set(doc.id, n);
+          }
           toWrite.push(toRow(kind, doc));
         }
 
         const written = await writeRows(toWrite);
         const lost = toWrite.filter((r) => !written.has(r.id));
         for (const r of toWrite) if (written.has(r.id)) accepted[kind].push(r.id);
+        pending.forEach((n, id) => { if (written.has(id)) notices.push(n); });
         if (lost.length) {
           // Otro equipo escribió una versión más nueva entre la lectura y la escritura
           const now = await db.distDoc.findMany({ where: { kind, id: { in: lost.map((r) => r.id) } } });
           for (const r of now) rejected.push({ kind, id: r.id, reason: 'stale', doc: parseDoc(r.data) });
         }
       }
+    }
+
+    // Avisos push: se envían después de responder (no hacen esperar al teléfono)
+    if (notices.length) {
+      after(async () => {
+        for (const g of grouped(notices)) {
+          try { await sendPush(g.to, g.to === 'seller' ? g.sellerId : null, g.msgs); } catch (e) { console.warn('[push]', e); }
+        }
+      });
     }
 
     // Tandas intermedias de una subida grande: la bajada va en la última
@@ -288,7 +365,10 @@ export async function POST(req: NextRequest) {
           return sellerId
             ? { kind, syncedAt, OR: [{ sellerId }, { data: { contains: JSON.stringify(sellerId) } }] }
             : { kind, syncedAt };
-        case 'loads': return office ? { kind, syncedAt } : null; // solo la oficina
+        case 'loads':
+          if (office) return { kind, syncedAt };
+          // El vendedor ve las hojas donde están sus clientes (estado, despachador, fecha)
+          return sellerId ? { kind, syncedAt, data: { contains: JSON.stringify(sellerId) } } : null;
         case 'orders':
           if (noScope) return null;
           return { kind, syncedAt, ...(sellerId ? { sellerId } : {}), ...(sinceDays ? { routeDate: { gte: daysAgo(sinceDays) } } : {}) };
@@ -309,7 +389,7 @@ export async function POST(req: NextRequest) {
         const rows = await db.distDoc.findMany({ where: { AND: [where, { id: { gt: afterId } }] }, orderBy: { id: 'asc' }, take: 200 });
         for (const r of rows) {
           if (size && size + r.data.length > PULL_BUDGET) { next = { k, id: afterId }; break outer; }
-          pull[kind].push(parseDoc(r.data));
+          pull[kind].push(kind === 'loads' && !office ? sellerLoadView(parseDoc(r.data)) : parseDoc(r.data));
           size += r.data.length;
           afterId = r.id;
         }

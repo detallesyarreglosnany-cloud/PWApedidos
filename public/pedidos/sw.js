@@ -5,7 +5,7 @@
  *  - /api/*: siempre red (los datos viven en IndexedDB, no en caché HTTP).
  * Subir CACHE_VERSION en cada despliegue para forzar la actualización.
  * ========================================================================= */
-const CACHE_VERSION = 'pedidos-v10';
+const CACHE_VERSION = 'pedidos-v11';
 const SHELL = [
   './index.html', './styles.css', './manifest.webmanifest',
   './js/db.js', './js/seed.js', './js/matrix.js', './js/sync.js', './js/loads.js', './js/print.js',
@@ -48,4 +48,24 @@ self.addEventListener('fetch', (e) => {
       return hit || net;
     })
   );
+});
+
+// ---- Notificaciones push (llegan con la app cerrada o la pantalla bloqueada) ----
+self.addEventListener('push', (e) => {
+  let m = {};
+  try { m = e.data ? e.data.json() : {}; } catch (err) { m = { body: e.data && e.data.text() }; }
+  e.waitUntil(self.registration.showNotification(m.title || 'Puerto Venado', {
+    body: m.body || '', tag: m.tag || undefined, icon: './icons/icon-192.png', badge: './icons/icon-192.png',
+    renotify: !!m.tag, data: { url: './index.html' },
+  }));
+  // Avisa a las pestañas abiertas para que sincronicen ya
+  e.waitUntil(self.clients.matchAll({ type: 'window' }).then((cs) => cs.forEach((c) => c.postMessage({ type: 'push' }))));
+});
+
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((cs) => {
+    const open = cs.find((c) => c.url.includes('/pedidos/'));
+    return open ? open.focus() : self.clients.openWindow('./index.html');
+  }));
 });
