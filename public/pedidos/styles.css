@@ -238,6 +238,8 @@ textarea.input { padding: 12px 14px; min-height: 90px; resize: vertical; }
 .photo-edit { display: flex; gap: 12px; align-items: center; }
 .actions { display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
 .actions .btn { flex: 1; }
+/* En los menús, un botón de texto largo se parte en dos líneas: el menú nunca queda más ancho que la pantalla */
+.sheet .actions .btn { white-space: normal; min-width: 0; }
 .lines { width: 100%; border-collapse: collapse; margin-top: 10px; }
 .lines td { padding: 10px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
 .lines td.num, .lines td:last-child { text-align: right; font-weight: 800; white-space: nowrap; }
