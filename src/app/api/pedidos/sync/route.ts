@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { db } from '@/lib/db';
 import { isAdminReq, isSupervisorReq, syncOk } from '@/lib/keys';
 import { sendPush, type PushMsg } from '@/lib/push';
+import { RESET_LOCK, currentEpoch, epochAt } from '@/lib/epoch';
 
 // Sincronización de la PWA de pedidos (public/pedidos).
 //
@@ -28,6 +29,11 @@ import { sendPush, type PushMsg } from '@/lib/push';
 //     borran. Solo la oficina los baja.
 //   - Un cliente reasignado guarda sus vendedores anteriores (formerSellerIds):
 //     así el teléfono del vendedor anterior también se entera y deja de verlo.
+//   - Pedidos y hojas se combinan CAMPO POR CAMPO (doc.fv guarda la hora de cada
+//     campo): si dos equipos editan el mismo documento sin haberse sincronizado,
+//     no se pierde ninguno de los dos cambios.
+//   - Si la oficina reinició los datos (epoch distinto), el equipo no escribe
+//     nada: recibe { reset } y primero borra su copia local.
 //   - La alerta de cliente duplicado se calcula al bajar (campo `dups`) y NO se
 //     guarda dentro de los pedidos: así nunca cambia la versión de un pedido
 //     ajeno ni descarta la edición pendiente de otro equipo.
@@ -88,19 +94,87 @@ function toRow(kind: Kind, doc: Doc): Row {
   };
 }
 
-/** Upsert por lotes. Solo escribe si la versión que llega no es más vieja. Devuelve los ids escritos. */
-async function writeRows(rows: Row[]) {
+/**
+ * Upsert por lotes. Solo escribe si la versión que llega no es más vieja, y solo
+ * si los datos no se reiniciaron mientras tanto (candado + época en la misma
+ * transacción: nada de antes del reinicio se cuela después). Devuelve los ids escritos.
+ */
+async function writeRows(rows: Row[], epoch: string) {
   if (!rows.length) return new Set<string>();
-  const values = rows.map((r) => Prisma.sql`(${r.kind}, ${r.id}, ${r.data}, ${r.sellerId}, ${r.routeDate}, ${r.status}, ${r.deleted}, ${r.updatedAt}, now())`);
-  const out = await db.$queryRaw<{ id: string }[]>`
+  const values = rows.map((r) => Prisma.sql`(${r.kind}, ${r.id}, ${r.data}, ${r.sellerId}, ${r.routeDate}, ${r.status}, ${r.deleted}, ${r.updatedAt})`);
+  const [, out] = await db.$transaction([
+    db.$executeRaw`SELECT pg_advisory_xact_lock_shared(${RESET_LOCK})`,
+    db.$queryRaw<{ id: string }[]>`
     INSERT INTO "DistDoc" ("kind", "id", "data", "sellerId", "routeDate", "status", "deleted", "updatedAt", "syncedAt")
-    VALUES ${Prisma.join(values)}
+    SELECT v.*, now() FROM (VALUES ${Prisma.join(values)}) AS v
+    WHERE COALESCE((SELECT "value" FROM "DistSetting" WHERE "name" = 'epoch'), '') = ${epoch}
     ON CONFLICT ("kind", "id") DO UPDATE SET
       "data" = EXCLUDED."data", "sellerId" = EXCLUDED."sellerId", "routeDate" = EXCLUDED."routeDate",
       "status" = EXCLUDED."status", "deleted" = EXCLUDED."deleted", "updatedAt" = EXCLUDED."updatedAt", "syncedAt" = now()
     WHERE "DistDoc"."updatedAt" <= EXCLUDED."updatedAt"
-    RETURNING "id"`;
+    RETURNING "id"`,
+  ]);
   return new Set(out.map((r) => r.id));
+}
+
+// ---- Versión por campo (pedidos y hojas), espejo de public/pedidos/js/db.js ----
+const FV_SKIP = new Set(['id', 'updatedAt', 'fv', 'dirty', 'dupWith', 'partial']);
+const FV_KINDS: readonly string[] = ['orders', 'loads'];
+type Fv = Record<string, string>;
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+const keysOf = (a: Doc, b: Doc) => new Set([...Object.keys(a), ...Object.keys(b)]);
+// Documento sin fv (de un equipo con la versión anterior): todos sus campos valen con su updatedAt
+function fvFull(d: Doc): Fv {
+  if (d.fv && typeof d.fv === 'object') return d.fv as Fv;
+  const fv: Fv = {};
+  for (const k of Object.keys(d)) if (!FV_SKIP.has(k)) fv[k] = d.updatedAt;
+  return fv;
+}
+const fvOf = (d: Doc, k: string) => (typeof fvFull(d)[k] === 'string' ? fvFull(d)[k] : '');
+
+/** Deja en doc.fv solo horas válidas, sin pasar de maxTs (reloj adelantado). */
+function cleanFv(doc: Doc, maxTs: string, now: string) {
+  if (doc.fv === undefined) return;
+  const fv: Fv = {};
+  if (doc.fv && typeof doc.fv === 'object') {
+    for (const [k, t] of Object.entries(doc.fv as Fv)) {
+      if (typeof t === 'string' && !Number.isNaN(Date.parse(t))) fv[k] = t > maxTs ? now : t;
+    }
+  }
+  doc.fv = fv;
+}
+
+// Campos que cambian juntos: se toman todos del mismo lado (nunca "enviado" de
+// un lado con la hoja del otro). Los del pedido los decide la oficina: el
+// teléfono del vendedor no los marca, así nunca le ganan a la oficina.
+const GROUPS: Record<string, string[]> = {
+  orders: ['status', 'loadId', 'locked', 'loadStatusName', 'noteNumber', 'loadNumber', 'dispatchedAt', 'heldAt'],
+  loads: ['status', 'statusHistory', 'number', 'closedAt', 'approvedAt', 'totals', 'firstNote', 'lastNote'],
+};
+
+/** Combina dos versiones: fromA / fromB = el resultado trae algo que b / a no tenía. */
+function mergeFields(a: Doc, b: Doc, kind: string) {
+  const aWins = a.updatedAt >= b.updatedAt;
+  const w = aWins ? a : b, lo = aWins ? b : a;
+  const doc: Doc = { ...w };
+  const take = (src: Doc, k: string) => { if (k in src) (doc as Record<string, unknown>)[k] = src[k]; else delete (doc as Record<string, unknown>)[k]; };
+  const group = GROUPS[kind] || [];
+  const stamp = (d: Doc) => group.reduce((m, k) => (fvOf(d, k) > m ? fvOf(d, k) : m), '');
+  if (stamp(lo) > stamp(w)) group.forEach((k) => take(lo, k));
+  for (const k of keysOf(a, b)) {
+    if (FV_SKIP.has(k) || group.includes(k) || !(fvOf(lo, k) > fvOf(w, k))) continue;
+    take(lo, k);
+  }
+  const fv: Fv = {};
+  for (const x of [fvFull(lo), fvFull(w)]) for (const [k, t] of Object.entries(x)) if (typeof t === 'string' && t > (fv[k] || '')) fv[k] = t;
+  doc.fv = fv;
+  const differs = (x: Doc) => [...keysOf(doc, x)].some((k) => !FV_SKIP.has(k) && !same(doc[k], x[k]));
+  return { doc, fromA: differs(b), fromB: differs(a) };
+}
+/** Una hora estrictamente posterior a todas (la versión combinada debe ganar en todos los equipos). */
+function later(...ts: string[]) {
+  const max = ts.slice().sort().pop()!;
+  return new Date(Math.max(Date.parse(max) + 1, Date.now())).toISOString();
 }
 
 /** Alertas de cliente duplicado el mismo día (mismo u otro vendedor), para los pedidos recientes del alcance. */
@@ -212,6 +286,7 @@ export async function POST(req: NextRequest) {
   let body: {
     since?: string | null;
     sinceDays?: number | null;
+    epoch?: string | null;
     sellerId?: string | null;
     noPull?: boolean;
     page?: { k?: number; id?: string } | null;
@@ -230,6 +305,12 @@ export async function POST(req: NextRequest) {
   const maxTs = new Date(serverTime.getTime() + 60_000).toISOString();
 
   try {
+    // Datos reiniciados por la oficina: este equipo primero borra su copia local
+    const epoch = await currentEpoch();
+    if ((typeof body.epoch === 'string' ? body.epoch : '') !== epoch) {
+      return NextResponse.json({ serverTime: serverTime.toISOString(), reset: epoch, resetAt: await epochAt(), accepted, rejected, pull: {} });
+    }
+
     for (const kind of KINDS) {
       // Si el mismo documento viene repetido, gana su versión más reciente
       const newest = new Map<string, Doc>();
@@ -257,10 +338,11 @@ export async function POST(req: NextRequest) {
         const pending = new Map<string, Notice>();
 
         for (const raw of part) {
-          const doc: Doc = { ...raw };
+          let doc: Doc = { ...raw };
           for (const f of LOCAL_ONLY_FIELDS) delete (doc as Record<string, unknown>)[f];
           // Un reloj de teléfono adelantado no puede "ganar" para siempre.
           if (doc.updatedAt > maxTs) doc.updatedAt = serverTime.toISOString();
+          if (FV_KINDS.includes(kind)) cleanFv(doc, maxTs, serverTime.toISOString());
           if (JSON.stringify(doc).length > MAX_DOC_BYTES) {
             rejected.push({ kind, id: doc.id, reason: 'too_large' });
             continue;
@@ -290,22 +372,35 @@ export async function POST(req: NextRequest) {
           }
 
           if (existing && cur) {
-            if (kind === 'orders' && !isAdmin) {
-              if (cur.locked === true || existing.status === 'despachado') {
-                rejected.push({ kind, id: doc.id, reason: 'locked', doc: cur });
+            if (kind === 'orders' && !isAdmin && (cur.locked === true || existing.status === 'despachado')) {
+              rejected.push({ kind, id: doc.id, reason: 'locked', doc: cur });
+              continue;
+            }
+            if (FV_KINDS.includes(kind)) {
+              // Otro equipo cambió otros campos del mismo pedido u hoja: se conservan ambos
+              const m = mergeFields(cur, doc, kind);
+              if (!m.fromB) {
+                // No trae nada nuevo: reintento idempotente o versión vieja
+                if (existing.updatedAt === doc.updatedAt) accepted[kind].push(doc.id);
+                else rejected.push({ kind, id: doc.id, reason: 'stale', doc: cur });
                 continue;
               }
+              if (m.fromA || existing.updatedAt >= doc.updatedAt) doc = { ...m.doc, updatedAt: later(existing.updatedAt, doc.updatedAt) };
+            }
+            if (kind === 'orders' && !isAdmin) {
               const c = cur as Record<string, unknown>;
               const d = doc as Record<string, unknown>;
+              const fv = doc.fv ? (doc.fv as Fv) : {}, cfv = fvFull(cur);
+              const keep = (f: string) => { if (cfv[f]) fv[f] = cfv[f]; else delete fv[f]; };
               let changed = false;
               for (const f of OFFICE_ORDER_FIELDS) {
-                if (c[f] !== undefined && d[f] !== c[f]) { d[f] = c[f]; changed = true; }
+                if (c[f] !== undefined && d[f] !== c[f]) { d[f] = c[f]; keep(f); changed = true; }
               }
-              if (OFFICE_ORDER_STATUS.includes(String(c.status)) && d.status !== c.status) { d.status = c.status; changed = true; }
+              if (OFFICE_ORDER_STATUS.includes(String(c.status)) && d.status !== c.status) { d.status = c.status; keep('status'); changed = true; }
               // La oficina ve que el vendedor tocó un pedido que ya estaba en una hoja
-              if (c.loadId && JSON.stringify(d.lines) !== JSON.stringify(c.lines)) d.sellerEdited = serverTime.toISOString();
+              if (c.loadId && JSON.stringify(d.lines) !== JSON.stringify(c.lines)) { d.sellerEdited = serverTime.toISOString(); fv.sellerEdited = serverTime.toISOString(); }
               // Nueva versión con hora del servidor para que el teléfono la vuelva a bajar corregida
-              if (changed && existing.updatedAt <= doc.updatedAt) doc.updatedAt = serverTime.toISOString();
+              if (changed && existing.updatedAt <= doc.updatedAt) doc.updatedAt = later(existing.updatedAt, doc.updatedAt);
             }
             if (existing.updatedAt > doc.updatedAt) {
               rejected.push({ kind, id: doc.id, reason: 'stale', doc: cur });
@@ -323,7 +418,7 @@ export async function POST(req: NextRequest) {
           toWrite.push(toRow(kind, doc));
         }
 
-        const written = await writeRows(toWrite);
+        const written = await writeRows(toWrite, epoch);
         const lost = toWrite.filter((r) => !written.has(r.id));
         for (const r of toWrite) if (written.has(r.id)) accepted[kind].push(r.id);
         pending.forEach((n, id) => { if (written.has(id)) notices.push(n); });

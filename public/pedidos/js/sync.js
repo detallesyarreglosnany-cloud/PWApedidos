@@ -71,9 +71,16 @@
         }
       }
       if (l && l.dirty) {
-        if (store === 'orders') {
-          const frozen = isLocked(r) && !isAdmin;
-          if (!frozen && newer(l, r)) return; // mi cambio local es más reciente
+        if (store === 'orders' || store === 'loads') {
+          const frozen = store === 'orders' && isLocked(r) && !isAdmin;
+          if (!frozen && !r.partial && !l.partial) {
+            // Mis cambios locales aún sin subir + los del otro equipo, campo por campo
+            const m = DB.mergeFields(r, l, store);
+            if (m.fromB) {
+              if (m.fromA) toPut.push({ ...m.doc, updatedAt: DB.after(r.updatedAt, l.updatedAt), dirty: true });
+              return;
+            }
+          }
         } else if ((isAdmin || store === 'clients') && newer(l, r)) {
           return; // la oficina editó después: se subirá en el próximo push
         }
@@ -159,77 +166,122 @@
   async function syncNow(scope) {
     if (running) return running;
     running = (async () => {
-      if (!navigator.onLine) return { ok: false, offline: true };
-      const cfg = await settings();
-      if (!cfg.syncKey) return { ok: false, noKey: true, error: 'Falta la clave de sincronización (☰ → Conexión, o Ajustes en la oficina)' };
-      const url = cfg.syncUrl || DEFAULT_SYNC_URL;
-      const isAdmin = !!cfg.adminKey;
-      const isSupervisor = !isAdmin && !!cfg.supervisorKey;
-      const fullRead = isAdmin || isSupervisor; // el supervisor lee todo, pero jamás publica nada
-      const sellerId = scope && scope.sellerId || null;
-      const cursorKey = cursorKeyOf(scope);
-      const since = await DB.getMeta(cursorKey, null);
-      const push = await collectDirty(isAdmin, sellerId);
-
-      const headers = { 'Content-Type': 'application/json' };
-      if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
-      if (cfg.adminKey) headers['x-admin-key'] = cfg.adminKey;
-      if (cfg.supervisorKey) headers['x-supervisor-key'] = cfg.supervisorKey;
-
-      // Vercel rechaza cuerpos de más de 4,5 MB en ambos sentidos: la subida va
-      // por tandas y la bajada por páginas. El cursor avanza solo al terminar.
-      const batches = splitPush(push);
-      const base = { deviceId: await deviceId(), since, sinceDays: since ? null : INITIAL_ORDER_DAYS, sellerId };
-      const empty = Object.fromEntries(KINDS.map((k) => [k, []]));
-      const rejected = [];
-      let first = null;
-      let changed = 0;
-      let dups = null;
-      let page = null;
-      for (let i = 0; ; i++) {
-        const pushing = i < batches.length;
-        const last = !pushing || i === batches.length - 1;
-        const r = await post(url, headers, { ...base, push: pushing ? batches[i] : empty, noPull: !last, page });
-        if (!r.ok) return r;
-        if (pushing) {
-          // 1) Lo aceptado por el servidor deja de estar pendiente
-          for (const k of KINDS) {
-            const ok = new Set((r.data.accepted && r.data.accepted[k]) || []);
-            await clearDirty(k, batches[i][k].filter((d) => ok.has(d.id)));
-          }
-          rejected.push(...(r.data.rejected || []));
-        }
-        if (!last) continue;
-        // 2) Bajar cambios remotos (una página)
-        first = first || r.data;
-        for (const k of ['config', 'products', 'sellers', 'clients', 'loads', 'orders', 'events']) {
-          changed += await mergeRemote(k, (r.data.pull && r.data.pull[k]) || [], fullRead);
-        }
-        if (!r.data.more) { dups = r.data.dups; break; }
-        page = r.data.page;
-      }
-
-      // 3) Lo rechazado vuelve con la versión del servidor (ya despachado, o
-      //    el servidor tiene una edición más reciente)
-      const back = rejected.filter((r) => r.doc && KINDS.includes(r.kind));
-      for (const r of back) await DB.put(r.kind, { ...r.doc, dirty: false });
-      const rejectedOrders = back.filter((r) => r.kind === 'orders');
-
-      // 4) Alertas de cliente duplicado: solo en este equipo, sin tocar la versión del pedido
-      if (dups && dups.map) changed += await applyDups(dups, sellerId);
-
-      // El cursor es la hora de la PRIMERA página: nada escrito durante la bajada se pierde
-      await DB.setMeta(cursorKey, first.serverTime);
-      await DB.setMeta('lastSyncAt', new Date().toISOString());
-      return {
-        ok: true,
-        pushed: total(push),
-        pulled: changed,
-        rejected: rejectedOrders.length,
-        reverted: back.length,
-      };
+      // Un reinicio que quedó a medias (se cerró la app) se termina primero
+      const pending = await DB.getMeta('resetPending', null);
+      if (pending) { await applyReset(pending.epoch, pending.resetAt, pending.keep); return { ...(await syncOnce(scope)), reset: true }; }
+      const r = await syncOnce(scope);
+      if (typeof r.resetTo !== 'string') return r;
+      // La oficina reinició los datos del servidor: se borra la copia de este
+      // equipo y se baja todo de nuevo
+      await applyReset(r.resetTo, r.resetAt);
+      return { ...(await syncOnce(scope)), reset: true };
     })();
     try { return await running; } finally { running = null; }
+  }
+
+  /**
+   * Borra la copia local. Lo que este equipo hizo DESPUÉS del reinicio (sin
+   * señal) y aún no subió se conserva y se sube: pedidos creados, clientes y
+   * actividad posteriores a resetAt. Lo de antes (datos de prueba) se descarta.
+   */
+  async function applyReset(epoch, resetAt, saved) {
+    const after = (t) => !!resetAt && String(t || '') > resetAt;
+    const keep = saved || {
+      orders: (await DB.getAll('orders')).filter((d) => d.dirty && after(d.createdAt)),
+      clients: (await DB.getAll('clients')).filter((d) => d.dirty && after(d.updatedAt)),
+      events: (await DB.getAll('events')).filter((d) => d.dirty && after(d.at)),
+    };
+    // Primero se anota qué se conserva: si la app se cierra a mitad, se retoma sin perderlo
+    await DB.setMeta('resetPending', { epoch, resetAt: resetAt || '', keep });
+    for (const k of KINDS) await DB.clear(k);
+    for (const k of Object.keys(keep)) await DB.putMany(k, keep[k]);
+    for (const m of await DB.getAll('meta')) {
+      if (/^syncCursor/.test(m.key) || m.key === 'lastSyncAt' || m.key === 'notifs') await DB.remove('meta', m.key);
+    }
+    await DB.setMeta('epoch', epoch);
+    await DB.remove('meta', 'resetPending');
+  }
+
+  async function syncOnce(scope) {
+    if (!navigator.onLine) return { ok: false, offline: true };
+    const cfg = await settings();
+    if (!cfg.syncKey) return { ok: false, noKey: true, error: 'Falta la clave de sincronización (☰ → Conexión, o Ajustes en la oficina)' };
+    const url = cfg.syncUrl || DEFAULT_SYNC_URL;
+    const isAdmin = !!cfg.adminKey;
+    const isSupervisor = !isAdmin && !!cfg.supervisorKey;
+    const fullRead = isAdmin || isSupervisor; // el supervisor lee todo, pero jamás publica nada
+    const sellerId = scope && scope.sellerId || null;
+    const cursorKey = cursorKeyOf(scope);
+    const since = await DB.getMeta(cursorKey, null);
+    const push = await collectDirty(isAdmin, sellerId);
+
+    const headers = { 'Content-Type': 'application/json' };
+    if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
+    if (cfg.adminKey) headers['x-admin-key'] = cfg.adminKey;
+    if (cfg.supervisorKey) headers['x-supervisor-key'] = cfg.supervisorKey;
+
+    // Vercel rechaza cuerpos de más de 4,5 MB en ambos sentidos: la subida va
+    // por tandas y la bajada por páginas. El cursor avanza solo al terminar.
+    const batches = splitPush(push);
+    const base = { deviceId: await deviceId(), epoch: await DB.getMeta('epoch', ''), since, sinceDays: since ? null : INITIAL_ORDER_DAYS, sellerId };
+    const empty = Object.fromEntries(KINDS.map((k) => [k, []]));
+    const rejected = [];
+    let first = null;
+    let changed = 0;
+    let dups = null;
+    let page = null;
+    for (let i = 0; ; i++) {
+      const pushing = i < batches.length;
+      const last = !pushing || i === batches.length - 1;
+      const r = await post(url, headers, { ...base, push: pushing ? batches[i] : empty, noPull: !last, page });
+      if (!r.ok) return r;
+      if (typeof r.data.reset === 'string') return { ok: true, resetTo: r.data.reset, resetAt: r.data.resetAt || '' };
+      if (pushing) {
+        // 1) Lo aceptado por el servidor deja de estar pendiente
+        for (const k of KINDS) {
+          const ok = new Set((r.data.accepted && r.data.accepted[k]) || []);
+          await clearDirty(k, batches[i][k].filter((d) => ok.has(d.id)));
+        }
+        rejected.push(...(r.data.rejected || []));
+      }
+      if (!last) continue;
+      // 2) Bajar cambios remotos (una página)
+      first = first || r.data;
+      for (const k of ['config', 'products', 'sellers', 'clients', 'loads', 'orders', 'events']) {
+        changed += await mergeRemote(k, (r.data.pull && r.data.pull[k]) || [], fullRead);
+      }
+      if (!r.data.more) { dups = r.data.dups; break; }
+      page = r.data.page;
+    }
+
+    // 3) Lo rechazado vuelve con la versión del servidor (ya despachado, o
+    //    el servidor tiene una edición más reciente)
+    const back = rejected.filter((r) => r.doc && KINDS.includes(r.kind));
+    for (const r of back) {
+      // Otro equipo escribió justo antes: lo mío que siga siendo más nuevo se vuelve a subir
+      const l = r.reason === 'stale' && (r.kind === 'orders' || r.kind === 'loads') ? await DB.get(r.kind, r.id) : null;
+      const frozen = r.kind === 'orders' && isLocked(r.doc) && !isAdmin;
+      if (l && l.dirty && !frozen && !l.partial && !r.doc.partial) {
+        const m = DB.mergeFields(r.doc, l, r.kind);
+        if (m.fromB) { await DB.put(r.kind, { ...m.doc, updatedAt: DB.after(r.doc.updatedAt, l.updatedAt), dirty: true }); continue; }
+      }
+      await DB.put(r.kind, { ...r.doc, dirty: false });
+    }
+    const rejectedOrders = back.filter((r) => r.kind === 'orders');
+
+    // 4) Alertas de cliente duplicado: solo en este equipo, sin tocar la versión del pedido
+    if (dups && dups.map) changed += await applyDups(dups, sellerId);
+
+    // El cursor es la hora de la PRIMERA página: nada escrito durante la bajada se pierde
+    await DB.setMeta(cursorKey, first.serverTime);
+    await DB.setMeta('lastSyncAt', new Date().toISOString());
+    return {
+      ok: true,
+      pushed: total(push),
+      pulled: changed,
+      rejected: rejectedOrders.length,
+      reverted: back.length,
+    };
   }
 
   // Un marcador por perfil: si en el mismo teléfono entra otro vendedor (u
@@ -317,7 +369,7 @@
     const headers = { 'Content-Type': 'application/json', 'x-admin-key': cfg.adminKey };
     if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
     const url = (cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/numbers');
-    const r = await post(url, headers, { load: need.load, note: need.note, floor: { load: +floor.load || 0, note: +floor.note || 0 } });
+    const r = await post(url, headers, { load: need.load, note: need.note, floor: { load: +floor.load || 0, note: +floor.note || 0 }, epoch: await DB.getMeta('epoch', '') });
     if (!r.ok) return r;
     return { ok: true, load: r.data.load, notes: r.data.notes || [] };
   }

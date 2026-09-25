@@ -132,6 +132,7 @@
     S.settings = { ...DEFAULT_SETTINGS, ...(await DB.getMeta('settings', {})) };
     S.session = await DB.getMeta('session', null);
     S.notifs = await DB.getMeta('notifs', []);
+    S.epoch = await DB.getMeta('epoch', '');
     S.officePin = await DB.getMeta('officePin', '');
   }
   const byId = (arr, id) => arr.find((x) => x.id === id);
@@ -149,7 +150,16 @@
   async function saveDocs(kind, docs) {
     docs = [].concat(docs).filter(Boolean);
     if (!docs.length) return;
-    docs.forEach((d) => DB.touch(d));
+    // Datos reiniciados (en esta u otra pestaña): la pantalla tiene datos viejos, no se guardan
+    if (await epochChanged()) { location.reload(); return; }
+    // Pedidos y hojas: se anota qué campos cambiaron (fusión campo por campo entre
+    // equipos). El vendedor no marca el estado/hoja de sus pedidos (eso lo decide
+    // la oficina), salvo abrir/enviar un pedido que aún no tomó la oficina.
+    const byField = kind === 'orders' || kind === 'loads';
+    const prevs = byField ? await Promise.all(docs.map((d) => DB.get(kind, d.id))) : [];
+    const SELLER_ST = ['abierto', 'enviado'];
+    const skipOf = (prev, d) => (kind === 'orders' && !isOffice() && !(prev && SELLER_ST.includes(prev.status) && SELLER_ST.includes(d.status)) ? DB.FV_GROUPS.orders : null);
+    docs.forEach((d, i) => { DB.touch(d); if (byField) DB.stampFields(prevs[i], d, skipOf(prevs[i], d)); });
     await DB.putMany(kind, docs);
     if (kind === 'config') { S.config = docs[docs.length - 1]; }
     else {
@@ -163,6 +173,9 @@
     notifyChange();
   }
   const saveOrder = (o) => saveDocs('orders', o);
+  async function epochChanged() {
+    return (await DB.getMeta('epoch', '')) !== (S.epoch || '') || !!(await DB.getMeta('resetPending', null));
+  }
   async function saveSettings(patch) { S.settings = { ...S.settings, ...patch }; await DB.setMeta('settings', S.settings); }
   async function setSession(sess) { S.session = sess; await DB.setMeta('session', sess); }
 
@@ -228,7 +241,11 @@
     const scope = syncScope();
     // En la primera descarga de un equipo llega todo el historial: no se avisa pedido por pedido
     const firstSync = !(await Sync.hasCursor(scope));
+    // Otra pestaña ya reinició los datos: esta muestra datos viejos
+    if ((await DB.getMeta('epoch', '')) !== (S.epoch || '')) { location.reload(); return { ok: false }; }
     const r = await Sync.syncNow(scope);
+    // La oficina reinició los datos: este equipo ya borró su copia y bajó todo de nuevo
+    if (r.reset) { location.reload(); return r; }
     lastSyncResult = r;
     // También se recarga si el servidor devolvió su versión de algo rechazado:
     // si no, la pantalla seguiría mostrando (y volvería a guardar) la copia vieja.
