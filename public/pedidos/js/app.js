@@ -1002,7 +1002,8 @@
         <button class="btn" id="mExport">⇪ Enviar pedidos de hoy por archivo (WhatsApp)</button>
         <button class="btn" id="mImport">⇩ Cargar catálogo desde archivo</button>
       </div>
-      <details style="margin-top:16px"><summary class="section-title" style="display:inline">Conexión</summary>
+      <details style="margin-top:16px" ${S.settings.syncKey ? '' : 'open'}><summary class="section-title" style="cursor:pointer">🔑 Conexión (clave de sincronización)</summary>
+        ${S.settings.syncKey ? '' : '<div class="hint warn" style="margin-top:8px">Falta la clave de sincronización: sin ella no bajan los clientes ni el catálogo.</div>'}
         <div style="display:grid;gap:10px;margin-top:10px">
           <label class="field"><span>Clave de sincronización</span><input id="mKey" class="input" type="password" autocomplete="off" value="${esc(S.settings.syncKey)}"></label>
           <label class="field"><span>Servidor (opcional)</span><input id="mUrl" class="input" placeholder="${esc(Sync.DEFAULT_SYNC_URL)}" value="${esc(S.settings.syncUrl)}"></label>

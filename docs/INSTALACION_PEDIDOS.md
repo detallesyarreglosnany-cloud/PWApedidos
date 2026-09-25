@@ -37,7 +37,7 @@ Sigue la guía del [README](../README.md): Vercel + Supabase (Postgres).
 ### Teléfono de cada vendedor
 1. Abre `https://TU-DOMINIO/pedidos` en Chrome (Android) o Safari (iPhone) y escribe el usuario y la clave en la pantalla **Acceso a Pedidos** (solo la primera vez).
 2. Menú → **Agregar a pantalla de inicio**.
-3. Elige su nombre → ☰ → **Conexión**, escribe la **clave de sync** → **Guardar**. Su cartera y el catálogo se descargan solos.
+3. Elige su nombre → **Entrar** → ☰ → al final del menú, **🔑 Conexión** (si falta la clave aparece ya abierto), escribe la **clave de sync** (`PEDIDOS_SYNC_KEY`) en «Clave de sincronización», deja vacío «Servidor» → **Guardar conexión**. Su cartera y el catálogo se descargan solos.
 4. **Nunca le des la clave admin a un vendedor.**
 
 ### Supervisor (solo consulta, para gerencia)
