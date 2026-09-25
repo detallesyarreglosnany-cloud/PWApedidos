@@ -51,6 +51,9 @@ Nunca puede crear, editar ni eliminar nada — ni siquiera si alguien intenta fo
 ### Eliminar un pedido hecho por error (vendedor)
 Toca el cliente en la fila de clientes de hoy → **Ver pedido** → **Eliminar**. Se puede mientras su hoja de carga no esté aprobada (🔒). Si ya está aprobada, lo quita la oficina.
 
+### Eliminar un pedido desde la oficina
+Si el vendedor se equivocó o no sabe hacerlo: en **Cargas** (dentro de la hoja, en «Clientes en espera») o en **Pedidos**, toca **Editar/Ver** en el pedido → **🗑 Eliminar pedido** → confirmar. El pedido sale de su hoja de carga (si la hoja queda vacía y sin número, se elimina), el vendedor recibe el aviso «La oficina eliminó el pedido» y queda anotado en el **Historial**. No se borra de la base de datos: queda marcado como eliminado (se puede recuperar). Un pedido ya **despachado** no se puede eliminar.
+
 ### Cliente que aún no paga (pedido en la hoja de carga)
 En **Cargas**, abre la hoja → en la fila del cliente toca **⏸ Espera**. El pedido sale de la hoja **sin perderse** y queda en «Clientes en espera». Cuando pague, toca **↩ Reincorporar** y vuelve a la cola de carga. No lo elimines: eliminarlo borra el pedido.
 

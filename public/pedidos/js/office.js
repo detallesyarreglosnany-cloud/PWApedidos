@@ -511,8 +511,29 @@
       ${locked ? '' : `<label class="field" style="margin-top:12px"><span>Agregar producto</span>
         <input id="oeSearch" class="input" placeholder="Buscar por nombre o código…" autocomplete="off"></label><div id="oeResults" class="results"></div>
         <label class="field" style="margin-top:12px"><span>Nota para despacho</span><input id="oeNotes" class="input" maxlength="300" value="${esc(o.notes || '')}"></label>`}
-      <div class="actions"><button class="btn btn-primary" data-close>Listo</button></div>`, { wide: true });
+      <div class="actions">${o.status !== 'despachado' ? '<button class="btn btn-danger" id="oeDel">🗑 Eliminar pedido</button>' : ''}<button class="btn btn-primary" data-close>Listo</button></div>`, { wide: true });
     draw(sh);
+    // Eliminar desde la oficina (p. ej. el vendedor se equivocó): sale de su hoja,
+    // queda en el Historial y el vendedor recibe el aviso. Un pedido despachado no se elimina.
+    const del = $('#oeDel', sh.el);
+    if (del) del.onclick = async () => {
+      const cur = orderById(o.id) || o;
+      if (cur.status === 'despachado') { toast('Un pedido despachado no se puede eliminar', 'err'); return; }
+      const t = Matrix.orderTotals(cur);
+      if (!confirm(`¿Eliminar el pedido de ${cur.clientName} (${cur.sellerName}) por ${usd(t.monto)}?${cur.locked ? '\n\nOjo: su hoja de carga ya está aprobada.' : ''}\n\nSale de su hoja de carga y ${cur.sellerName} recibe el aviso.`)) return;
+      const load = cur.loadId ? S.loads.find((l) => l.id === cur.loadId) : null;
+      await saveOrder({ ...cur, deleted: true, deletedBy: 'oficina', deletedAt: DB.now() });
+      let loadGone = false;
+      if (load) {
+        // La hoja queda sin él; si ya no le quedan pedidos y no tiene número, se elimina
+        loadGone = !Loads.loadOrders(load, byIdMap(S.orders)).length && !load.number && !Loads.statusOf(load, S.config).locked;
+        await saveDocs('loads', { ...load, orderIds: (load.orderIds || []).filter((id) => id !== cur.id), ...(loadGone ? { deleted: true } : {}) });
+      }
+      await log('pedido_eliminado', `Oficina eliminó el pedido de ${cur.clientName} (${cur.sellerName}) · ${usd(t.monto)}`, { orderId: cur.id, clientName: cur.clientName });
+      sh.close(); toast('Pedido eliminado', 'ok');
+      if (loadGone && U().loadId === load.id) { U().loadId = null; PV.render(); } else if (onDone) onDone();
+      PV.runSync(false);
+    };
     // La vista de fondo se actualiza en cada cambio (la hoja queda abierta encima)
     const changed = () => { draw(sh); if (onDone) onDone(); };
     sh.el.addEventListener('change', async (e) => {
