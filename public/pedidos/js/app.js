@@ -315,7 +315,7 @@
       if (office) {
         const who = o.sellerName;
         if (isSent(o) && !isSent(p)) add('pedido', o, `Nuevo pedido de ${who}: ${o.clientName}`);
-        else if (o.deleted && isSent(p)) add('borrado', o, `${who} eliminó el pedido de ${o.clientName}`);
+        else if (o.deleted && isSent(p)) add('borrado', o, `${o.deletedBy === 'oficina' ? 'La oficina' : who} eliminó el pedido de ${o.clientName}`);
         else if (!o.deleted && o.sellerEdited && p && p.sellerEdited !== o.sellerEdited) add('editado', o, `${who} modificó el pedido de ${o.clientName}`);
         if (!o.deleted && (o.dupWith || []).length && !(p && (p.dupWith || []).length)) add('duplicado', o, `Cliente duplicado: ${o.clientName} (${who} y ${o.dupWith.map((d) => d.sellerName).join(', ')})`, true);
         return;
