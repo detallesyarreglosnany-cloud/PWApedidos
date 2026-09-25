@@ -59,8 +59,17 @@
     const t = Matrix.orderTotals(order);
     return limits(cfg).measure === 'unidades' ? t.totalUnidades : t.bultos;
   }
+  /**
+   * Pedidos de una hoja. Manda el propio pedido (o.loadId): así un pedido nunca
+   * aparece en dos hojas, ni en una hoja y "en espera" a la vez, aunque una copia
+   * vieja de la hoja todavía lo liste. orderIds solo da el orden de las columnas.
+   */
   function loadOrders(load, ordersById) {
-    return (load.orderIds || []).map((id) => ordersById.get(id)).filter((o) => o && !o.deleted);
+    const pos = new Map((load.orderIds || []).map((id, i) => [id, i]));
+    const at = (o) => (pos.has(o.id) ? pos.get(o.id) : Infinity);
+    const out = [];
+    ordersById.forEach((o) => { if (o && !o.deleted && o.loadId === load.id) out.push(o); });
+    return out.sort((a, b) => at(a) - at(b) || String(a.sentAt || a.createdAt || '').localeCompare(String(b.sentAt || b.createdAt || '')) || a.id.localeCompare(b.id));
   }
   function usage(load, ordersById, cfg) {
     const L = limits(cfg);
@@ -121,47 +130,43 @@
    * (estado editable) de su vendedor y ruta donde quepa; si no, hoja nueva.
    */
   /**
-   * Repara el conflicto real entre equipos de oficina: un pedido que figura en
-   * DOS hojas se queda solo en una (la que dice el propio pedido; si no, la
-   * cerrada/aprobada; si no, la más antigua). Solo actúa si la duplicación lleva
-   * más de 2 minutos: así no pisa una sincronización que todavía está llegando.
-   * Es determinista: todos los equipos llegan al mismo resultado.
+   * Deja cada hoja de acuerdo con sus pedidos (manda o.loadId):
+   *   - un pedido que la hoja no lista se agrega (orden de columnas);
+   *   - una hoja que lista un pedido que ya no es suyo (en espera, movido a otra
+   *     hoja) lo suelta; si queda vacía y sin número, se elimina;
+   *   - un pedido "en hoja" cuya hoja ya no existe vuelve a la cola.
+   * Solo toca lo que lleva más de 2 minutos sin cambios: así no pisa una
+   * sincronización que todavía está llegando. Todos los equipos llegan al mismo resultado.
    */
   const REPAIR_AFTER_MS = 2 * 60 * 1000;
   function repair(state) {
     const { orders, loads, config } = state;
     const cutoff = new Date(Date.parse(DB.now()) - REPAIR_AFTER_MS).toISOString();
+    const stable = (d) => String(d.updatedAt || '') < cutoff;
     const byId = new Map(loads.filter((l) => !l.deleted).map((l) => [l.id, { ...l, orderIds: (l.orderIds || []).slice() }]));
     const holders = new Map();
     byId.forEach((l) => l.orderIds.forEach((id) => { const h = holders.get(id) || []; h.push(l); holders.set(id, h); }));
-    const rank = (l, o) => (l.id === o.loadId ? 0 : isClosed(l) ? 1 : statusOf(l, config).locked ? 2 : 3);
     const changed = new Set(), changedOrders = [];
-    const requeue = (o) => changedOrders.push({ ...o, loadId: null, status: 'enviado', locked: false, loadStatusName: '' });
     orders.forEach((o) => {
-      const h = holders.get(o.id) || [];
-      if (o.deleted) return;
-      // Pedido "en hoja" que no figura en ninguna (dos equipos armaron la misma
-      // hoja con pedidos distintos y quedó una sola versión): vuelve a su hoja si
-      // sigue abierta; si no, a la cola para armarse de nuevo. Solo si ya es estable.
-      if (!h.length && o.status === 'en_carga' && o.loadId && String(o.updatedAt || '') < cutoff) {
-        const own = byId.get(o.loadId);
-        if (own && String(own.updatedAt || '') > cutoff) return;
-        if (own && !isClosed(own) && !statusOf(own, config).locked) { own.orderIds.push(o.id); changed.add(own.id); } else requeue(o);
-        return;
+      if (o.deleted || !stable(o)) return;
+      const own = o.loadId ? byId.get(o.loadId) : null;
+      const inLoad = o.status === 'en_carga' || o.status === 'despachado';
+      if (o.status === 'en_carga' && !own) {
+        // Su hoja ya no existe: a la cola, para armarse de nuevo
+        changedOrders.push({ ...o, loadId: null, status: 'enviado', locked: false, loadStatusName: '' });
+      } else if (inLoad && own && !isClosed(own) && stable(own) && !own.orderIds.includes(o.id)) {
+        own.orderIds.push(o.id); changed.add(own.id);
       }
-      if (h.length === 1 && o.status === 'en_carga' && o.loadId !== h[0].id && String(o.updatedAt || '') < cutoff && String(h[0].updatedAt || '') < cutoff) {
-        changedOrders.push({ ...o, loadId: h[0].id, locked: statusOf(h[0], config).locked, loadStatusName: statusOf(h[0], config).name });
-        return;
-      }
-      if (h.length < 2 || h.some((l) => String(l.updatedAt || '') > cutoff)) return;
-      const keep = h.slice().sort((a, b) => rank(a, o) - rank(b, o) || String(a.createdAt).localeCompare(String(b.createdAt)) || a.id.localeCompare(b.id))[0];
-      h.forEach((l) => { if (l !== keep && !isClosed(l)) { l.orderIds = l.orderIds.filter((id) => id !== o.id); changed.add(l.id); } });
-      if (o.loadId !== keep.id && o.status !== 'despachado') {
-        changedOrders.push({ ...o, loadId: keep.id, status: isClosed(keep) ? 'despachado' : 'en_carga', locked: statusOf(keep, config).locked, loadStatusName: statusOf(keep, config).name });
-      }
+      (holders.get(o.id) || []).forEach((l) => {
+        if ((inLoad && l === own) || isClosed(l) || !stable(l)) return;
+        l.orderIds = l.orderIds.filter((id) => id !== o.id); changed.add(l.id);
+      });
     });
+    // Vacía = sin pedidos que digan pertenecer a ella (no basta con orderIds)
+    const requeued = new Set(changedOrders.map((o) => o.id));
+    const members = new Set(orders.filter((o) => !o.deleted && o.loadId && !requeued.has(o.id)).map((o) => o.loadId));
     const outLoads = [...changed].map((id) => byId.get(id)).map((l) =>
-      (!l.orderIds.length && !l.number && !statusOf(l, config).locked ? { ...l, deleted: true } : l));
+      (!l.orderIds.length && !members.has(l.id) && !l.number && !statusOf(l, config).locked ? { ...l, deleted: true } : l));
     return { loads: outLoads, orders: changedOrders };
   }
 
@@ -178,9 +183,9 @@
     const open = loads.filter((l) => isOpen(l, config) && !isClosed(l))
       .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
     const taken = new Set(loads.filter((l) => !l.deleted).map((l) => l.id));
-    // Un pedido que ya figura en una hoja no se vuelve a ubicar (evita duplicados)
+    // Un pedido que ya figura en una hoja abierta no se vuelve a ubicar (evita duplicados)
     const placed = new Map();
-    loads.filter((l) => !l.deleted).forEach((l) => (l.orderIds || []).forEach((id) => placed.set(id, l)));
+    open.forEach((l) => (l.orderIds || []).forEach((id) => placed.set(id, l)));
     queue.forEach((o) => {
       const already = placed.get(o.id);
       if (already) {

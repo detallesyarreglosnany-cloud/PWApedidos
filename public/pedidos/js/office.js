@@ -244,7 +244,9 @@
       const b = e.target.closest('[data-to]'); if (!b) return;
       const target = b.dataset.to === '__new' ? null : S.loads.find((l) => l.id === b.dataset.to);
       const r = Loads.moveOrder(order, fromLoad, target, { sellers: S.sellers, config: S.config });
-      await saveDocs('loads', r.loads.map((l) => (l.orderIds.length || !fromLoad || l.id !== fromLoad.id ? l : { ...l, deleted: true })));
+      // La hoja de origen se elimina solo si ya no le queda ningún pedido (según cada pedido)
+      const left = fromLoad ? Loads.loadOrders(fromLoad, byIdMap(S.orders)).filter((o) => o.id !== order.id).length : 1;
+      await saveDocs('loads', r.loads.map((l) => (left || !fromLoad || l.id !== fromLoad.id ? l : { ...l, deleted: true })));
       await saveOrder(r.order);
       const to = r.loads[r.loads.length - 1];
       await log('movido', `Movió a ${order.clientName} (${order.sellerName}) a la hoja ${Loads.labelOf(to)}`, { orderId: order.id, clientName: order.clientName });
@@ -1180,6 +1182,13 @@
             <button class="btn btn-primary" id="hBackup">⇩ Descargar respaldo del servidor</button></div>
           <div id="hOut" class="muted" style="margin-top:10px"></div></section>
 
+        <section class="card card-pad"><h3>⚠ Reiniciar datos (empezar de cero)</h3>
+          <p class="muted">Para borrar los datos de prueba antes de empezar a trabajar en serio. Se borra en el servidor y en <b>todos</b> los equipos (oficina, vendedores y supervisor) en su próxima sincronización, incluido lo que tenían sin enviar de antes del reinicio (lo que un vendedor sin señal haga después se conserva). No se puede deshacer: descarga antes el respaldo.</p>
+          <label style="display:flex;gap:8px;align-items:flex-start;margin-top:6px"><input type="radio" name="rsMode" value="pedidos" checked> Pedidos, hojas de carga, historial y numeración (se conservan catálogo, clientes, vendedores y ajustes)</label>
+          <label style="display:flex;gap:8px;align-items:flex-start;margin-top:6px"><input type="radio" name="rsMode" value="todo"> Todo (después cargas de nuevo el paquete de arranque)</label>
+          <div class="row" style="margin-top:10px"><button class="btn btn-danger" id="rsGo">Reiniciar datos…</button></div>
+          <div id="rsOut" class="muted" style="margin-top:10px"></div></section>
+
         <section class="card card-pad"><h3>Hoja de carga</h3>
           <div class="grid3">
             <label class="field"><span>Tope por hoja</span><input id="lLimit" class="input" inputmode="numeric" value="${L.limit}"></label>
@@ -1337,6 +1346,18 @@
       await saveFile('respaldo_servidor_' + today() + '.json', JSON.stringify(r.bundle), 'application/json');
       await log('respaldo', `Descargó el respaldo completo del servidor (${r.count} registros)`);
       out.textContent = `✓ Respaldo descargado: ${nf0.format(r.count)} registros. Guárdalo fuera de esta PC.`;
+    };
+    $('#rsGo').onclick = async () => {
+      const mode = ($('input[name="rsMode"]:checked') || {}).value || 'pedidos';
+      const what = mode === 'todo' ? 'TODOS los datos (pedidos, hojas, historial, catálogo, clientes, vendedores y ajustes)' : 'todos los pedidos, hojas de carga, historial y la numeración';
+      const typed = prompt(`Se borrarán ${what} del servidor y de todos los equipos. No se puede deshacer.\n\nEscribe REINICIAR para confirmar:`);
+      if (typed === null) return;
+      if (typed.trim().toUpperCase() !== 'REINICIAR') { toast('No se reinició: no escribiste REINICIAR', 'err'); return; }
+      const out = $('#rsOut'); out.textContent = 'Reiniciando…';
+      const r = await Sync.adminCall('reset', { mode, confirm: 'REINICIAR', day: today(), deviceId: await Sync.deviceId() });
+      if (!r.ok) { out.innerHTML = `<b style="color:var(--danger,#e5484d)">✗ ${esc(r.error)}</b>`; return; }
+      out.textContent = `✓ Datos reiniciados (${nf0.format(r.data.deleted)} registros borrados). Actualizando este equipo…`;
+      PV.runSync(false); // borra la copia local, baja todo de nuevo y recarga la pantalla
     };
     $('#bAll').onclick = async () => saveFile('respaldo_' + today() + '.json', JSON.stringify(await Sync.exportBundle({ includeCatalog: true, includeLoads: true })), 'application/json');
     $('#bCat').onclick = async () => saveFile('catalogo_telefonos_' + today() + '.json', JSON.stringify(await Sync.exportBundle({ sellerId: '__none__', includeCatalog: true })), 'application/json');

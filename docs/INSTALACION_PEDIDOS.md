@@ -70,6 +70,18 @@ Con la app abierta, la oficina revisa cada 10 s y el vendedor cada 30 s. En iPho
 ### Historial de actividad
 **Historial** muestra, por día, qué hizo cada vendedor y la oficina, con la hora: abrió la app, entró a su ruta, abrió, envió, modificó o eliminó pedidos, cambios de estado de las hojas, clientes reasignados. Arriba hay un resumen por persona (primera y última actividad, pedidos enviados, monto). Se exporta a Excel. Nadie puede editarlo ni borrarlo. Si un vendedor estuvo sin señal, sus acciones llegan con su hora real al recuperarla.
 
+### Varios equipos con el mismo usuario
+Un vendedor puede usar dos teléfonos y la oficina varias PCs (o PC y teléfono) a la vez: todos ven lo mismo en la próxima sincronización (oficina cada 10 s, vendedor cada 30 s, o al tocar el indicador «En línea»). Un pedido es uno solo aunque se vea en varios equipos. Si dos PCs cambian la misma hoja casi al mismo tiempo (una aprueba y otra pone el despachador, o una saca un cliente a espera), se conservan los dos cambios. Lo que se hace sin señal queda guardado en ese equipo y sube solo al recuperar internet; mientras tanto el indicador muestra cuántos cambios faltan por subir.
+
+Si el mismo vendedor, **sin señal en los dos teléfonos**, hace un pedido al mismo cliente en cada uno, al sincronizar quedan dos pedidos y ambos se marcan **⚠ duplicado**: la oficina decide cuál queda (elimina el otro o lo pone en espera).
+
+### Reiniciar datos (empezar de cero tras las pruebas)
+**Ajustes → ⚠ Reiniciar datos**. Primero descarga el respaldo. Elige:
+- **Pedidos, hojas de carga, historial y numeración**: se conservan catálogo, clientes, vendedores y ajustes. La primera carga real sale con el número C-00001 y la primera nota con NE-000001.
+- **Todo**: después vuelve a cargar el paquete de arranque.
+
+Escribe REINICIAR para confirmar. Cada equipo (oficina, vendedores, supervisor) borra su copia en su próxima sincronización y se recarga solo. Lo que un equipo tenía sin enviar **de antes** del reinicio se borra (son datos de prueba y nunca llegan al servidor); si un vendedor estaba sin señal y tomó pedidos **después** del reinicio, esos se conservan y se envían al recuperar la señal. El reinicio queda anotado en el Historial.
+
 ### Respaldo (obligatorio, una vez por semana)
 **Ajustes → Servidor y respaldo**:
 - **Revisar estado del servidor**: confirma que la base de datos responde, que tiene sus tablas y cuántos registros hay.
