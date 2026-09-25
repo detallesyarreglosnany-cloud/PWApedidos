@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+import { db, TX_WAIT } from '@/lib/db';
+import type { Prisma } from '@prisma/client';
 import { requireAdmin } from '@/lib/keys';
 import { RESET_LOCK } from '@/lib/epoch';
 
@@ -18,11 +19,13 @@ export const dynamic = 'force-dynamic';
 
 const MAX_NOTES = 500;
 
+type Tx = Prisma.TransactionClient;
+
 const int = (v: unknown) => (Number.isInteger(v) && (v as number) >= 0 ? (v as number) : 0);
 
 // Solo numera si los datos no se reiniciaron (época comprobada dentro de la
 // misma transacción que el candado del reinicio: nunca revive la numeración vieja)
-const takeSql = (name: string, count: number, floor: number, epoch: string) => db.$queryRaw<{ value: number }[]>`
+const takeSql = (tx: Tx, name: string, count: number, floor: number, epoch: string) => tx.$queryRaw<{ value: number }[]>`
     INSERT INTO "DistCounter" ("name", "value")
     SELECT ${name}, ${floor + count}
     WHERE COALESCE((SELECT "value" FROM "DistSetting" WHERE "name" = 'epoch'), '') = ${epoch}
@@ -40,19 +43,19 @@ export async function POST(req: NextRequest) {
   if (noteCount > MAX_NOTES) return NextResponse.json({ error: 'Demasiadas notas' }, { status: 400 });
   try {
     const epoch = typeof body.epoch === 'string' ? body.epoch : '';
-    const [, current, ...taken] = await db.$transaction([
-      db.$executeRaw`SELECT pg_advisory_xact_lock_shared(${RESET_LOCK})`,
-      db.$queryRaw<{ value: string }[]>`SELECT COALESCE((SELECT "value" FROM "DistSetting" WHERE "name" = 'epoch'), '') AS "value"`,
-      ...(loadCount ? [takeSql('load', 1, int(body.floor?.load), epoch)] : []),
-      ...(noteCount ? [takeSql('note', noteCount, int(body.floor?.note), epoch)] : []),
-    ]);
+    const { current, loadRow, noteRow } = await db.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock_shared(${RESET_LOCK})`;
+      const [cur] = await tx.$queryRaw<{ value: string }[]>`SELECT COALESCE((SELECT "value" FROM "DistSetting" WHERE "name" = 'epoch'), '') AS "value"`;
+      const loadRow = loadCount ? (await takeSql(tx, 'load', 1, int(body.floor?.load), epoch))[0] : undefined;
+      const noteRow = noteCount ? (await takeSql(tx, 'note', noteCount, int(body.floor?.note), epoch))[0] : undefined;
+      return { current: cur.value, loadRow, noteRow };
+    }, TX_WAIT);
     // Un equipo que aún no se enteró de un reinicio traería la numeración vieja (y no se tomó nada)
-    if (current[0].value !== epoch) {
+    if (current !== epoch) {
       return NextResponse.json({ error: 'Se reiniciaron los datos: espera unos segundos a que el equipo se actualice' }, { status: 409 });
     }
-    const rows = taken as { value: number }[][];
-    const load = loadCount ? range(rows[0][0], 1)[0] : null;
-    const notes = noteCount ? range(rows[loadCount ? 1 : 0][0], noteCount) : [];
+    const load = loadRow ? range(loadRow, 1)[0] : null;
+    const notes = noteRow ? range(noteRow, noteCount) : [];
     return NextResponse.json({ load, notes });
   } catch (error) {
     console.error('[pedidos/numbers]', error);

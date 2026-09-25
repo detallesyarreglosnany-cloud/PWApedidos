@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse, after } from 'next/server';
 import { Prisma } from '@prisma/client';
-import { db } from '@/lib/db';
+import { db, TX_WAIT } from '@/lib/db';
 import { isAdminReq, isSupervisorReq, syncOk } from '@/lib/keys';
 import { sendPush, type PushMsg } from '@/lib/push';
 import { RESET_LOCK, currentEpoch, epochAt } from '@/lib/epoch';
@@ -102,9 +102,9 @@ function toRow(kind: Kind, doc: Doc): Row {
 async function writeRows(rows: Row[], epoch: string) {
   if (!rows.length) return new Set<string>();
   const values = rows.map((r) => Prisma.sql`(${r.kind}, ${r.id}, ${r.data}, ${r.sellerId}, ${r.routeDate}, ${r.status}, ${r.deleted}, ${r.updatedAt})`);
-  const [, out] = await db.$transaction([
-    db.$executeRaw`SELECT pg_advisory_xact_lock_shared(${RESET_LOCK})`,
-    db.$queryRaw<{ id: string }[]>`
+  const out = await db.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock_shared(${RESET_LOCK})`;
+    return tx.$queryRaw<{ id: string }[]>`
     INSERT INTO "DistDoc" ("kind", "id", "data", "sellerId", "routeDate", "status", "deleted", "updatedAt", "syncedAt")
     SELECT v.*, now() FROM (VALUES ${Prisma.join(values)}) AS v
     WHERE COALESCE((SELECT "value" FROM "DistSetting" WHERE "name" = 'epoch'), '') = ${epoch}
@@ -112,8 +112,8 @@ async function writeRows(rows: Row[], epoch: string) {
       "data" = EXCLUDED."data", "sellerId" = EXCLUDED."sellerId", "routeDate" = EXCLUDED."routeDate",
       "status" = EXCLUDED."status", "deleted" = EXCLUDED."deleted", "updatedAt" = EXCLUDED."updatedAt", "syncedAt" = now()
     WHERE "DistDoc"."updatedAt" <= EXCLUDED."updatedAt"
-    RETURNING "id"`,
-  ]);
+    RETURNING "id"`;
+  }, TX_WAIT);
   return new Set(out.map((r) => r.id));
 }
 

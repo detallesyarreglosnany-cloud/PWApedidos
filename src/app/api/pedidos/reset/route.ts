@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+import { db, TX_WAIT } from '@/lib/db';
 import { requireAdmin } from '@/lib/keys';
 import { RESET_LOCK } from '@/lib/epoch';
 
@@ -41,19 +41,20 @@ export async function POST(req: NextRequest) {
     sellerId: 'oficina', sellerName: 'Oficina', deviceId: typeof body.deviceId === 'string' ? body.deviceId.slice(0, 120) : '', updatedAt: now,
   };
   try {
-    const [, , , del] = await db.$transaction([
-      db.$executeRaw`SELECT pg_advisory_xact_lock(${RESET_LOCK})`,
-      db.$executeRaw`INSERT INTO "DistSetting" ("name", "value") VALUES ('epoch', ${epoch}) ON CONFLICT ("name") DO UPDATE SET "value" = EXCLUDED."value"`,
-      db.$executeRaw`INSERT INTO "DistSetting" ("name", "value") VALUES ('epochAt', ${now}) ON CONFLICT ("name") DO UPDATE SET "value" = EXCLUDED."value"`,
-      db.distDoc.deleteMany({ where: { kind: { in: all ? ALL_KINDS : OPS_KINDS } } }),
-      db.distCounter.deleteMany({}),
+    const del = await db.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${RESET_LOCK})`;
+      await tx.$executeRaw`INSERT INTO "DistSetting" ("name", "value") VALUES ('epoch', ${epoch}) ON CONFLICT ("name") DO UPDATE SET "value" = EXCLUDED."value"`;
+      await tx.$executeRaw`INSERT INTO "DistSetting" ("name", "value") VALUES ('epochAt', ${now}) ON CONFLICT ("name") DO UPDATE SET "value" = EXCLUDED."value"`;
+      const d = await tx.distDoc.deleteMany({ where: { kind: { in: all ? ALL_KINDS : OPS_KINDS } } });
+      await tx.distCounter.deleteMany({});
       // Se conservan los ajustes, pero la numeración de cargas y notas vuelve a empezar
-      db.$executeRaw`UPDATE "DistDoc" SET
+      await tx.$executeRaw`UPDATE "DistDoc" SET
         "data" = jsonb_set(jsonb_set("data"::jsonb, '{counters}', '{"load":0,"note":0}'::jsonb), '{updatedAt}', to_jsonb(${now}::text))::text,
         "updatedAt" = ${now}, "syncedAt" = now()
-        WHERE "kind" = 'config'`,
-      db.distDoc.create({ data: { kind: 'events', id: event.id, data: JSON.stringify(event), sellerId: 'oficina', routeDate: day, updatedAt: now } }),
-    ]);
+        WHERE "kind" = 'config'`;
+      await tx.distDoc.create({ data: { kind: 'events', id: event.id, data: JSON.stringify(event), sellerId: 'oficina', routeDate: day, updatedAt: now } });
+      return d;
+    }, TX_WAIT);
     return NextResponse.json({ ok: true, epoch, deleted: del.count });
   } catch (error) {
     console.error('[pedidos/reset]', error);
