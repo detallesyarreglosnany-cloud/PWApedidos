@@ -519,9 +519,12 @@
     return S.orders.filter((o) => o.sellerId === sid && o.routeDate === d)
       .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
   }
+  // Pantalla de pedidos: solo lo que espera aprobación; lo aprobado en adelante
+  // se sigue en "Mis pedidos" y el cliente queda libre para un pedido nuevo
+  const pendingOrdersToday = () => myOrdersToday().filter(editable);
   function activeOrder() {
     const o = S.session.activeOrderId && orderById(S.session.activeOrderId);
-    return o && o.routeDate === today() ? o : null;
+    return o && o.routeDate === today() && editable(o) ? o : null;
   }
   function myClients() {
     const sid = S.session.sellerId;
@@ -543,7 +546,7 @@
     const key = norm(name);
     const seller = sellerById(S.session.sellerId);
     let client = myClients().find((c) => norm(c.name) === key);
-    let o = myOrdersToday().find((x) => x.clientKey === key);
+    let o = pendingOrdersToday().find((x) => x.clientKey === key);
     if (!o) {
       if (!client) {
         // Cliente nuevo captado en la calle: la oficina lo verá en Clientes
@@ -627,10 +630,10 @@
         <div class="pimg">${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy">` : `<span aria-hidden="true">${rubroIcon(p.category)}</span>`}
           ${req ? `<em class="qty-badge">${cj ? cj + 'cj' : ''}${cj && un ? '+' : ''}${un ? un + 'u' : ''}</em>` : ''}</div>
         <div class="pname">${esc(p.name)}</div>
+        <div class="pcode mono">${esc(p.code)}</div>
         <div class="ppres">${esc(p.presentation)}${p.brand && !norm(p.name).includes(norm(p.brand)) ? ' · ' + esc(p.brand) : ''}</div>
         <div class="pprice">${prices.map((x) => '<div>' + x + '</div>').join('')}</div>
-        <div class="pmeta"><span class="mono">${esc(p.code)}</span>
-          ${hasStock(p) ? `<span class="${over || low ? 'stock-low' : ''}">${over ? '⚠ ' : ''}${fmtStock(p.stock, p.unitsPerBox, p.sellBy)}</span>` : ''}</div>
+        ${hasStock(p) ? `<div class="pmeta"><span class="${over || low ? 'stock-low' : ''}">${over ? '⚠ ' : ''}${fmtStock(p.stock, p.unitsPerBox, p.sellBy)}</span></div>` : ''}
         <div class="qty-col">
           ${p.sellBy !== 'unidad' ? stepperHTML(p, 'cajas', cj, over) : ''}
           ${p.sellBy !== 'caja' ? stepperHTML(p, 'unidades', un, over) : ''}
@@ -643,7 +646,7 @@
 
   function renderSeller() {
     const seller = sellerById(S.session.sellerId);
-    const orders = myOrdersToday();
+    const orders = pendingOrdersToday();
     const o = activeOrder();
     const cats = rubros();
     const routes = (seller.routes && seller.routes.length) ? seller.routes : (S.config.routes || []);

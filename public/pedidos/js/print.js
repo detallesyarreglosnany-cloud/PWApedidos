@@ -41,21 +41,41 @@
       <div class="doc"><b>${esc(title)}</b><span>${esc(code)}</span></div></div>`;
   }
 
-  function printHTML(title, css, body) {
+  function printHTML(title, css, body, fit) {
     const old = document.getElementById('printFrame');
     if (old) old.remove();
     const f = document.createElement('iframe');
     f.id = 'printFrame';
     f.setAttribute('aria-hidden', 'true');
-    f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';
+    f.style.cssText = `position:fixed;right:0;bottom:0;width:${fit ? fit.w + 'px' : 0};height:0;border:0;visibility:hidden`;
     document.body.appendChild(f);
     const d = f.contentDocument;
     d.open();
     d.write(`<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${esc(title)}</title><style>${BASE_CSS}${css}</style></head><body>${body}</body></html>`);
     d.close();
-    const go = () => { f.contentWindow.focus(); f.contentWindow.print(); };
+    const go = () => { if (fit) fitPages(d, fit); f.contentWindow.focus(); f.contentWindow.print(); };
     const imgs = [...d.images];
     Promise.all(imgs.map((i) => i.complete ? 0 : new Promise((r) => { i.onload = i.onerror = r; }))).then(() => setTimeout(go, 60));
+  }
+
+  // Área útil de carta horizontal con márgenes de 8 mm, en px CSS (96 por pulgada)
+  const LETTER_LANDSCAPE = { w: Math.floor((279.4 - 16) / 25.4 * 96), h: Math.floor((215.9 - 16) / 25.4 * 96) };
+
+  // Si la hoja no cabe en una página, se reduce lo justo para que quepa en UNA
+  function fitPages(d, fit) {
+    for (const el of d.querySelectorAll('.sheet')) {
+      el.style.zoom = '';
+      const w = Math.max(el.scrollWidth, ...[...el.querySelectorAll('table')].map((t) => t.scrollWidth));
+      let k = Math.min(1, fit.w / w, fit.h / el.scrollHeight) * 0.98;
+      if (k >= 0.98) continue;
+      // Con escala chica las letras redondean hacia arriba: se mide de nuevo y se corrige
+      for (let i = 0; i < 4; i++) {
+        el.style.zoom = k.toFixed(3);
+        const r = el.getBoundingClientRect();
+        if (r.height <= fit.h && r.width <= fit.w) break;
+        k *= Math.min(fit.h / r.height, fit.w / r.width) * 0.99;
+      }
+    }
   }
 
   /* --------------------------- Hoja de carga --------------------------- */
@@ -66,14 +86,14 @@
     const extra = cfg.sheetExtraCols || ['VACÍOS', 'DEVOLUCIÓN'];
     const blanks = extra.map(() => '<td class="blank"></td>').join('');
     let lastCat = null;
-    const colspan = m.cols.length + 2 + extra.length;
     const rows = m.rows.map((r) => {
-      let head = '';
-      if (r.category !== lastCat) { lastCat = r.category; head = `<tr class="cat"><td colspan="${colspan}">${esc(r.category || 'SIN RUBRO')}</td></tr>`; }
-      return head + `<tr><td class="p"><span class="muted">${esc(r.code)}</span> ${esc(r.name)} <b>${esc(r.presentation)}</b> <span class="um">${r.um}</span></td>
+      const first = lastCat !== null && r.category !== lastCat;
+      lastCat = r.category;
+      return `<tr${first ? ' class="grp"' : ''}><td class="p"><span class="muted">${esc(r.code)}</span> ${esc(r.name)} <b>${esc(r.presentation)}</b> <span class="um">${r.um}</span></td>
         ${r.cells.map((v) => `<td class="num${v ? ' has' : ''}">${v ? nf0.format(v) : ''}</td>`).join('')}<td class="num tot">${nf0.format(r.total)}</td>${blanks}</tr>`;
     }).join('');
-    const foot = m.footer.map((f) => `<tr class="tot"><td>${esc(f.label)}</td>${f.cells.map((v) => `<td class="num">${nf0.format(v)}</td>`).join('')}<td class="num tot">${nf0.format(f.total)}</td>${blanks}</tr>`).join('');
+    // Al pie, una sola fila: el total de todo (cajas + unidades sueltas)
+    const foot = m.footer.filter((f) => f.key === 'TOTAL_BULTOS').map((f) => `<tr class="tot"><td>TOTAL (cajas + unidades)</td>${f.cells.map((v) => `<td class="num">${nf0.format(v)}</td>`).join('')}<td class="num tot">${nf0.format(f.total)}</td>${blanks}</tr>`).join('');
     const code = load.number ? Loads.loadCode(load) : 'BORRADOR';
     const fecha = load.date || String(load.closedAt || '').slice(0, 10) || new Date().toISOString().slice(0, 10);
     const [yy, mm, dd] = fecha.split('-');
@@ -96,7 +116,7 @@
         ${m.cols.map((c, i) => `<th class="cl"><div>${i + 1}. ${esc(c.client)}</div></th>`).join('')}<th class="cl tcol"><div>TOTAL</div></th>
         ${extra.map((x) => `<th class="cl"><div>${esc(x)}</div></th>`).join('')}</tr></thead>
         <tbody>${rows}</tbody><tfoot>${foot}</tfoot></table>
-      <p class="muted" style="margin:6px 0 0">CJ = cajas · UN = unidades sueltas. Clientes: ${m.cols.map((c, i) => `${i + 1}. ${esc(c.client)} (${esc(Loads.initials(c.order.sellerName))})`).join(' · ')}</p>
+      <p class="muted foot">CJ = cajas · UN = unidades sueltas. Clientes: ${m.cols.map((c, i) => `${i + 1}. ${esc(c.client)} (${esc(Loads.initials(c.order.sellerName))})`).join(' · ')}</p>
       <div class="sign"><div>Despachador</div><div>Almacén</div><div>Vendedor</div><div>Control / Oficina</div></div>
       </section>`;
   }
@@ -105,26 +125,29 @@
   // y totales a 14. La tabla toma solo el ancho que necesita: con pocos clientes
   // las columnas quedan pegadas al producto. Los nombres de clientes se reparten
   // en 2-3 líneas en vez de estirarse hacia arriba.
-  const LOAD_CSS = `@page{size:letter landscape;margin:8mm} .sheet{page-break-after:always}
+  const LOAD_CSS = `@page{size:letter landscape;margin:8mm} .sheet+.sheet{page-break-before:always}
     .sheet,.sheet *{color:#000 !important;background:transparent !important;-webkit-print-color-adjust:economy;print-color-adjust:economy}
-    .sheet .head{border-bottom:2px solid #000} .sheet .doc{border-color:#000}
+    .sheet .head{border-bottom:2px solid #000;padding-bottom:3px;margin-bottom:4px} .sheet .head img{height:40px} .sheet .doc{border-color:#000;padding:3px 8px}
+    .sheet .meta{grid-template-columns:repeat(8,auto);gap:0 10px;margin-bottom:4px} .sheet .meta div{padding:1px 0}
     table.load{width:auto} table.load.many{width:100%}
-    table.load th,table.load td{font-size:12px;border:1px solid #000;padding:2px 5px}
+    table.load th,table.load td{font-size:12px;line-height:1.2;border:1px solid #000;padding:1px 4px}
     table.load th{font-weight:bold}
     th.cl{vertical-align:bottom;padding:3px 2px;min-width:22px}
-    th.cl div{writing-mode:vertical-rl;transform:rotate(180deg);white-space:normal;height:110px;line-height:1.15;text-align:left;display:inline-block;overflow-wrap:anywhere}
+    th.cl div{writing-mode:vertical-rl;transform:rotate(180deg);white-space:normal;height:92px;line-height:1.15;text-align:left;display:inline-block;overflow-wrap:anywhere}
     table.load.many th.cl div{white-space:nowrap;overflow:hidden}
-    td.p{white-space:normal;max-width:280px}
-    .um{font-size:10px;font-weight:bold;border:1px solid #000;border-radius:3px;padding:0 3px;margin-left:3px}
+    td.p{white-space:nowrap}
+    .um{font-size:9px;line-height:1;font-weight:bold;border:1px solid #000;border-radius:3px;padding:0 2px;margin-left:3px}
+    table.load td.num{padding:1px 2px}
     tr.ini th{font-size:10px}
-    .cat td{font-weight:bold;font-size:12px;border-top:2px solid #000}
+    tr.grp td{border-top:2px solid #000}
     td.has{font-weight:bold}
     table.load td.tot,table.load th.tcol{font-size:14px;font-weight:900;border-left:2px solid #000;border-right:2px solid #000}
     table.load tfoot td{font-size:14px;font-weight:900;border-top:2px solid #000}
-    td.blank{min-width:34px}`;
+    td.blank{min-width:34px}
+    .sheet .foot{margin:3px 0 0;font-size:9px} .sheet .sign{margin-top:14px}`;
 
   function printLoadSheet(load, orders, ctx) {
-    printHTML('Hoja de carga ' + Loads.loadCode(load), LOAD_CSS, loadSheetHTML(load, orders, ctx));
+    printHTML('Hoja de carga ' + Loads.loadCode(load), LOAD_CSS, loadSheetHTML(load, orders, ctx), LETTER_LANDSCAPE);
   }
 
   /* ------------------------- Notas de entrega ------------------------- */

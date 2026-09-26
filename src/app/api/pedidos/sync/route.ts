@@ -191,11 +191,14 @@ async function duplicates(sellerId: string | null) {
   const groups = new Map<string, Record<string, unknown>[]>();
   for (const o of orders) for (const k of keysOf(o)) { const g = groups.get(k) || []; g.push(o); groups.set(k, g); }
   const dups: Record<string, { id: string; sellerName: string }[]> = {};
+  // Aprobado en adelante, el vendedor ya puede tomarle otro pedido al mismo cliente
+  const approved = (o: Record<string, unknown>) => o.locked === true || o.status === 'despachado';
   for (const o of orders) {
     if (sellerId && o.sellerId !== sellerId) continue;
     const seen = new Map<string, { id: string; sellerName: string }>();
     for (const k of keysOf(o)) for (const x of groups.get(k) || []) {
-      if (x.id !== o.id) seen.set(String(x.id), { id: String(x.id), sellerName: String(x.sellerName || '') });
+      if (x.id === o.id || (x.sellerId === o.sellerId && (approved(x) || approved(o)))) continue;
+      seen.set(String(x.id), { id: String(x.id), sellerName: String(x.sellerName || '') });
     }
     dups[String(o.id)] = [...seen.values()];
   }

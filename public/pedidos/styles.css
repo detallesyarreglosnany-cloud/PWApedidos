@@ -183,16 +183,18 @@ textarea.input { padding: 12px 14px; min-height: 90px; resize: vertical; }
 .pprice div { display: flex; flex-direction: column; align-items: center; }
 .pprice span { font-size: 14px; color: var(--ink-2); text-transform: uppercase; letter-spacing: .06em; font-weight: 700; }
 .pprice b { font: 800 31px var(--display); color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.5); }
+.pcode { font-size: 16px; color: var(--ink-2); font-weight: 600; margin-top: -4px; }
 .pmeta { font-size: 16px; color: var(--ink-2); display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; font-weight: 600; }
 .stock-low { color: var(--danger) !important; font-weight: 800; }
 .qty-col { display: grid; gap: 6px; margin-top: auto; }
-.stepper { display: grid; grid-template-columns: 44px 1fr 44px; align-items: center; background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
-.stepper button { height: 46px; border: 0; background: #fff; color: #111; font-size: 24px; font-weight: 800; margin: 4px; border-radius: 9px; height: 38px; }
+.stepper { display: grid; grid-template-columns: minmax(44px, 84px) minmax(52px, 1fr) minmax(44px, 84px); align-items: center; background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.stepper button { border: 0; background: #fff; color: #111; font-size: 46px; line-height: 1; font-weight: 800; margin: 4px; border-radius: 12px; height: 72px; padding: 0; }
 .stepper button:active { transform: scale(.94); }
 .stepper .plus { background: #fff; }
-.stepper label { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 46px; }
+.stepper label { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 80px; }
 .stepper label small { font-size: 9px; font-weight: 800; letter-spacing: .1em; color: var(--muted); line-height: 1; }
-.stepper input { width: 100%; border: 0; text-align: center; font: 700 20px var(--display); padding: 0; background: transparent; color: #fff; }
+.stepper input { width: 100%; border: 0; text-align: center; font: 700 32px var(--display); padding: 0; background: transparent; color: #fff; }
+.stepper input::placeholder { color: #fff; opacity: 1; }
 .stepper input:focus { outline: none; }
 .stepper.active { border-color: var(--brand-2); }
 .stepper.over { border-color: var(--danger); }
