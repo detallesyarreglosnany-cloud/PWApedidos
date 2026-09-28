@@ -704,9 +704,21 @@
       const p = productById(inp.closest('[data-row]').dataset.row); if (!p) return;
       const f = inp.dataset.f, v = inp.value.trim();
       const val = f === 'stock' ? (v === '' ? null : int(v)) : f === 'sort' ? int(v) : Matrix.r2(dec(v));
-      await saveDocs('products', { ...p, [f]: val });
+      const doc = { ...p, [f]: val };
+      const shifted = f === 'sort' && val !== (+p.sort || 0) ? shiftSort(doc) : [];
+      await saveDocs('products', [doc].concat(shifted));
       toast('Guardado: ' + p.name, 'ok');
+      if (shifted.length) renderInventory(root);
     };
+  }
+
+  /** Si el orden elegido ya está ocupado en la categoría, corre +1 ese producto y los que siguen. */
+  function shiftSort(doc) {
+    const n = +doc.sort || 0;
+    if (!n) return [];
+    const same = S.products.filter((x) => x.id !== doc.id && !x.deleted && x.category === doc.category && +x.sort > 0);
+    if (!same.some((x) => +x.sort === n)) return [];
+    return same.filter((x) => +x.sort >= n).map((x) => ({ ...x, sort: +x.sort + 1 }));
   }
 
   /**
@@ -846,7 +858,8 @@
       };
       if (doc.boxPrice < 0 || doc.unitPrice < 0) { toast('Los precios no pueden ser negativos', 'err'); return; }
       if (S.products.some((x) => x.id === doc.id && x.id !== p.id)) doc.id = DB.uid('p');
-      await saveDocs('products', doc);
+      const moved = isNew || doc.sort !== (+p.sort || 0) || doc.category !== p.category;
+      await saveDocs('products', [doc].concat(moved ? shiftSort(doc) : []));
       if (doc.category && !(S.config.rubros || []).includes(doc.category)) await saveDocs('config', { ...S.config, rubros: (S.config.rubros || []).concat(doc.category) });
       sh.close(); renderInventory(root); toast('Producto guardado', 'ok');
     };
