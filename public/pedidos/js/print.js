@@ -133,8 +133,7 @@
     table.load th,table.load td{font-size:12px;line-height:1.2;border:1px solid #000;padding:1px 4px}
     table.load th{font-weight:bold}
     th.cl{vertical-align:bottom;padding:3px 2px;min-width:22px}
-    th.cl div{writing-mode:vertical-rl;transform:rotate(180deg);white-space:normal;height:92px;line-height:1.15;text-align:left;display:inline-block;overflow-wrap:anywhere}
-    table.load.many th.cl div{white-space:nowrap;overflow:hidden}
+    th.cl div{writing-mode:vertical-rl;transform:rotate(180deg);white-space:normal;height:130px;line-height:1.1;text-align:left;display:inline-block;overflow-wrap:anywhere}
     td.p{white-space:nowrap}
     .um{font-size:9px;line-height:1;font-weight:bold;border:1px solid #000;border-radius:3px;padding:0 2px;margin-left:3px}
     table.load td.num{padding:1px 2px}
