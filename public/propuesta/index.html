@@ -1,0 +1,446 @@
+<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="robots" content="noindex,nofollow"><style>:root{color-scheme:light}html{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+<title>Propuesta Pedidos Puerto Venado</title>
+<meta name="description" content="Propuesta comercial Fase 1 del Sistema de Pedidos offline/online para Distribuidora de Suministros Puerto Venado.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Allura&family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500&family=Manrope:wght@400;500;600;700;800&display=swap">
+<style>
+:root{
+  --paper:#FDFBF4; --surface:#F5F0E1; --surface-2:#EFE7D2; --ink:#23270E; --ink-2:#56563A; --muted:#7C7858;
+  --olive:#3A4217; --olive-2:#5B6630; --bronze:#8A7641; --gold:#B39456; --gold-soft:#EADFC2; --line:#DCD2B6;
+  --paw:#C49A74; --ok:#4E6B2A; --soon:#9A6B22; --soon-soft:#F3E3C2; --plaque:#FFFEFA;
+  --display:"Cormorant Garamond","Iowan Old Style",Georgia,serif; --sans:"Manrope","Segoe UI",system-ui,sans-serif; --script:"Allura","Brush Script MT",cursive;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --paper:#15170C; --surface:#1D2012; --surface-2:#252916; --ink:#F0EAD6; --ink-2:#C9C19F; --muted:#9E977A;
+  --olive:#B7C27A; --olive-2:#98A45E; --bronze:#CDB07A; --gold:#D6BC86; --gold-soft:#34301C; --line:#34381F;
+  --paw:#D2AA84; --ok:#9FBE6A; --soon:#E0B268; --soon-soft:#3A2F17; --plaque:#FFFEFA; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --paper:#15170C; --surface:#1D2012; --surface-2:#252916; --ink:#F0EAD6; --ink-2:#C9C19F; --muted:#9E977A;
+  --olive:#B7C27A; --olive-2:#98A45E; --bronze:#CDB07A; --gold:#D6BC86; --gold-soft:#34301C; --line:#34381F;
+  --paw:#D2AA84; --ok:#9FBE6A; --soon:#E0B268; --soon-soft:#3A2F17; --plaque:#FFFEFA; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--paper);color:var(--ink);font:400 16px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
+.wrap{max-width:1080px;margin:0 auto;padding-inline:20px;padding-block:0 64px}
+h1,h2,h3{font-family:var(--display);font-weight:700;line-height:1.1;text-wrap:balance;margin:0;color:var(--olive)}
+h2{font-size:clamp(30px,4.4vw,44px)}
+h3{font-size:24px}
+p{margin:0}
+.eyebrow{font:800 12px/1 var(--sans);letter-spacing:.16em;text-transform:uppercase;color:var(--bronze)}
+.lead{font-size:18px;color:var(--ink-2);max-width:66ch}
+.num{font-variant-numeric:tabular-nums}
+section{padding-block:56px 0;display:grid;gap:22px}
+.sec-head{display:grid;gap:10px}
+.sec-head .idx{font:600 italic 20px var(--display);color:var(--gold)}
+
+/* Portada */
+.cover{padding-block:28px 8px;display:grid;gap:26px}
+.plaque{background:var(--plaque);border:1px solid var(--line);border-radius:22px;padding:22px 20px 18px;display:grid;justify-items:center;gap:6px}
+.plaque img{width:min(520px,100%);height:auto;display:block}
+.plaque small{font:700 11px var(--sans);letter-spacing:.22em;text-transform:uppercase;color:#6E6233}
+.cover-grid{display:grid;grid-template-columns:1.35fr 1fr;gap:28px;align-items:end}
+.cover h1{font-size:clamp(40px,6.4vw,70px);color:var(--olive)}
+.cover h1 em{font-style:italic;font-weight:600;color:var(--bronze)}
+.meta-list{display:grid;gap:8px;border-left:2px solid var(--gold);padding-left:18px;font-size:14px;color:var(--ink-2)}
+.meta-list b{display:block;font:800 11px var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.kpi{padding:18px 14px;display:grid;gap:4px}
+.kpi+.kpi{border-left:1px solid var(--line)}
+.kpi strong{font:700 36px/1 var(--display);color:var(--olive)}
+.kpi span{font-size:13px;color:var(--ink-2)}
+
+/* Problema vs solución */
+.vs{border:1px solid var(--line);border-radius:18px;overflow:hidden;background:var(--surface)}
+.vs-row{display:grid;grid-template-columns:1fr 36px 1fr}
+.vs-row+.vs-row{border-top:1px solid var(--line)}
+.vs-row>div{padding:14px 18px}
+.vs-head{background:var(--surface-2);font:800 12px var(--sans);letter-spacing:.14em;text-transform:uppercase}
+.vs-head .a{color:var(--muted)} .vs-head .b{color:var(--olive)}
+.vs-row .a{color:var(--ink-2)}
+.vs-row .b{color:var(--ink);font-weight:600;background:color-mix(in srgb,var(--gold-soft) 55%,transparent)}
+.vs-row .arr{display:grid;place-items:center;color:var(--gold);font-size:20px;padding:0}
+.tag{display:inline-block;font:800 10px/1 var(--sans);letter-spacing:.08em;text-transform:uppercase;padding:4px 7px;border-radius:999px;vertical-align:2px;margin-left:6px}
+.tag.soon{background:var(--soon-soft);color:var(--soon)}
+.tag.f2{background:var(--surface-2);color:var(--bronze);border:1px solid var(--line)}
+
+/* Mapa conceptual */
+.map{display:grid;gap:0;justify-items:center}
+.hub{background:var(--olive);color:var(--paper);border-radius:18px;padding:18px 26px;text-align:center;max-width:560px;display:grid;gap:4px}
+.hub strong{font:700 26px/1.1 var(--display);color:var(--paper)}
+.hub span{font-size:13px;opacity:.85}
+:root[data-theme="dark"] .hub strong,:root[data-theme="dark"] .hub{color:#15170C}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .hub,:root:not([data-theme="light"]) .hub strong{color:#15170C}}
+.stem{width:2px;height:26px;background:var(--gold)}
+.branches{width:100%;display:grid;grid-template-columns:repeat(3,1fr);align-items:start;gap:18px;position:relative;padding-top:26px}
+.branches::before{content:"";position:absolute;top:0;left:16.66%;right:16.66%;height:2px;background:var(--gold)}
+.branch{position:relative;display:grid;gap:12px;align-content:start;background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:18px}
+.branch::before{content:"";position:absolute;top:-27px;left:50%;width:2px;height:26px;background:var(--gold)}
+.branch h3{font-size:24px}
+.branch .who{font-size:13px;color:var(--muted);margin-top:-6px}
+.leafs{display:grid;gap:10px}
+.leaf{display:grid;gap:2px;padding-left:14px;border-left:2px solid var(--gold-soft)}
+.leaf b{font-size:14px;color:var(--ink)}
+.leaf span{font-size:13px;color:var(--ink-2);line-height:1.45}
+.base{margin-top:18px;width:100%;border:1px dashed var(--gold);border-radius:16px;padding:14px 18px;display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center;font-size:14px;color:var(--ink-2)}
+.base b{color:var(--olive);font:700 18px var(--display)}
+.chip{background:var(--surface-2);border:1px solid var(--line);border-radius:999px;padding:4px 11px;font-size:13px;color:var(--ink)}
+
+/* Flujo */
+.flow-wrap{overflow-x:auto;padding-bottom:6px}
+.flow{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(4,1fr);gap:14px;counter-reset:f}
+.flow li{counter-increment:f;position:relative;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 14px 14px 52px;display:grid;gap:3px;min-height:96px}
+.flow li::before{content:counter(f);position:absolute;left:14px;top:14px;width:26px;height:26px;border-radius:50%;background:var(--olive);color:var(--paper);display:grid;place-items:center;font:800 13px var(--sans)}
+:root[data-theme="dark"] .flow li::before{color:#15170C}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .flow li::before{color:#15170C}}
+.flow b{font-size:14px}
+.flow span{font-size:13px;color:var(--ink-2);line-height:1.45}
+.flow li.key{border-color:var(--gold);background:color-mix(in srgb,var(--gold-soft) 60%,var(--surface))}
+
+/* Valor */
+.value{display:grid;grid-template-columns:1.5fr 1fr;gap:26px;align-items:start}
+.vlist{display:grid;border-top:1px solid var(--line)}
+.vitem{display:grid;grid-template-columns:1fr auto;gap:4px 16px;padding:14px 0;border-bottom:1px solid var(--line)}
+.vitem b{font-size:15px}
+.vitem .amt{font:700 22px var(--display);color:var(--olive);text-align:right}
+.vitem p{grid-column:1/-1;font-size:13px;color:var(--ink-2)}
+.bar{grid-column:1/-1;height:6px;border-radius:6px;background:var(--surface-2);overflow:hidden}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--bronze),var(--gold));border-radius:6px}
+.vtotal{display:flex;justify-content:space-between;align-items:baseline;padding:16px 0 0;font:700 16px var(--sans)}
+.vtotal strong{font:700 32px var(--display);color:var(--ink)}
+.aside{display:grid;gap:14px;position:sticky;top:calc(env(safe-area-inset-top,0px) + 16px)}
+.note{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:18px;display:grid;gap:8px}
+.note h3{font-size:22px}
+.note p{font-size:14px;color:var(--ink-2)}
+.wrap p.big{font:700 44px/1 var(--display);color:var(--olive)}
+
+/* Oferta */
+.offer{background:var(--olive);color:var(--paper);border-radius:24px;padding:30px 28px;display:grid;grid-template-columns:1fr 1.25fr;gap:28px}
+.offer h2,.offer h3{color:var(--paper)}
+.offer .was{justify-self:start;font:600 26px var(--display);text-decoration:line-through;text-decoration-color:var(--gold);opacity:.7}
+.offer .price{font:700 clamp(64px,10vw,96px)/.95 var(--display);color:var(--gold-soft)}
+.offer .save{display:inline-block;justify-self:start;background:var(--gold);color:#23270E;font:800 12px var(--sans);letter-spacing:.1em;text-transform:uppercase;padding:6px 10px;border-radius:999px}
+.offer .deadline{font-size:15px;opacity:.9}
+.offer ul{margin:0;padding:0;list-style:none;display:grid;gap:9px}
+.offer li{display:grid;grid-template-columns:18px 1fr;gap:8px;font-size:14.5px;line-height:1.45}
+.offer li::before{content:"";width:10px;height:10px;margin-top:6px;border-radius:50%;border:2px solid var(--gold)}
+.offer li.soon::before{background:transparent;border-style:dashed}
+.offer .pay{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:4px}
+.offer .pay div{border:1px solid color-mix(in srgb,var(--gold) 60%,transparent);border-radius:14px;padding:12px 14px}
+.offer .pay b{display:block;font:700 28px var(--display);color:var(--gold-soft)}
+.offer .pay span{font-size:13px;opacity:.9}
+:root[data-theme="dark"] .offer,:root[data-theme="dark"] .offer h2,:root[data-theme="dark"] .offer h3{color:#15170C}
+:root[data-theme="dark"] .offer .price,:root[data-theme="dark"] .offer .pay b{color:#3A4217}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .offer,:root:not([data-theme="light"]) .offer h2,:root:not([data-theme="light"]) .offer h3{color:#15170C}
+  :root:not([data-theme="light"]) .offer .price,:root:not([data-theme="light"]) .offer .pay b{color:#3A4217}}
+.legend{font-size:12.5px;opacity:.85}
+.paymethods{display:grid;gap:3px;border-top:1px solid color-mix(in srgb,var(--gold) 50%,transparent);padding-top:12px;font-size:14.5px}
+.paymethods b{font:800 11px var(--sans);letter-spacing:.14em;text-transform:uppercase;color:inherit;opacity:.75}
+.paymethods em{font-style:normal;font-weight:800}
+.paymethods .mail{font-weight:700;overflow-wrap:anywhere;user-select:all}
+
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:18px;display:grid;gap:8px;align-content:start}
+.card h3{font-size:22px}
+.card p,.card li{font-size:14px;color:var(--ink-2)}
+.card ul{margin:0;padding-left:18px;display:grid;gap:4px}
+.pill{justify-self:start;font:800 11px var(--sans);letter-spacing:.1em;text-transform:uppercase;padding:5px 9px;border-radius:999px;background:var(--gold-soft);color:var(--bronze)}
+
+.maint{display:grid;grid-template-columns:auto 1fr;gap:24px;align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:24px}
+.maint .big span{font:600 18px var(--sans);color:var(--ink-2)}
+.maint ul{margin:0;padding-left:18px;display:grid;gap:5px;font-size:14.5px;color:var(--ink-2)}
+
+.roadmap{display:grid;grid-template-columns:repeat(3,1fr);gap:0;border:1px solid var(--line);border-radius:18px;overflow:hidden}
+.phase{padding:20px;display:grid;gap:8px;align-content:start}
+.phase+.phase{border-left:1px solid var(--line)}
+.phase.now{background:color-mix(in srgb,var(--gold-soft) 55%,var(--surface))}
+.phase h3{font-size:22px}
+.phase p,.phase li{font-size:14px;color:var(--ink-2)}
+.phase ul{margin:0;padding-left:18px;display:grid;gap:4px}
+.more{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:14px;color:var(--ink-2)}
+
+.reqs{display:grid;grid-template-columns:repeat(2,1fr);gap:12px 28px;counter-reset:r;margin:0;padding:0;list-style:none}
+.reqs li{display:grid;grid-template-columns:30px 1fr;gap:10px;padding:12px 0;border-bottom:1px solid var(--line);font-size:14.5px;color:var(--ink-2)}
+.reqs li b{color:var(--ink)}
+.reqs li::before{content:"✓";width:26px;height:26px;border-radius:8px;display:grid;place-items:center;background:var(--gold-soft);color:var(--bronze);font-weight:800}
+
+.steps{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(5,1fr);gap:10px;counter-reset:s}
+.steps li{counter-increment:s;display:grid;gap:4px;padding-top:12px;border-top:3px solid var(--gold);font-size:13.5px;color:var(--ink-2)}
+.steps li::before{content:"Paso " counter(s);font:800 11px var(--sans);letter-spacing:.12em;text-transform:uppercase;color:var(--bronze)}
+.steps b{color:var(--ink);font-size:14.5px}
+.cta{display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:space-between;border:1px solid var(--gold);border-radius:20px;padding:22px 24px;background:var(--surface)}
+.cta p{font-size:15px;color:var(--ink-2);max-width:56ch}
+.btn{display:inline-flex;align-items:center;gap:10px;background:var(--olive);color:var(--paper);text-decoration:none;font:800 15px var(--sans);padding:14px 20px;border-radius:14px}
+.btn:hover{background:var(--olive-2)}
+.btn:focus-visible{outline:3px solid var(--gold);outline-offset:3px}
+:root[data-theme="dark"] .btn{color:#15170C}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .btn{color:#15170C}}
+.note .ref{font-size:13px;color:var(--muted)}
+.weblink{justify-self:start;display:inline-grid;gap:1px;padding:10px 16px;border:1.5px solid var(--gold);border-radius:12px;background:var(--gold-soft);color:var(--olive);font:800 16px var(--sans);text-decoration:none}
+.weblink small{font:600 12.5px var(--sans);color:var(--bronze)}
+.weblink:hover{background:color-mix(in srgb,var(--gold) 30%,var(--gold-soft))}
+.weblink:focus-visible{outline:3px solid var(--gold);outline-offset:3px}
+.note a,footer a{color:var(--bronze);text-underline-offset:3px}
+.note a:focus-visible,footer a:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+.bonus{border:1px solid var(--gold);border-radius:20px;padding:22px 24px;display:grid;gap:14px;background:color-mix(in srgb,var(--gold-soft) 45%,var(--paper))}
+.bonus h3{font-size:26px}
+.bonus ul{margin:0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(3,1fr);gap:12px 22px}
+.bonus li{display:grid;gap:2px;padding-left:14px;border-left:2px solid var(--gold)}
+.bonus li b{font-size:14.5px}
+.bonus li span{font-size:13px;color:var(--ink-2);line-height:1.45}
+@media (max-width:860px){.bonus ul{grid-template-columns:1fr 1fr}}
+@media (max-width:520px){.bonus ul{grid-template-columns:1fr}}
+footer{margin-top:56px;padding-top:22px;border-top:1px solid var(--line);display:flex;flex-wrap:wrap;gap:10px 24px;justify-content:space-between;align-items:center;color:var(--muted);font-size:13px}
+footer .sig{font:400 34px/1 var(--script);color:var(--bronze)}
+
+@media (max-width:860px){
+  .cover-grid,.value,.offer{grid-template-columns:1fr}
+  .kpis{grid-template-columns:repeat(2,1fr)} .kpi:nth-child(3){border-left:0} .kpi:nth-child(n+3){border-top:1px solid var(--line)}
+  .branches{grid-template-columns:1fr;padding-top:0} .branches::before,.branch::before{display:none} .branch{margin-top:14px}
+  .flow{grid-template-columns:repeat(2,1fr)} .cards,.roadmap{grid-template-columns:1fr} .phase+.phase{border-left:0;border-top:1px solid var(--line)}
+  .reqs{grid-template-columns:1fr} .steps{grid-template-columns:repeat(2,1fr)} .aside{position:static}
+}
+@media (max-width:520px){
+  .vs-row{grid-template-columns:1fr} .vs-row .arr{display:none} .vs-head .a{display:none} .vs-head .b::before{content:"Antes → Ahora"} .vs-head .b span{display:none}
+  .vs-row .a{padding-bottom:4px;font-size:14px} .vs-row .a::before{content:"Antes: ";font-weight:800;color:var(--muted)}
+  .flow{grid-template-columns:1fr} .maint{grid-template-columns:1fr} .offer .pay{grid-template-columns:1fr} .offer{padding:24px 20px}
+}
+@media print{
+  body{font-size:12px} .wrap{max-width:none;padding-inline:0} section{padding-block:28px 0;break-inside:avoid-page}
+  .aside{position:static} .btn{border:1px solid #3A4217}
+}
+@media (prefers-reduced-motion:no-preference){.btn{transition:background .15s ease}}
+</style>
+
+<div class="wrap">
+  <header class="cover">
+    <div class="plaque"><img src="logo.jpg" alt="Daniela Silva" width="1400" height="452"><small>Desarrollo de software y sistemas digitales a la medida</small></div>
+    <div class="cover-grid">
+      <div style="display:grid;gap:14px">
+        <p class="eyebrow">Propuesta comercial · Fase 1</p>
+        <h1>Sistema de Pedidos <em>Puerto Venado</em></h1>
+        <p class="lead">La calle y la oficina, conectadas en tiempo real. Cada pedido llega completo, se convierte en hoja de carga y sale despachado sin transcribir una sola línea.</p>
+      </div>
+      <div class="meta-list">
+        <div><b>Para</b>Distribuidora de Suministros Puerto Venado</div>
+        <div><b>Presenta</b>Daniela Sofía Silva Nieves · Puerto Ayacucho, Amazonas</div>
+        <div><b>Fecha</b>28 de septiembre de 2026</div>
+        <div><b>Entrega definitiva</b>16 de octubre de 2026</div>
+      </div>
+    </div>
+    <div class="kpis num">
+      <div class="kpi"><strong>90+</strong><span>productos en catálogo digital con foto y precio</span></div>
+      <div class="kpi"><strong>0</strong><span>pedidos transcritos a mano en la oficina</span></div>
+      <div class="kpi"><strong>1</strong><span>página por hoja de carga, hasta 32 clientes</span></div>
+      <div class="kpi"><strong>100%</strong><span>operativo sin señal; sincroniza al volver</span></div>
+    </div>
+  </header>
+
+  <section id="problema">
+    <div class="sec-head"><span class="idx">1 · El problema frente a la solución</span>
+      <h2>De la libreta al pedido en vivo</h2>
+      <p class="lead">Hoy cada pedido pasa por varias manos antes de llegar al camión. Cada paso manual cuesta horas de oficina y abre la puerta a errores que se pagan en mercancía.</p></div>
+    <div class="vs">
+      <div class="vs-row vs-head"><div class="a">Antes</div><div class="arr"></div><div class="b"><span>Ahora, con la plataforma</span></div></div>
+      <div class="vs-row"><div class="a">Pedidos en lápiz y papel que debía dictar cada vendedor todos los días.</div><div class="arr">→</div><div class="b">El vendedor marca cajas y unidades en un catálogo con fotos, precios y stock.</div></div>
+      <div class="vs-row"><div class="a">Recibir, anotar y pasar los pedidos ocupa buena parte de la jornada del personal de oficina.</div><div class="arr">→</div><div class="b">El sistema asume esa tarea: los pedidos llegan solos y ese tiempo queda libre para cobranza, atención a clientes y control.</div></div>
+      <div class="vs-row"><div class="a">La oficina transcribe pedido por pedido: el cuello de botella de cada día. Con 3 vendedores, son alrededor de 4 horas diarias solo en copiar pedidos.</div><div class="arr">→</div><div class="b">Los pedidos entran solos y se agrupan en hojas de carga automáticas (tope de 900 bultos y 32 clientes).</div></div>
+      <div class="vs-row"><div class="a">Nadie sabe cuánto se vendió en la calle hasta que regresan los despachadores.</div><div class="arr">→</div><div class="b">Monto por vendedor y por cliente en tiempo real, y reportes por rango de fechas.</div></div>
+      <div class="vs-row"><div class="a">Hojas de carga armadas a mano, con riesgo de errores y faltantes.</div><div class="arr">→</div><div class="b">Hoja de carga impresa en una página con un clic.</div></div>
+      <div class="vs-row"><div class="a">Sin señal en la ruta no hay forma de pasar el pedido.</div><div class="arr">→</div><div class="b">Funciona sin internet y sincroniza al recuperar señal.</div></div>
+      <div class="vs-row"><div class="a">Inventario desactualizado y clientes repetidos en la ruta.</div><div class="arr">→</div><div class="b">El stock se descuenta al cerrar la carga y la oficina recibe alerta de cliente duplicado.</div></div>
+      <div class="vs-row"><div class="a">El cliente no sabe cuánto debe y el vendedor tampoco.</div><div class="arr">→</div><div class="b">Cuentas por cobrar y deuda visible en ruta <span class="tag f2">Fase 2</span></div></div>
+    </div>
+  </section>
+
+  <section id="mapa">
+    <div class="sec-head"><span class="idx">2 · Mapa de funcionalidades</span>
+      <h2>Una sola plataforma, tres roles</h2>
+      <p class="lead">Cada persona ve solo lo que necesita. Todo funciona desde el navegador del teléfono o de la PC, se instala como aplicación y no requiere tienda de apps.</p></div>
+    <div class="map">
+      <div class="hub"><strong>Sistema de Pedidos Puerto Venado</strong><span>Aplicación web instalable · offline y online · nube segura</span></div>
+      <div class="stem"></div>
+      <div class="branches">
+        <div class="branch">
+          <h3>Vendedores</h3><p class="who">En la calle, desde el teléfono</p>
+          <div class="leafs">
+            <div class="leaf"><b>Ruta del día</b><span>Entra con su nombre, elige la ruta y trabaja con su propia cartera de clientes y buscador.</span></div>
+            <div class="leaf"><b>Catálogo inteligente</b><span>Fotos, categorías y búsqueda por sabor, gramaje o código. Precio por caja y por unidad.</span></div>
+            <div class="leaf"><b>Pedido en segundos</b><span>Botones grandes + y − para cajas y unidades, total en vivo y aviso si pide más de lo que hay en stock.</span></div>
+            <div class="leaf"><b>Historial y edición</b><span>Pedidos del día por cliente con su monto. Puede corregir mientras la oficina no apruebe la carga.</span></div>
+            <div class="leaf"><b>Notificaciones</b><span>Avisos al teléfono: pedido aprobado, en espera, ajustado o despachado.</span></div>
+            <div class="leaf"><b>Sin señal</b><span>Guarda todo en el equipo y sincroniza solo al recuperar la señal.</span></div>
+          </div>
+        </div>
+        <div class="branch">
+          <h3>Oficina y administración</h3><p class="who">Desde PC o tablet</p>
+          <div class="leafs">
+            <div class="leaf"><b>Cargas automáticas</b><span>Armado por ruta y vendedor, fusión de hojas, clientes en espera y estados configurables que bloquean la edición al aprobar.</span></div>
+            <div class="leaf"><b>Despacho</b><span>Hoja de carga sin precios en una página, con columnas de vacíos y devolución, despachador asignado y firmas.</span></div>
+            <div class="leaf"><b>Cierre de carga</b><span>Descuenta el inventario, fija la fecha y pasa la carga al Archivo.</span></div>
+            <div class="leaf"><b>Inventario y catálogo</b><span>Precios, stock, orden del catálogo, fotos en lote e importación desde Excel o CSV.</span></div>
+            <div class="leaf"><b>Clientes, vendedores y rutas</b><span>Cartera por vendedor, reasignación e importación masiva.</span></div>
+            <div class="leaf"><b>Control en tiempo real</b><span>Campana de avisos: pedido nuevo, modificado, eliminado o cliente duplicado. Historial de actividad por persona y archivo de cargas.</span></div>
+          </div>
+        </div>
+        <div class="branch">
+          <h3>Gerencia</h3><p class="who">Supervisor, solo consulta</p>
+          <div class="leafs">
+            <div class="leaf"><b>Visión completa</b><span>Pedidos, clientes e historial de todos los vendedores, sin poder modificar nada.</span></div>
+            <div class="leaf"><b>Reportes de ventas</b><span>Por rango de fechas: totales por vendedor, por despachador y ruta, y por categoría, con detalle de cada pedido.</span></div>
+            <div class="leaf"><b>Exportación</b><span>Consolidados a Excel y respaldo completo del servidor.</span></div>
+            <div class="leaf"><b>Liquidación y vacíos</b><span>Hojas de liquidación por vendedor, ruta y producto, y relación de vacíos. <span class="tag soon">Antes del 16 oct</span></span></div>
+          </div>
+        </div>
+      </div>
+      <div class="base"><b>Base común</b>
+        <span class="chip">Sincronización campo por campo sin pérdidas</span><span class="chip">Base de datos en la nube</span><span class="chip">Claves por rol</span><span class="chip">PIN de oficina con bloqueo a los 15 min</span><span class="chip">Respaldos</span><span class="chip">Numeración sin duplicados</span>
+      </div>
+    </div>
+
+    <h3 style="margin-top:18px">Recorrido de un pedido</h3>
+    <div class="flow-wrap"><ol class="flow">
+      <li><b>Toma del pedido</b><span>El vendedor lo arma en el teléfono, con o sin señal.</span></li>
+      <li><b>Sincronización</b><span>Sube a la nube apenas hay conexión; la oficina recibe el aviso.</span></li>
+      <li><b>Hoja de carga</b><span>Se asigna sola a la hoja de su ruta hasta llenar el tope.</span></li>
+      <li class="key"><b>Aprobación</b><span>Oficina aprueba para carga; desde ahí nadie puede alterar el pedido.</span></li>
+      <li><b>Impresión</b><span>Hoja de carga para el almacén, en una página.</span></li>
+      <li class="key"><b>Cierre de carga</b><span>Descuenta inventario y fija la fecha.</span></li>
+      <li><b>Despacho</b><span>El camión sale con el despachador asignado.</span></li>
+      <li><b>Aviso al vendedor</b><span>Recibe la notificación de despacho; la carga queda en el Archivo.</span></li>
+    </ol></div>
+  </section>
+
+  <section id="valor">
+    <div class="sec-head"><span class="idx">3 · Desglose de valor</span>
+      <h2>Lo que vale en el mercado</h2>
+      <p class="lead">Realizamos un estudio de mercado de precios en Venezuela: una aplicación de esta importancia supera los $3.000 solo en su primera fase. Este es el desglose de lo construido.</p></div>
+    <div class="value">
+      <div>
+        <div class="vlist num">
+          <div class="vitem"><b>Consultoría y desarrollo de la idea</b><span class="amt">$600</span><div class="bar"><i style="width:70.6%"></i></div><p>De cero a un proyecto estructurado: encuesta diagnóstico, opiniones del equipo y verificación de que no existía una solución ya armada para este modelo de distribución.</p></div>
+          <div class="vitem"><b>Diseño de experiencia móvil y de oficina</b><span class="amt">$300</span><div class="bar"><i style="width:35.3%"></i></div><p>Interfaz con la identidad de la empresa, pensada para usar con una mano en la calle y para imprimir en una página.</p></div>
+          <div class="vitem"><b>Catálogo digital</b><span class="amt">$350</span><div class="bar"><i style="width:41.2%"></i></div><p>Más de 90 productos con fotografía, categorías, presentación y precios por caja y por unidad. Referencia de mercado: entre $300 y $400.</p></div>
+          <div class="vitem"><b>Motor offline/online y bases de datos seguras</b><span class="amt">$850</span><div class="bar"><i style="width:100%"></i></div><p>Varios teléfonos y PC trabajando a la vez, sin señal, y fusionando cambios en la nube sin perder ni duplicar pedidos.</p></div>
+          <div class="vitem"><b>Módulo de oficina y documentos</b><span class="amt">$500</span><div class="bar"><i style="width:58.8%"></i></div><p>Cargas automáticas, estados, hojas de carga, inventario, clientes y reportes.</p></div>
+          <div class="vitem"><b>Notificaciones, roles y seguridad</b><span class="amt">$150</span><div class="bar"><i style="width:17.6%"></i></div><p>Avisos push, rol de supervisor, claves de acceso, PIN de oficina y respaldos.</p></div>
+          <div class="vitem"><b>Onboarding y personalización</b><span class="amt">$250</span><div class="bar"><i style="width:29.4%"></i></div><p>Subida de clientes, productos, rutas, vendedores y despachadores; ajuste a las características específicas de la forma de trabajo de la empresa; personalización con sus colores, logo y nombre.</p></div>
+          <div class="vitem"><b>Infraestructura y herramientas de desarrollo</b><span class="amt">$250</span><div class="bar"><i style="width:29.4%"></i></div><p>Servidores, base de datos, dominio y herramientas profesionales usadas en la construcción.</p></div>
+        </div>
+        <div class="vtotal num"><span>Valor de mercado de la Fase 1</span><strong>$3.250</strong></div>
+      </div>
+      <div class="aside">
+        <div class="note"><p class="eyebrow">Horas invertidas</p><p class="big num">≈ 76 h</p><p>De trabajo especializado para diagnosticar la operación, definir la estrategia y construir la plataforma.</p></div>
+        <div class="note"><p class="eyebrow">Estudio de mercado</p><h3>Más de $3.000</h3><p>Es lo que cuesta en Venezuela una solución a la medida con este alcance en su primera fase. Hablamos de un sistema construido para la operación real de Puerto Venado.</p><p class="ref">Para comparar precios y conocer otros servicios:</p><a class="weblink" href="https://myweb-opal-seven.vercel.app" target="_blank" rel="noopener">Ver mi sitio web ↗<small>myweb-opal-seven.vercel.app</small></a></div>
+        <div class="note"><p class="eyebrow">Tiempo recuperado</p><h3>≈ 80 horas al mes</h3><p>Las 4 horas diarias que hoy se dedican a copiar pedidos quedan libres para cobranza, atención a clientes y control de inventario.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="oferta">
+    <div class="sec-head"><span class="idx">4 · La oferta</span><h2>Fase 1 lista para operar</h2></div>
+    <div class="offer">
+      <div style="display:grid;gap:12px;align-content:start">
+        <span class="was num">$3.250</span>
+        <span class="price num">$1.500</span>
+        <span class="save">Ahorro de 54%</span>
+        <p class="deadline">Entrega definitiva: <b>16 de octubre de 2026</b></p>
+        <div class="pay num">
+          <div><b>$900</b><span>60% para formalizar e iniciar la etapa final de entrega</span></div>
+          <div><b>$600</b><span>40% al cerrar la fase de prueba con todo funcionando al 100%</span></div>
+        </div>
+        <div class="paymethods"><b>Formas de pago</b>
+          <span><em>Binance Pay</em> y <em>Zinli</em>: <span class="mail">detallesyarreglosnany@gmail.com</span></span>
+          <span><em>Efectivo</em> en dólares estadounidenses (USD)</span>
+          <span><em>Bolívares</em> a la tasa del euro (€) BCV del día: Banco de Venezuela, cuenta corriente <span class="mail num">01020526320000014708</span>, C.I. 19.055.616, tlf. 0422-1754245</span></div>
+      </div>
+      <div style="display:grid;gap:14px;align-content:start">
+        <h3>Incluye</h3>
+        <ul>
+          <li>Plataforma de pedidos para vendedores, oficina y gerencia, ya operativa</li>
+          <li class="soon">Hojas de liquidación por vendedor, ruta y producto</li>
+          <li class="soon">Control y relación de vacíos</li>
+          <li>Seguridad: claves por rol, PIN de oficina, bloqueo de pedidos aprobados y respaldos</li>
+          <li>Onboarding: carga de clientes, productos, rutas y equipo, y personalización con colores, logo y nombre de la empresa</li>
+          <li>Hosting, dominio, base de datos y sincronización</li>
+          <li>2 meses de mantenimiento incluidos</li>
+          <li>Soporte de lunes a viernes, y actualizaciones y mejoras durante la fase de prueba</li>
+          <li>Instalación en los equipos y capacitación en vivo al personal</li>
+        </ul>
+        <p class="legend">Círculo punteado: se entrega antes del 16 de octubre.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="extras">
+    <div class="bonus">
+      <div class="sec-head"><span class="idx">Bonos de la Fase 1</span><h3>Incluidos sin costo adicional</h3></div>
+      <ul>
+        <li><b>Manual de la empresa</b><span>Guía escrita del sistema: roles, procesos del día a día y qué hacer en cada caso.</span></li>
+        <li><b>Fotos creadas para el catálogo</b><span>Imágenes de producto uniformes, con fondo limpio y listas para la app.</span></li>
+        <li><b>Catálogo digital actualizado</b><span>Precios, presentaciones y categorías al día en el teléfono de cada vendedor.</span></li>
+        <li><b>Catálogo de precios en PDF</b><span>Listo para compartir con los clientes, generado con las mismas fotos y precios.</span></li>
+        <li><b>Plantillas de Excel</b><span>Para actualizar precios, productos y clientes en bloque cuando la empresa lo necesite.</span></li>
+        <li><b>Guía rápida para vendedores</b><span>Una página con los pasos esenciales para tomar y enviar pedidos en la calle.</span></li>
+      </ul>
+    </div>
+    <div class="cards">
+      <div class="card"><span class="pill">5 · Entregables extra</span><h3>Videotutoriales de uso</h3>
+        <ul><li>Instalación en teléfono y PC</li><li>Roles: vendedor, oficina y supervisor</li><li>Actualización de productos, precios y fotos</li><li>Rutas y vendedores</li><li>Hojas de carga y cierre de cargas</li></ul></div>
+      <div class="card" style="grid-column:span 2"><span class="pill">6 · Mantenimiento</span>
+        <div class="maint" style="background:transparent;border:0;padding:0">
+          <p class="big num">$45<span> / mes</span></p>
+          <div style="display:grid;gap:8px"><p style="color:var(--ink)">A partir del tercer mes: los dos primeros van incluidos en la Fase 1.</p>
+            <ul><li>Servidores en la nube y base de datos siempre activos</li><li>Sincronización en tiempo real: cada vendedor sube y actualiza sus pedidos al instante</li><li>Resguardo y respaldo de la información</li><li>Avisos push, monitoreo y corrección de fallas</li></ul>
+            <p style="font-size:13px">Equivale a $1,50 por día para toda la fuerza de venta, mientras libera unas 4 horas diarias de trabajo en oficina.</p></div>
+        </div></div>
+    </div>
+  </section>
+
+  <section id="futuro">
+    <div class="sec-head"><span class="idx">7 · Fases futuras</span>
+      <h2>Hacia dónde puede crecer</h2>
+      <p class="lead">La Fase 1 se construyó sobre una base preparada para crecer. Las siguientes fases se cotizan por separado cuando la empresa lo decida.</p></div>
+    <div class="roadmap">
+      <div class="phase now"><span class="pill">Fase 1 · Ahora</span><h3>Pedidos y despacho</h3><ul><li>Pedidos en calle</li><li>Cargas y archivo</li><li>Liquidación y vacíos</li></ul></div>
+      <div class="phase"><span class="pill">Fase 2 · A convenir</span><h3>Sistema administrativo y control de campo</h3><ul><li>Cuentas por cobrar por cliente</li><li>Subida de comprobantes e historial de pagos</li><li>Deuda visible para el vendedor en ruta</li><li>Notificaciones de fechas de cobro</li><li>Semáforo de crédito por cliente</li><li>Armado y seguimiento de rutas con GPS para despachadores</li><li>Asignación y seguimiento de visitas a clientes</li><li>Gráficos de ventas por producto, categoría, ruta, despachador y vendedor</li><li>Fechas de vencimiento de productos</li></ul><p>Elimina el cuello de botella actual de cobranza.</p></div>
+      <div class="phase"><span class="pill">Fase 3 · A convenir</span><h3>Venta en oficina</h3><ul><li>Venta directa de contado en oficina</li><li>Cierre de caja automatizado</li></ul></div>
+    </div>
+    <div class="more"><b style="color:var(--olive)">Expansión posible:</b><span class="chip">Contabilidad</span><span class="chip">Guías y reportes SUNAGRO</span><span class="chip">Recursos humanos</span><span class="chip">Nómina y asistencia</span></div>
+  </section>
+
+  <section id="requerimientos">
+    <div class="sec-head"><span class="idx">8 · Requerimientos de la empresa</span>
+      <h2>Lo que necesitamos de ustedes</h2>
+      <p class="lead">La calidad del sistema depende de la calidad de los datos. Con esto cumplimos la entrega del 16 de octubre.</p></div>
+    <ul class="reqs">
+      <li><span><b>Datos actualizados de clientes:</b> nombre, RIF o cédula, dirección, teléfono, ruta y vendedor.</span></li>
+      <li><span><b>Depuración de duplicados:</b> un solo registro por cliente, con RIF y cédula validados.</span></li>
+      <li><span><b>Lista de precios vigente</b> y fotos de los productos que aún no la tienen.</span></li>
+      <li><span><b>Detalles del sistema administrativo actual:</b> nombre, reportes que exporta y su formato.</span></li>
+      <li><span><b>Un responsable en oficina</b> para validar la fase de prueba y recibir la capacitación.</span></li>
+      <li><span><b>Equipos:</b> teléfonos con Chrome o Safari, PC con impresora y plan de datos para los vendedores.</span></li>
+    </ul>
+  </section>
+
+  <section id="siguiente">
+    <div class="sec-head"><span class="idx">Próximos pasos</span><h2>Cómo arrancamos</h2></div>
+    <ol class="steps">
+      <li><b>Aprobación</b>Revisión y firma del contrato.</li>
+      <li><b>Inicial</b>Pago del 60% ($900) por Binance Pay o Zinli.</li>
+      <li><b>Datos</b>Entrega de clientes depurados y precios.</li>
+      <li><b>Prueba y capacitación</b>Instalación en equipos y uso real con el equipo.</li>
+      <li><b>Entrega</b>16 de octubre y pago del 40% ($600).</li>
+    </ol>
+    <div class="cta">
+      <p>El contrato de desarrollo y licencia de uso detalla alcance, pagos, propiedad intelectual y mantenimiento.</p>
+      <a class="btn" href="contrato.html">Ver contrato de desarrollo y licencia →</a>
+    </div>
+  </section>
+
+  <footer>
+    <span class="sig">Daniela Silva</span>
+    <span>Daniela Sofía Silva Nieves · Desarrollo de software y sistemas digitales a la medida · Puerto Ayacucho, Amazonas </span>
+    <a class="weblink" href="https://myweb-opal-seven.vercel.app" target="_blank" rel="noopener">Ver mi sitio web ↗<small>myweb-opal-seven.vercel.app</small></a>
+  </footer>
+</div>
+</html>
