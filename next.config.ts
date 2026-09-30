@@ -7,6 +7,7 @@ const nextConfig: NextConfig = {
     return [
       { source: '/', destination: '/pedidos/index.html', permanent: false },
       { source: '/pedidos', destination: '/pedidos/index.html', permanent: false },
+      { source: '/propuesta', destination: '/propuesta/index.html', permanent: false },
     ];
   },
 };
