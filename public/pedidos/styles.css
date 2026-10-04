@@ -443,5 +443,3 @@ table.liq-grid tr.liq-nov th.parcial, table.liq-grid tr.liq-nov th.pendiente { c
 table.liq-grid tr.liq-nov th.anulada { color: var(--danger); }
 table.liq-grid tr.liq-nov th.entregada { color: #53d68e; }
 table.liq-grid tr.liq-money td { color: var(--accent); }
-table.liq-grid th.lq.vac { color: #53d68e; }
-table.liq-grid td.lq-vac { color: #53d68e; font-weight: 800; }
