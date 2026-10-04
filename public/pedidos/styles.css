@@ -443,3 +443,6 @@ table.liq-grid tr.liq-nov th.parcial, table.liq-grid tr.liq-nov th.pendiente { c
 table.liq-grid tr.liq-nov th.anulada { color: var(--danger); }
 table.liq-grid tr.liq-nov th.entregada { color: #53d68e; }
 table.liq-grid tr.liq-money td { color: var(--accent); }
+table.liq-grid tr.vac-row.k-DESPACHADOS td { border-top: 2px solid #53d68e; }
+table.liq-grid tr.vac-row.k-DEBEN td { color: var(--warn); font-weight: 900; }
+table.liq-vac .select.sm { min-width: 190px; }

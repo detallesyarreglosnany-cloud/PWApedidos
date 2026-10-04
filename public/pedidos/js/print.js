@@ -178,7 +178,7 @@
     const foot = `<tr class="tot"><td>TOTAL (cajas + unidades)</td>${sh.totals.bultos.map((v) => `<td class="num">${nf0.format(v)}</td>`).join('')}<td class="num tot">${nf0.format(sh.totals.bultos.reduce((x, y) => x + y, 0))}</td>${blankR(R - 1)}</tr>
       <tr class="tot money"><td>TOTAL $ POR CLIENTE</td>${sh.totals.monto.map((v) => `<td class="num">${nf2.format(v)}</td>`).join('')}${blankR(R - 1)}<td class="num usd">${nf2.format(sh.totals.usd)}</td></tr>
       ${rate ? `<tr class="tot"><td>TOTAL Bs (tasa ${nf2.format(rate)})</td>${sh.totals.monto.map((v) => `<td class="num">${nf0.format(v * rate)}</td>`).join('')}${blankR(R - 1)}<td class="num usd">${nf0.format(sh.totals.usd * rate)}</td></tr>` : ''}
-      ${sh.vac.map((v) => `<tr class="vacrow"><td>${esc(v.label)}</td>${v.cells.map((x) => `<td class="num">${x === null ? '' : nf0.format(x)}</td>`).join('')}<td class="num tot">${nf0.format(v.total)}</td>${blankR(R - 1)}</tr>`).join('')}`;
+      ${sh.vac.map((v) => `<tr class="vacrow k-${v.key}"><td>${esc(v.label)}</td>${v.cells.map((x) => `<td class="num">${x === null ? '' : nf0.format(x)}</td>`).join('')}<td class="num tot">${nf0.format(v.total)}</td>${blankR(R - 1)}</tr>`).join('')}`;
     const novs = sh.cols.map((c, i) => ({ c, i })).filter(({ c }) => c.entry.result !== 'entregada');
     const done = Liq.isDone(load);
     return `<section class="sheet">
@@ -201,7 +201,8 @@
           ${['ENTREGADO', 'QUEDAN', 'CARGA', 'TOTAL', 'DEBE QUEDAR', 'DEVOLUCIÓN', 'DIFERENCIA', 'MOTIVO', 'LO QUE SOBRA', 'TOTAL $'].map((x) => `<th class="cl rt"><div>${x}</div></th>`).join('')}</tr></thead>
         <tbody>${body}</tbody><tfoot>${foot}</tfoot></table>
       ${novs.length ? `<p class="novs"><b>Novedades:</b> ${novs.map(({ c, i }) => `${i + 1}. ${esc(c.order.clientName)} — ${esc(Liq.shortResult(c.entry).toLowerCase())}${c.entry.result === 'parcial' || c.entry.result === 'anulada' ? ` · nota ${esc(c.order.valeryNote || '—')} anulada` : ''}${c.entry.newValery && c.entry.result === 'parcial' ? ` → nueva ${esc(c.entry.newValery)}` : ''}${c.entry.motivo ? ` · ${esc(c.entry.motivo)}` : ''}`).join(' &nbsp;|&nbsp; ')}</p>` : ''}
-      <p class="muted foot">↩ = devuelto por el cliente · Total = Quedan + Carga · Debe quedar = Total − Entregado · Diferencia = Debe quedar − Devolución.</p>
+      ${st.vac.some((v) => v.pending) ? `<p class="novs"><b>Vacíos que quedan debiendo:</b> ${st.vac.filter((v) => v.pending).map((v) => `${esc(v.client)} — ${v.pending} ${esc(v.code)} (${esc(v.motivo || (v.regime === 'prestamo' ? 'PRÉSTAMO' : 'sin motivo'))})`).join(' &nbsp;|&nbsp; ')}</p>` : ''}
+      <p class="muted foot">↩ = devuelto por el cliente · Total = Quedan + Carga · Debe quedar = Total − Entregado · Diferencia = Debe quedar − Devolución · Vacíos: Despachados − Recibidos − Asignados = Quedan debiendo.</p>
       <div class="sign"><div>Despachador</div><div>Almacén</div><div>Liquidó (oficina)</div><div>Gerencia</div></div>
       </section>`;
   }
@@ -209,7 +210,7 @@
     table.load.liq .ret{display:block;font-size:9px;font-weight:bold;line-height:1} tr.nov td{font-weight:bold}
     table.load.liq th.rt div{height:90px} table.load.liq td.usd{font-weight:900;border-left:2px solid #000}
     tr.nota th{font-size:9px;font-weight:bold;white-space:nowrap} tr.novd th{font-size:8px;line-height:1;white-space:normal;max-width:40px}
-    tr.money td{font-weight:900} .sheet .novs{margin:4px 0 0;font-size:10px}`;
+    tr.money td{font-weight:900} tr.vacrow.k-DESPACHADOS td{border-top:2px solid #000} tr.vacrow.k-DEBEN td{font-weight:900} .sheet .novs{margin:4px 0 0;font-size:10px}`;
 
   function printLiquidation(load, st, ctx) {
     printHTML('Liquidación ' + Loads.loadCode(load), LIQ_CSS, liquidationHTML(load, st, ctx), LETTER_LANDSCAPE);

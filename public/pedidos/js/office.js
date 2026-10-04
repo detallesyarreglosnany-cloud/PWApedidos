@@ -788,15 +788,16 @@
         }).join('')}</tbody></table></div>
       <p class="muted">Anulada = la nota se anula en Valery en este momento. Devolución parcial = se anula la nota y se escribe la nueva de Valery que la reemplaza. «Se entrega después» deja la misma nota y el pedido vuelve a la cola para la próxima hoja.</p>
 
-      ${vac.length ? `<div class="section-title">2 · Vacíos <span class="muted">(prellenado: recibió los que le tocaban)</span></div>
+      ${vac.length ? `<div class="section-title">2 · Vacíos <span class="muted">(prellenado: recibió los que le tocaban · Despachados − Recibidos − Asignados = Quedan debiendo · al cerrar va al kardex)</span></div>
       <div class="card" style="overflow:auto"><table class="inv liq-vac">
-        <thead><tr><th>Cliente</th><th>Envase</th><th class="n">Cajas entregadas</th><th class="n">Asignados</th><th class="n">Vacíos recibidos</th><th class="n">Quedan debiendo</th></tr></thead>
+        <thead><tr><th>Cliente</th><th>Envase</th><th class="n">Despachados</th><th class="n">Vacíos recibidos</th><th class="n">Asignados</th><th class="n">Quedan debiendo</th><th>Motivo</th></tr></thead>
         <tbody>${vac.map((v) => `<tr data-oid="${esc(v.orderId)}" data-pid="${esc(v.pid)}">
           <td><b>${esc(v.client)}</b></td><td>${esc(v.code)} ${esc(v.name)} <span class="muted">${v.regime === 'contraentrega' ? '· contraentrega' : '· préstamo'}</span></td>
           <td class="n">${v.boxes}</td>
-          <td class="n">${v.assign ? `<input class="input qin small" inputmode="numeric" data-v="asg" value="${v.asg === null ? '' : v.asg}" placeholder="—" ${dis}>` : '—'}</td>
           <td class="n"><input class="input qin small" inputmode="numeric" data-v="recv" value="${v.recv}" ${dis}></td>
-          <td class="n ${v.pending ? 'warn-txt' : ''}">${v.pending}</td></tr>`).join('')}</tbody></table></div>` : ''}
+          <td class="n">${v.assign ? `<input class="input qin small" inputmode="numeric" data-v="asg" value="${v.asg === null ? '' : v.asg}" placeholder="—" ${dis}>` : '—'}</td>
+          <td class="n ${v.pending ? 'warn-txt' : ''}">${v.pending}</td>
+          <td>${v.pending ? `<select class="select sm" data-v="motivo" ${dis}><option value="">${v.regime === 'prestamo' ? 'Préstamo' : '— Motivo —'}</option>${Liq.VAC_MOTIVOS.map((m) => `<option ${m === v.motivo ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>` : ''}</td></tr>`).join('')}</tbody></table></div>` : ''}
 
       <div class="section-title">${vac.length ? 3 : 2} · Hoja de liquidación <span class="muted">(lo entregado a cada cliente y el cuadre del camión · CARGA viene de la hoja; corrígela con el cuaderno de almacén)</span></div>
       ${carry ? `<div class="hint">🚚 QUEDAN viene de la liquidación de <b>${esc(carrySrc ? Loads.labelOf(carrySrc) : carry.fromId)}</b> (mismo despachador, marcada «siguiente carga»).</div>` : ''}
@@ -824,7 +825,7 @@
           <tr><td class="sticky-col">TOTAL (cajas + unidades)</td>${sh.totals.bultos.map((v) => `<td class="n">${nf0.format(v)}</td>`).join('')}<td class="n lq-tot">${nf0.format(sh.totals.bultos.reduce((x, y) => x + y, 0))}</td><td colspan="8"></td><td></td></tr>
           <tr class="liq-money"><td class="sticky-col">TOTAL $ POR CLIENTE</td>${sh.totals.monto.map((v) => `<td class="n">${usd(v)}</td>`).join('')}<td colspan="9"></td><td class="n lq-usd">${usd(sh.totals.usd)}</td></tr>
           ${rate ? `<tr><td class="sticky-col">TOTAL Bs (tasa ${nf2.format(rate)})</td>${sh.totals.monto.map((v) => `<td class="n">${nf2.format(v * rate)}</td>`).join('')}<td colspan="9"></td><td class="n lq-usd">${nf2.format(sh.totals.usd * rate)}</td></tr>` : ''}
-          ${sh.vac.map((v) => `<tr class="vac-row"><td class="sticky-col">${esc(v.label)}</td>${v.cells.map((x) => `<td class="n">${x === null ? '' : nf0.format(x)}</td>`).join('')}<td class="n lq-tot">${nf0.format(v.total)}</td><td colspan="9"></td></tr>`).join('')}
+          ${sh.vac.map((v) => `<tr class="vac-row k-${v.key}"><td class="sticky-col">${esc(v.label)}</td>${v.cells.map((x) => `<td class="n">${x === null ? '' : nf0.format(x)}</td>`).join('')}<td class="n lq-tot">${nf0.format(v.total)}</td><td colspan="9"></td></tr>`).join('')}
         </tfoot></table></div>
       <datalist id="liqMot">${Liq.MOTIVOS.map((m) => `<option value="${esc(m)}">`).join('')}</datalist>
       <p class="muted">Total = Quedan + Carga · Debe quedar = Total − Entregado · Diferencia = Debe quedar − Devolución. «Siguiente carga» solo pasa a la próxima hoja del mismo despachador.</p>
@@ -880,7 +881,7 @@
         await saveLiq((q) => {
           const en = { result: 'entregada', ...(q.orders[oid] || {}) };
           en.vac = { ...(en.vac || {}) }; en.vac[pid] = { ...(en.vac[pid] || {}) };
-          if (raw === '') delete en.vac[pid][t.dataset.v]; else en.vac[pid][t.dataset.v] = int(raw);
+          if (raw === '') delete en.vac[pid][t.dataset.v]; else en.vac[pid][t.dataset.v] = t.dataset.v === 'motivo' ? raw : int(raw);
           q.orders[oid] = en;
         });
         return;
@@ -929,7 +930,7 @@
     if (!confirm(`Cerrar la liquidación de ${Loads.labelOf(load)}:\n\n• ${os.length} clientes · entregado ${usd(os.reduce((a, o) => a + Matrix.orderTotals(Liq.delivered(o, liq)).monto, 0))}${pend.length ? `\n• ${pend.length} pedido(s) vuelven a la cola para la próxima hoja` : ''}${nextRows.length ? `\n• ${nextRows.length} producto(s) quedan en el camión para la siguiente carga de ${load.dispatcherName}` : ''}\n\n¿Continuar?`)) return;
     const at = DB.now(), by = (S.config && S.config.adminName) || 'Oficina';
     const vacBy = {};
-    vac.forEach((v) => { (vacBy[v.orderId] = vacBy[v.orderId] || {})[v.pid] = { code: v.code, type: v.type, regime: v.regime, boxes: v.boxes, recv: v.recv, asg: v.asg }; });
+    vac.forEach((v) => { (vacBy[v.orderId] = vacBy[v.orderId] || {})[v.pid] = { code: v.code, type: v.type, regime: v.regime, boxes: v.boxes, recv: v.recv, asg: v.asg, pending: v.pending, motivo: v.motivo || (v.pending && v.regime === 'prestamo' ? 'PRÉSTAMO' : '') }; });
     const updOrders = [], clones = [];
     os.forEach((o) => {
       const e = Liq.entry(liq, o.id), lines = Liq.deliveredLines(o, e);
