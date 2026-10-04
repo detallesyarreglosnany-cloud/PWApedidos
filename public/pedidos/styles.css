@@ -386,7 +386,15 @@ table.grid.sheet-grid td.tot, table.grid.sheet-grid th.tot, table.grid.sheet-gri
 .notif.warn { border-left: 4px solid var(--warn); }
 .notif small { display: block; color: var(--muted); font-size: 11px; }
 
-.credit { text-align: center; font-size: 11px; color: #6f686b; padding: 18px 16px 24px; letter-spacing: .02em; }
+.credit { text-align: center; font-size: 12.65px; color: #6f686b; padding: 18px 16px 24px; letter-spacing: .02em; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 4px 12px; }
+.about-link { background: none; border: 0; padding: 4px 2px; font: inherit; color: var(--muted); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.about-link:hover, .about-link:focus-visible { color: var(--ink); }
+.about { text-align: center; padding: 6px 4px 2px; }
+.about-mark { border-radius: 16px; margin: 4px auto 8px; display: block; }
+.about h3 { margin: 0; font-size: 20px; text-transform: uppercase; letter-spacing: .04em; }
+.about-ver { margin: 2px 0 14px; color: var(--muted); font-size: 13px; }
+.about p { margin: 0 0 10px; line-height: 1.5; }
+.about-legal { font-size: 12.5px; color: var(--muted); text-align: left; }
 .login .credit { padding: 4px 0 0; }
 .order-grid { display: grid; grid-template-columns: minmax(220px, 1fr) 2fr; gap: 16px; }
 @media (max-width: 700px) { .order-grid { grid-template-columns: 1fr; } }

@@ -477,11 +477,31 @@
     return renderLogin();
   }
 
-  /** Créditos del proyecto (editable en Ajustes → Mi perfil). */
+  /** Créditos del proyecto (editable en Ajustes → Mi perfil) y enlace «Acerca de» (todos los roles). */
   function creditFooter() {
     const t = (S.config && S.config.footer) || '';
-    return t ? `<footer class="credit">${esc(t)}</footer>` : '';
+    return `<footer class="credit">${t ? `<span>${esc(t)}</span>` : ''}<button type="button" class="about-link" data-about>Acerca de</button></footer>`;
   }
+
+  /* ============================== Acerca de ============================== */
+  const APP_VERSION = '2026.10';
+  function aboutSheet() {
+    const co = (S.config && S.config.company && S.config.company.name) || 'Distribuidora de Suministros Puerto Venado';
+    openSheet(`
+      <div class="row"><h2 class="grow">Acerca de</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <div class="about">
+        <img class="about-mark" src="./icons/icon-192.png" alt="" width="64" height="64">
+        <h3>Puerto Venado · Pedidos</h3>
+        <p class="about-ver">Versión ${APP_VERSION}</p>
+        <p>Aplicación de toma de pedidos, hojas de carga y despacho de ${esc(co)}.</p>
+        <p><b>Desarrollado por Daniela Silva.</b></p>
+        <p class="about-legal">© 2026 Daniela Silva. Todos los derechos reservados.</p>
+        <p class="about-legal">Este software y su código, diseño, marcas y documentación están protegidos por las leyes de derecho de autor y propiedad intelectual. Se otorga a ${esc(co)} una licencia de uso exclusiva e intransferible. Queda prohibida su reproducción, distribución, modificación, ingeniería inversa o uso no autorizado, total o parcial, sin el consentimiento previo y por escrito de su autora.</p>
+        <p class="about-legal">La información registrada en la aplicación (clientes, productos, pedidos y operaciones) es propiedad de ${esc(co)} y se trata de forma confidencial. Uso exclusivo de personal autorizado: la actividad queda registrada.</p>
+      </div>
+      <div class="actions"><button class="btn btn-primary" data-close>Cerrar</button></div>`);
+  }
+  document.addEventListener('click', (e) => { if (e.target.closest('[data-about]')) aboutSheet(); });
 
   function brandHeader(title, sub, right) {
     return `<header class="topbar">
