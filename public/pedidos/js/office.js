@@ -324,8 +324,11 @@
     const pById = byIdMap(S.products);
     const vacRows = m.rows.some((r) => r.um === 'CJ' && Envases.isReturnable(pById.get(r.productId))) ? Envases.sheetRows(m.cols.map((c) => c.order), pById) : [];
     const vacFoot = vacRows.map((v) => `<tr class="vac-row"><td class="sticky-col">♻ ${esc(v.label)}</td>${v.cells.map((x, i) => {
-      if (v.assign && x !== undefined && editableLoad && Loads.editable(m.cols[i].order)) {
-        return `<td class="n"><input class="cell-in asg-in" inputmode="numeric" value="${x === null ? '' : x}" placeholder="—" data-oid="${esc(m.cols[i].id)}" data-pid="${esc(v.pid)}" title="En blanco = sin decidir · 0 = no se asigna" aria-label="Asignados ${esc(m.cols[i].client)}"></td>`;
+      const ord = m.cols[i].order;
+      if (v.assign && x !== undefined && editableLoad && Loads.editable(ord)) {
+        // Una casilla por producto del grupo que lleva el cliente (102 y COLIC van en la misma fila)
+        const items = v.group.items.filter((it) => (ord.lines || {})[it.pid] && (+ord.lines[it.pid].cajas || 0) > 0);
+        return `<td class="n">${items.map((it) => { const a = Envases.assignedOf(ord, it.pid); return `${items.length > 1 ? `<small class="asg-code">${esc(it.code)}</small>` : ''}<input class="cell-in asg-in" inputmode="numeric" value="${a === null ? '' : a}" placeholder="—" data-oid="${esc(m.cols[i].id)}" data-pid="${esc(it.pid)}" title="En blanco = sin decidir · 0 = no se asigna" aria-label="Asignados ${esc(it.code)} ${esc(m.cols[i].client)}">`; }).join('')}</td>`;
       }
       return `<td class="n ${x ? '' : 'zero'}">${x === undefined ? '' : x === null ? '·' : nf0.format(x)}</td>`;
     }).join('')}<td class="n tot">${nf0.format(v.total)}</td></tr>`).join('');

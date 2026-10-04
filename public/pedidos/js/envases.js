@@ -78,12 +78,20 @@
     return out;
   }
 
-  /** Productos que admiten asignados y aparecen en estos pedidos (filas ASIGNADOS de la hoja). */
+  /**
+   * Productos que admiten asignados y aparecen en estos pedidos, agrupados por
+   * tipo de envase (una sola fila ASIGNADOS 1,25 para 102 y COLIC). Un producto
+   * sin tipo va en su propio grupo.
+   */
   function assignableIn(orders, productsById) {
     const m = new Map();
     orders.forEach((o) => Object.entries(o.lines || {}).forEach(([pid, l]) => {
       const r = info(productsById.get(pid));
-      if (r && r.assign && (+l.cajas || 0) > 0 && !m.has(pid)) m.set(pid, { pid, code: l.code, name: l.name });
+      if (!r || !r.assign || !((+l.cajas || 0) > 0)) return;
+      const key = r.type ? 't:' + r.type : 'p:' + pid;
+      const g = m.get(key) || { key, label: r.type || l.code, pids: [], items: [] };
+      if (!g.pids.includes(pid)) { g.pids.push(pid); g.items.push({ pid, code: l.code, name: l.name }); }
+      m.set(key, g);
     }));
     return [...m.values()];
   }
@@ -97,8 +105,14 @@
     const sum = (a) => a.reduce((x, y) => x + (y || 0), 0);
     const rows = [{ key: 'VACIOS_CLIENTE', label: 'VACÍOS POR CLIENTE', cells: vac.map((v) => v.total) }];
     const asg = assignableIn(orders, productsById);
-    asg.forEach((p) => rows.push({ key: 'ASIGNADOS', pid: p.pid, label: 'ASIGNADOS ' + p.code, assign: true,
-      cells: orders.map((o) => ((o.lines || {})[p.pid] && (+o.lines[p.pid].cajas || 0) > 0 ? assignedOf(o, p.pid) : undefined)) }));
+    asg.forEach((g) => rows.push({ key: 'ASIGNADOS', group: g, label: 'ASIGNADOS ' + g.label, assign: true,
+      // Por cliente: suma de sus productos del grupo · null = ninguno decidido · undefined = no lleva ese envase
+      cells: orders.map((o) => {
+        const mine = g.pids.filter((pid) => (o.lines || {})[pid] && (+o.lines[pid].cajas || 0) > 0);
+        if (!mine.length) return undefined;
+        const vals = mine.map((pid) => assignedOf(o, pid)).filter((v) => v !== null);
+        return vals.length ? vals.reduce((a, b) => a + b, 0) : null;
+      }) }));
     if (vac.some((v) => v.contra)) rows.push({ key: 'A_RECIBIR', label: 'A RECIBIR (contraentrega)', cells: vac.map((v) => v.toReceive) });
     rows.forEach((r) => { r.total = sum(r.cells); });
     return rows;

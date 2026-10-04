@@ -421,3 +421,4 @@ table.grid.sheet-grid td.tot, table.grid.sheet-grid th.tot, table.grid.sheet-gri
 .vac-row td.sticky-col { font-weight: 700; }
 .asg-in { border-color: var(--ok) !important; }
 .vac-ask { border: 1px solid var(--line); border-radius: 12px; padding: 4px 12px 12px; margin-top: 12px; }
+.asg-code { display: block; font-size: 10px; color: var(--muted); line-height: 1; margin-top: 2px; }
