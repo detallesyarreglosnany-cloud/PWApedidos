@@ -63,6 +63,7 @@
     if (!TABS.some(([k]) => k === tab)) tab = 'cargas';
     Object.assign(S.ui.office, { date: U().date || today(), mode: U().mode || 'bultos' });
     autoPack();
+    applyReturnableTemplate();
     const app = document.getElementById('app');
     const waiting = S.loads.filter((l) => !l.deleted && !Loads.isClosed(l)).length;
     app.innerHTML = `
@@ -82,6 +83,24 @@
     const sb = $('#setupImport');
     if (sb) sb.onclick = importStarter;
   };
+
+  /**
+   * Plantilla inicial de envases retornables (Fase 2): marca una sola vez los
+   * productos de la lista que nunca se configuraron. Después todo se edita en
+   * Inventario → producto → «Envase retornable».
+   */
+  let retApplying = false;
+  async function applyReturnableTemplate() {
+    if (retApplying || !S.config || S.config.retTemplate || !S.products.length) return;
+    retApplying = true;
+    try {
+      const r = Envases.applyTemplate(S.products);
+      if (r.docs.length) await saveDocs('products', r.docs);
+      await saveDocs('config', { ...S.config, retTemplate: today(), retMissing: r.missing });
+      await log('retornables', `Plantilla de retornables: ${r.docs.length} productos marcados${r.missing.length ? ' · no están en el catálogo: ' + r.missing.join(', ') : ''}`);
+      if (r.docs.length) toast(`♻ ${r.docs.length} productos marcados como retornables`, 'ok');
+    } finally { retApplying = false; }
+  }
 
   /** Pedidos del mismo cliente el mismo día (mismo u otro vendedor): alerta, no bloquea. */
   function dupIndex() {
@@ -333,7 +352,6 @@
         ${editableLoad ? `<button class="btn ${edit ? 'btn-accent' : ''}" id="dEdit">${edit ? '✓ Terminar edición' : '✎ Editar cantidades'}</button>
           <button class="btn" id="dMerge">⇄ Fusionar con otra hoja</button>` : ''}
         <button class="btn" id="dPrint" title="En la ventana de impresión elige tu impresora o «Guardar como PDF»">🖨 Imprimir / PDF hoja</button>
-        <button class="btn" id="dNotes" title="Original + copia por cliente">🧾 Notas: imprimir / PDF</button>
         <button class="btn" id="dCsv">⇩ Descargar Excel</button>
         <button class="btn" id="dCopy">📋 Copiar para Excel</button>
         ${editableLoad && !os.length ? '<button class="btn btn-danger" id="dDel">Eliminar hoja vacía</button>' : ''}
@@ -344,7 +362,7 @@
         <tbody>${body}</tbody><tfoot>${foot}</tfoot></table></div>` : '<div class="empty card"><strong>Hoja vacía</strong>Mueve clientes aquí con ⇄ desde otra hoja o desde "Clientes en espera".</div>'}
       <div class="section-title">Clientes de la hoja (el orden es el de las columnas) · total ${usd(totalUSD)}</div>
       <div class="card"><table class="inv">
-        <thead><tr><th>#</th><th>Orden</th><th>Cliente</th><th>Vend.</th><th>Bultos</th><th>Unid.</th><th>Monto</th><th>${closed ? 'Nota' : ''}</th><th></th></tr></thead>
+        <thead><tr><th>#</th><th>Orden</th><th>Cliente</th><th>Vend.</th><th>Bultos</th><th>Unid.</th><th>Monto</th><th>Nota Valery</th><th></th></tr></thead>
         <tbody>${os.map((o, i) => { const t = Matrix.orderTotals(o); return `<tr>
           <td>${i + 1}</td>
           <td style="white-space:nowrap">${editableLoad ? `<button class="btn btn-sm" data-left="${i}" ${i ? '' : 'disabled'} aria-label="Mover a la izquierda">←</button><button class="btn btn-sm" data-right="${i}" ${i < os.length - 1 ? '' : 'disabled'} aria-label="Mover a la derecha">→</button>` : ''}</td>
@@ -353,8 +371,8 @@
             ${o.notes ? `<div class="muted">📝 ${esc(o.notes)}</div>` : ''}</td>
           <td><span class="tag">${esc(Loads.initials(o.sellerName))}</span></td>
           <td class="n" data-l="Bultos">${t.bultos}</td><td class="n" data-l="Unid.">${t.totalUnidades}</td><td class="n" data-l="Monto">${usd(t.monto)}</td>
-          <td class="mono">${o.noteNumber ? esc(Loads.noteCode(o.noteNumber)) : ''}</td>
-          <td style="white-space:nowrap">${closed ? `<button class="btn btn-sm" data-note="${esc(o.id)}">🧾</button>` : `<button class="btn btn-sm" data-edit="${esc(o.id)}">${editableLoad ? 'Editar' : 'Ver'}</button>`}
+          <td data-l="Nota Valery"><input class="input sm mono valery-in" inputmode="numeric" maxlength="20" data-oid="${esc(o.id)}" value="${esc(o.valeryNote || '')}" placeholder="N°" aria-label="Nota Valery de ${esc(o.clientName)}"></td>
+          <td style="white-space:nowrap"><button class="btn btn-sm" data-edit="${esc(o.id)}">${editableLoad ? 'Editar' : 'Ver'}</button>
             ${editableLoad ? `<button class="btn btn-sm" data-move="${esc(o.id)}">⇄ Mover</button>
             <button class="btn btn-sm" data-hold="${esc(o.id)}" title="Dejar para otra carga">⏸ Espera</button>` : ''}</td></tr>`; }).join('')}</tbody></table></div>`;
 
@@ -368,7 +386,6 @@
     const ctx = () => ({ config: S.config, usage: Loads.usage(cur(), byIdMap(S.orders), S.config), draft: !cur().number, clientsById: byIdMap(S.clients),
       load: cur(), productRank: productRank(), statusName: stName(cur()) });
     $('#dPrint').onclick = () => Print.printLoadSheet(cur(), Loads.loadOrders(cur(), byIdMap(S.orders)), ctx());
-    $('#dNotes').onclick = () => Print.printNotes(Loads.loadOrders(cur(), byIdMap(S.orders)), ctx());
     $('#dCsv').onclick = () => saveFile(`hoja_${Loads.labelOf(cur())}_${cur().date || today()}.csv`, '\uFEFF' + Matrix.toDelimited(m, { sep: S.settings.csvSep, decimal: S.settings.csvDecimal }), 'text/csv;charset=utf-8');
     $('#dCopy').onclick = async () => {
       const ok = await copyText(Matrix.toDelimited(m, { sep: '\t', decimal: S.settings.csvDecimal }));
@@ -386,7 +403,6 @@
     const dm = $('#dMerge'); if (dm) dm.onclick = () => mergeDialog(cur(), refresh);
     const dd = $('#dDel'); if (dd) dd.onclick = async () => { await saveDocs('loads', { ...cur(), deleted: true }); U().loadId = null; PV.render(); };
     root.onclick = async (e) => {
-      const n = e.target.closest('[data-note]'); if (n) { Print.printNotes([orderById(n.dataset.note)], ctx()); return; }
       const ed = e.target.closest('[data-edit]'); if (ed) { orderEditor(orderById(ed.dataset.edit), refresh); return; }
       const mv = e.target.closest('[data-move]'); if (mv) { moveDialog(orderById(mv.dataset.move), cur(), () => { if (!S.loads.find((x) => x.id === load.id)) { U().loadId = null; PV.render(); } else refresh(); }); return; }
       const lr = e.target.closest('[data-left],[data-right]');
@@ -408,6 +424,16 @@
       }
     };
     root.onchange = async (e) => {
+      const vi = e.target.closest('.valery-in');
+      if (vi) {
+        const o = orderById(vi.dataset.oid), v = vi.value.replace(/\s+/g, '').toUpperCase();
+        if (!o || (o.valeryNote || '') === v) return;
+        await saveOrder({ ...o, valeryNote: v });
+        const dup = v && S.orders.find((x) => x.id !== o.id && !x.deleted && x.valeryNote === v);
+        toast(dup ? `Ojo: la nota ${v} también está en ${dup.clientName}` : (v ? `Nota ${v} guardada · ${o.clientName}` : 'Nota borrada'), dup ? 'err' : 'ok');
+        PV.logEvent('nota_valery', `Nota Valery ${v || '(borrada)'} para ${o.clientName} (${o.sellerName})`, { orderId: o.id, clientName: o.clientName }, { onceKey: 'val:' + o.id, everyMin: 1 });
+        return;
+      }
       const inp = e.target.closest('.cell-in'); if (!inp) return;
       const key = [inp.dataset.oid, inp.dataset.pid, inp.dataset.kind].join('|');
       await setLineQty(orderById(inp.dataset.oid), inp.dataset.pid, inp.dataset.kind, int(inp.value));
@@ -447,7 +473,7 @@
     if (closing) {
       if (!load.dispatcherId) { toast('Selecciona el despachador antes de cerrar la carga', 'err'); return back(); }
       const fecha = load.date || today();
-      if (!confirm(`${st.name}: se numeran las notas de entrega, se descuenta el inventario y la hoja pasa al Archivo.\n\nFecha de la carga: ${fecha}${u.over ? `\n\n⚠ Supera el tope (${u.used}/${u.limit} ${u.measure}, ${u.clients}/${u.maxClients} clientes).` : ''}\n\n¿Continuar?`)) return back();
+      if (!confirm(`${st.name}: se descuenta el inventario y la hoja pasa al Archivo.\n\nFecha de la carga: ${fecha}${u.over ? `\n\n⚠ Supera el tope (${u.used}/${u.limit} ${u.measure}, ${u.clients}/${u.maxClients} clientes).` : ''}\n\n¿Continuar?`)) return back();
     } else if (!st.closing && Loads.isClosed(load)) {
       if (!confirm(`Reabrir la carga como "${st.name}": el inventario descontado se devuelve y los pedidos ${st.locked ? 'siguen bloqueados' : 'se podrán editar de nuevo'}. Los números de carga y notas se conservan. ¿Continuar?`)) return back();
     } else if (st.locked && !cur.locked) {
@@ -467,19 +493,17 @@
     await saveDocs('products', r.products);
     await saveDocs('loads', r.load);
     U().editQty = false;
-    await log('carga_estado', `Hoja ${Loads.labelOf(r.load)} (${r.load.sellerName}) → ${st.name}${r.load.number ? ' · ' + Loads.loadCode(r.load) : ''}${closing ? ` · notas ${Loads.noteCode(r.load.firstNote)} a ${Loads.noteCode(r.load.lastNote)}` : ''}`, { loadId: r.load.id });
+    await log('carga_estado', `Hoja ${Loads.labelOf(r.load)} (${r.load.sellerName}) → ${st.name}${r.load.number ? ' · ' + Loads.loadCode(r.load) : ''}`, { loadId: r.load.id });
     toast(`Estado: ${st.name}`, 'ok');
     if (closing) {
       back();
       const sh = openSheet(`<h2>✓ ${esc(Loads.labelOf(r.load))} · ${esc(Loads.loadCode(r.load))}</h2>
-        <p>${esc(st.name)} · fecha ${esc(r.load.date)} · notas ${esc(Loads.noteCode(r.load.firstNote))} a ${esc(Loads.noteCode(r.load.lastNote))}.</p>
+        <p>${esc(st.name)} · fecha ${esc(r.load.date)}. Anota el número de nota Valery de cada cliente en la lista de la hoja.</p>
         <div class="actions" style="flex-direction:column">
           <button class="btn btn-primary" id="pSheet">🖨 Imprimir hoja de carga</button>
-          <button class="btn" id="pNotes">🧾 Imprimir notas de entrega (original + copia)</button>
           <button class="btn" data-close>Listo</button></div>`);
       const ctx = { config: S.config, usage: Loads.usage(r.load, byIdMap(S.orders), S.config), clientsById: byIdMap(S.clients), load: r.load, productRank: productRank(), statusName: st.name };
       $('#pSheet', sh.el).onclick = () => Print.printLoadSheet(r.load, r.orders, ctx);
-      $('#pNotes', sh.el).onclick = () => Print.printNotes(r.orders, ctx);
     } else back();
     PV.runSync(false);
   }
@@ -633,13 +657,13 @@
         <div class="kpi"><small>Venta despachada</small><b>${usd(sum.m)}</b></div>
       </div>
       ${list.length ? `<div class="card" style="overflow:auto"><table class="inv">
-        <thead><tr><th>Código</th><th>Fecha</th><th>Estado</th><th>Vendedor(es)</th><th>Ruta</th><th>Despachador</th><th>Clientes</th><th>Bultos</th><th>Unid.</th><th>Monto</th><th>Notas</th><th></th></tr></thead>
+        <thead><tr><th>Código</th><th>Fecha</th><th>Estado</th><th>Vendedor(es)</th><th>Ruta</th><th>Despachador</th><th>Clientes</th><th>Bultos</th><th>Unid.</th><th>Monto</th><th></th></tr></thead>
         <tbody>${list.map((l) => { const t = l.totals || {}; return `<tr>
           <td><b class="mono">${esc(Loads.labelOf(l))}</b><div class="muted mono">${esc(Loads.loadCode(l))}</div></td><td data-l="Fecha">${esc(dateOf(l))}</td>
           <td data-l="Estado"><span class="status aprobada">${esc(stName(l))}</span></td>
           <td data-l="Vendedor">${esc(l.sellerName)}</td><td data-l="Ruta">${esc(l.route || '')}</td><td data-l="Despachador">${esc(l.dispatcherName || '')}</td>
           <td class="n" data-l="Clientes">${t.clients || 0}</td><td class="n" data-l="Bultos">${nf0.format(t.bultos || 0)}</td><td class="n" data-l="Unid.">${nf0.format(t.totalUnidades || 0)}</td>
-          <td class="n" data-l="Monto">${usd(t.monto)}</td><td class="mono" data-l="Notas">${l.firstNote ? esc(Loads.noteCode(l.firstNote) + '–' + Loads.noteCode(l.lastNote)) : ''}</td>
+          <td class="n" data-l="Monto">${usd(t.monto)}</td>
           <td style="white-space:nowrap"><button class="btn btn-sm" data-view="${esc(l.id)}">Ver</button></td></tr>`; }).join('')}</tbody></table></div>`
       : '<div class="empty card"><strong>Sin cargas cerradas</strong>con esos filtros.</div>'}`;
     $('#aFilters').onchange = (e) => { const k = e.target.dataset.f; if (k) { f[k] = e.target.value; renderArchive(root); } };
@@ -648,8 +672,8 @@
       const sep = S.settings.csvSep, d = S.settings.csvDecimal;
       const n = (v) => { const s = Number(v || 0).toFixed(2); return d === ',' ? s.replace('.', ',') : s; };
       const q = (v) => { let s = String(v == null ? '' : v); if (/^[=+\-@]/.test(s)) s = "'" + s; return s.includes(sep) || s.includes('"') ? '"' + s.replace(/"/g, '""') + '"' : s; };
-      const rows = [['CODIGO', 'CARGA', 'FECHA', 'ESTADO', 'VENDEDORES', 'RUTA', 'DESPACHADOR', 'CLIENTES', 'CAJAS', 'UNID_SUELTAS', 'BULTOS', 'TOTAL_UNIDADES', 'MONTO_USD', 'NOTA_DESDE', 'NOTA_HASTA'].join(sep)];
-      list.forEach((l) => { const t = l.totals || {}; rows.push([q(Loads.labelOf(l)), Loads.loadCode(l), dateOf(l), q(stName(l)), q(l.sellerName), q(l.route), q(l.dispatcherName), t.clients || 0, t.cajas || 0, t.unidades || 0, t.bultos || 0, t.totalUnidades || 0, n(t.monto), l.firstNote ? Loads.noteCode(l.firstNote) : '', l.lastNote ? Loads.noteCode(l.lastNote) : ''].join(sep)); });
+      const rows = [['CODIGO', 'CARGA', 'FECHA', 'ESTADO', 'VENDEDORES', 'RUTA', 'DESPACHADOR', 'CLIENTES', 'CAJAS', 'UNID_SUELTAS', 'BULTOS', 'TOTAL_UNIDADES', 'MONTO_USD'].join(sep)];
+      list.forEach((l) => { const t = l.totals || {}; rows.push([q(Loads.labelOf(l)), Loads.loadCode(l), dateOf(l), q(stName(l)), q(l.sellerName), q(l.route), q(l.dispatcherName), t.clients || 0, t.cajas || 0, t.unidades || 0, t.bultos || 0, t.totalUnidades || 0, n(t.monto)].join(sep)); });
       saveFile('archivo_cargas_' + today() + '.csv', '\uFEFF' + rows.join('\r\n'), 'text/csv;charset=utf-8');
     };
   }
@@ -658,9 +682,11 @@
 
   /* ============================= INVENTARIO ============================= */
   function renderInventory(root) {
-    const q = U().invQ || '', cat = U().invCat || '';
+    const q = U().invQ || '', cat = U().invCat || '', onlyRet = U().invRet === '1';
     const tokens = norm(q).split(' ').filter(Boolean);
-    const rows = S.products.filter((p) => (!cat || p.category === cat) &&
+    const retCount = S.products.filter((p) => Envases.isReturnable(p)).length;
+    const missing = (S.config.retMissing || []).filter((c) => !S.products.some((p) => Envases.isReturnable(p) && (Envases.normCode(p.code) === c || Envases.normCode(p.unitCode) === c)));
+    const rows = S.products.filter((p) => (!cat || p.category === cat) && (!onlyRet || Envases.isReturnable(p)) &&
       tokens.every((t) => norm(p.code + ' ' + (p.unitCode || '') + ' ' + p.name + ' ' + p.presentation + ' ' + (p.brand || '')).includes(t)))
       .sort(PV.productSort());
     const noPhoto = S.products.filter((p) => !p.image).length;
@@ -669,19 +695,21 @@
         <label class="field grow"><span>Buscar</span><input id="iq" class="input" type="search" value="${esc(q)}" placeholder="Código, nombre, marca o gramaje"></label>
         <label class="field"><span>Rubro</span><select id="icat" class="select"><option value="">Todos</option>
           ${rubros().map((c) => `<option ${c === cat ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></label>
+        <label class="field"><span>Envase</span><select id="iret" class="select"><option value="">Todos</option><option value="1" ${onlyRet ? 'selected' : ''}>♻ Solo retornables (${retCount})</option></select></label>
         <button class="btn btn-primary" id="iNew">＋ Nuevo</button>
         <button class="btn" id="iImp">⇧ Importar Excel/CSV</button>
         <button class="btn" id="iExp">⇩ Exportar</button>
         <button class="btn" id="iPhotos">📷 Fotos en lote</button>
         <button class="btn" id="iOrder">↕ Ordenar catálogo</button>
       </div>
+      ${onlyRet && missing.length ? `<div class="hint warn">Códigos de la lista de retornables que no están en el catálogo: <b>${esc(missing.join(', '))}</b>. Corrige el código del producto y márcalo en «Envase retornable».</div>` : ''}
       <p class="muted">${S.products.length} productos · ${rows.length} mostrados · ${noPhoto} sin foto${S.config.priceListDate ? ' · lista de precios del ' + esc(S.config.priceListDate) : ''}. Los cambios de precio, stock u orden se guardan al salir de la casilla y llegan a los teléfonos al sincronizar.</p>
       <div class="card" style="overflow:auto"><table class="inv inv-edit">
         <thead><tr><th></th><th>Código</th><th>Producto</th><th>Rubro</th><th>Venta</th><th>$ Caja</th><th>$ Unidad</th><th>Stock</th><th>Orden</th><th></th></tr></thead>
         <tbody>${rows.map((p) => `
           <tr class="${p.active ? '' : 'inactive'}" data-row="${esc(p.id)}">
             <td class="thumb">${p.image ? `<img src="${esc(p.image)}" alt="">` : `<span>${PV.rubroIcon(p.category)}</span>`}</td>
-            <td class="mono" data-l="Código">${esc(p.code)}${p.unitCode ? `<div class="muted">UN: ${esc(p.unitCode)}</div>` : ''}</td>
+            <td class="mono" data-l="Código">${esc(p.code)}${p.unitCode ? `<div class="muted">UN: ${esc(p.unitCode)}</div>` : ''}${Envases.isReturnable(p) ? `<div class="ret-tag">${esc(Envases.label(p))}</div>` : ''}</td>
             <td><b>${esc(p.name)}</b><div class="muted">${esc(p.presentation)}${p.brand ? ' · ' + esc(p.brand) : ''}${p.unitsPerBox > 1 ? ' · caja x' + p.unitsPerBox : ''}</div></td>
             <td data-l="Rubro">${esc(p.category)}${p.subgroup ? `<div class="muted">${esc(p.subgroup)}</div>` : ''}</td>
             <td data-l="Venta"><span class="sell ${p.sellBy}">${{ caja: 'Caja', unidad: 'Unidad', ambos: 'Caja + Unid.' }[p.sellBy]}</span></td>
@@ -694,6 +722,7 @@
     let t;
     $('#iq').oninput = (e) => { clearTimeout(t); t = setTimeout(() => { U().invQ = e.target.value; renderInventory(root); const i = $('#iq'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 250); };
     $('#icat').onchange = (e) => { U().invCat = e.target.value; renderInventory(root); };
+    $('#iret').onchange = (e) => { U().invRet = e.target.value; renderInventory(root); };
     $('#iNew').onclick = () => productForm(null, root);
     $('#iExp').onclick = () => saveFile('catalogo_' + today() + '.csv', '\uFEFF' + catalogCSV(), 'text/csv;charset=utf-8');
     $('#iImp').onclick = () => importDialog('products', root);
@@ -792,6 +821,7 @@
     p = p || { code: '', unitCode: '', name: '', presentation: '', category: rubros()[0] || '', subgroup: '', brand: '',
       unitsPerBox: 1, unitPrice: 0, boxPrice: 0, sellBy: 'caja', stock: null, sort: 0, active: true, image: '' };
     let image = p.image || '';
+    const ret = Envases.info(p);
     const upb = +p.unitsPerBox || 1;
     const stockCj = hasStock(p) ? (p.sellBy === 'unidad' ? 0 : Math.floor(Math.max(0, p.stock) / upb)) : '';
     const stockUn = hasStock(p) ? (p.sellBy === 'unidad' ? p.stock : (p.stock < 0 ? p.stock : p.stock % upb)) : '';
@@ -828,12 +858,29 @@
         </div>
         <p class="muted" style="margin:0">Deja el stock vacío si no quieres controlar inventario de este producto.</p>
         <label class="row"><input type="checkbox" name="active" ${p.active ? 'checked' : ''} style="width:24px;height:24px"> Activo (visible para los vendedores)</label>
+        <fieldset class="ret-box">
+          <legend>♻ Envase retornable</legend>
+          <label class="row"><input type="checkbox" name="retOn" ${ret ? 'checked' : ''} style="width:24px;height:24px"> Es de envase retornable: entra en el control de vacíos (hoja de carga, kardex y reportes)</label>
+          <div class="grid3" id="retFields">
+            <label class="field"><span>Tipo de envase</span><input name="retType" class="input" list="retTypes" maxlength="20" value="${esc(ret ? ret.type : '')}" placeholder="350, 1,25… (vacío = va aparte)"></label>
+            <label class="field"><span>Régimen</span><select name="retRegime" class="select">
+              <option value="prestamo" ${!ret || ret.regime !== 'contraentrega' ? 'selected' : ''}>Préstamo: puede devolverlo después</option>
+              <option value="contraentrega" ${ret && ret.regime === 'contraentrega' ? 'selected' : ''}>Contraentrega: vacío obligatorio al entregar</option></select></label>
+            <label class="field"><span>Vacíos asignados</span><select name="retAssign" class="select">
+              <option value="0" ${ret && ret.assign ? '' : 'selected'}>No admite</option>
+              <option value="1" ${ret && ret.assign ? 'selected' : ''}>Admite asignados</option></select></label>
+          </div>
+          <datalist id="retTypes">${[...new Set(S.products.filter((x) => Envases.isReturnable(x) && x.ret.type).map((x) => x.ret.type))].map((t) => `<option value="${esc(t)}">`).join('')}</datalist>
+          <p class="muted" style="margin:6px 0 0">Los productos con el mismo tipo se suman en un subtotal en los reportes de vacíos; cada código conserva su propio saldo.</p>
+        </fieldset>
         <div class="actions">
           <button class="btn btn-primary" type="submit">Guardar</button>
           ${isNew ? '' : '<button class="btn btn-danger" type="button" id="pDel">Eliminar</button>'}
         </div>
       </form>`, { wide: true });
     const form = $('#pf', sh.el);
+    const syncRet = () => { $('#retFields', sh.el).style.opacity = form.retOn.checked ? '1' : '.45'; [form.retType, form.retRegime, form.retAssign].forEach((el) => { el.disabled = !form.retOn.checked; }); };
+    form.retOn.onchange = syncRet; syncRet();
     const setImg = (src) => { image = src; $('#pfImg', sh.el).innerHTML = src ? `<img src="${esc(src)}" alt="">` : PV.rubroIcon(form.category.value); };
     $('#pfPhoto', sh.el).onclick = async () => {
       const f = await pickFile('image/*'); if (!f) return;
@@ -856,6 +903,7 @@
         unitPrice: sellBy === 'caja' ? 0 : Matrix.r2(dec(form.unitPrice.value)),
         stock: cj === '' && un === '' ? null : int(cj) * u + int(un),
         active: form.active.checked, image, deleted: false,
+        ret: form.retOn.checked ? { type: form.retType.value.trim().toUpperCase(), regime: form.retRegime.value, assign: form.retAssign.value === '1' } : false,
       };
       if (doc.boxPrice < 0 || doc.unitPrice < 0) { toast('Los precios no pueden ser negativos', 'err'); return; }
       if (S.products.some((x) => x.id === doc.id && x.id !== p.id)) doc.id = DB.uid('p');
@@ -1083,7 +1131,7 @@
     pedido_nuevo: 'Abrió pedido', pedido_enviado: 'Envió pedido', pedido_reabierto: 'Reabrió pedido', pedido_modificado: 'Modificó pedido',
     pedido_eliminado: 'Eliminó pedido', espera: 'Puso en espera', reincorporado: 'Reincorporó', movido: 'Movió de hoja',
     pedido_editado_oficina: 'Ajuste de oficina', carga_estado: 'Estado de hoja', cliente_reasignado: 'Reasignó cliente', respaldo: 'Respaldo',
-    datos_borrados: 'Datos borrados por el navegador',
+    datos_borrados: 'Datos borrados por el navegador', nota_valery: 'Nota Valery', retornables: 'Retornables',
   };
   async function renderHistory(root) {
     const f = U().hist || (U().hist = { day: today(), who: '', type: '' });
@@ -1238,7 +1286,7 @@
 
         <section class="card card-pad"><h3>Estados de la carga</h3>
           <p class="muted">Tú defines los estados y su orden. <b>🔒 Bloquea</b>: desde ese estado vendedores y oficina ya no pueden editar los pedidos.
-            <b>Cierra la carga</b>: numera las notas de entrega, descuenta el inventario, fija la fecha de la carga y la pasa al Archivo.</p>
+            <b>Cierra la carga</b>: descuenta el inventario, fija la fecha de la carga y la pasa al Archivo.</p>
           <div class="list-edit" id="stEd">${Loads.statuses(c).map((x, i, arr) => `<div class="row wrap st-row" data-i="${i}">
             <input class="input grow" data-st="name" value="${esc(x.name)}" maxlength="40">
             <label class="chip-check"><input type="checkbox" data-st="locked" ${x.locked ? 'checked' : ''}> 🔒 Bloquea</label>
@@ -1376,7 +1424,7 @@
         <table class="inv" style="margin-top:8px"><thead><tr><th>Tipo</th><th>Guardados</th><th>Eliminados</th><th>Último cambio</th></tr></thead><tbody>
         ${d.kinds.map((k) => `<tr><td>${esc(KIND_LABEL[k.kind] || k.kind)}</td><td class="n">${nf0.format(k.total)}</td><td class="n">${nf0.format(k.deleted)}</td><td>${k.last ? esc(new Date(k.last).toLocaleString('es-VE')) : ''}</td></tr>`).join('')}
         </tbody></table>
-        <div style="margin-top:6px">Última carga numerada: <b>${d.counters.load ? esc(Loads.loadCode(d.counters.load)) : '—'}</b> · última nota: <b>${d.counters.note ? esc(Loads.noteCode(d.counters.note)) : '—'}</b></div>`;
+        <div style="margin-top:6px">Última carga numerada: <b>${d.counters.load ? esc(Loads.loadCode(d.counters.load)) : '—'}</b></div>`;
     };
     $('#hBackup').onclick = async () => {
       const out = $('#hOut'); out.textContent = 'Descargando respaldo…';

@@ -47,7 +47,7 @@ const ADMIN_KINDS: readonly string[] = ['products', 'sellers', 'loads', 'config'
 type Kind = (typeof KINDS)[number];
 // Campos de un pedido que controla la oficina: un teléfono nunca los pisa
 // (aunque su copia local esté atrasada y no sepa que el pedido ya está en una hoja).
-const OFFICE_ORDER_FIELDS = ['loadId', 'locked', 'loadStatusName', 'noteNumber', 'loadNumber', 'dispatchedAt', 'officeEdited', 'heldAt'];
+const OFFICE_ORDER_FIELDS = ['loadId', 'locked', 'loadStatusName', 'noteNumber', 'loadNumber', 'dispatchedAt', 'officeEdited', 'heldAt', 'valeryNote'];
 const OFFICE_ORDER_STATUS: readonly string[] = ['en_carga', 'en_espera', 'despachado'];
 // Solo se guardan en el equipo: el servidor calcula dupWith en cada bajada
 const LOCAL_ONLY_FIELDS = ['dirty', 'dupWith'];
@@ -231,7 +231,8 @@ function orderNotice(cur: Record<string, unknown> | null, doc: Record<string, un
   if (!cur || !sid) return null;
   if (doc.deleted && !cur.deleted) return seller('🗑 Pedido eliminado por oficina', client, 'del');
   if (doc.status === 'despachado' && cur.status !== 'despachado') {
-    const nota = doc.noteNumber ? ` · Nota NE-${String(doc.noteNumber).padStart(6, '0')}` : '';
+    // Las notas oficiales son las de Valery (las internas NE no se muestran)
+    const nota = doc.valeryNote ? ` · Nota ${String(doc.valeryNote)}` : '';
     return seller('🚚 Pedido despachado', client + nota, 'desp');
   }
   if (doc.status === 'en_espera' && cur.status !== 'en_espera') return seller('⏸ Pedido en espera', `${client}: la oficina lo dejó para otra carga`, 'esp');

@@ -108,7 +108,6 @@
         <div><b>Vendedor(es)</b>${esc(load.sellerName)}</div>
         <div><b>Estado</b>${esc(ctx.statusName || '')}</div>
         <div><b>Clientes · ${u.measure === 'unidades' ? 'Unidades' : 'Bultos'}</b>${m.cols.length} / ${u.maxClients} · ${nf0.format(u.used)} / ${nf0.format(u.limit)}</div>
-        <div><b>Notas de entrega</b>${load.firstNote ? esc(Loads.noteCode(load.firstNote) + ' a ' + Loads.noteCode(load.lastNote)) : '—'}</div>
       </div>
       <table class="load ${m.cols.length > 14 ? 'many' : ''}"><thead>
         <tr class="ini"><th style="text-align:right">VENDEDOR →</th>${m.cols.map((c) => `<th>${esc(Loads.initials(c.order.sellerName))}</th>`).join('')}<th></th>${extra.map(() => '<th></th>').join('')}</tr>

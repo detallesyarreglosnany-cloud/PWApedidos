@@ -340,7 +340,7 @@
       }
       if (o.sellerId !== sid || !p) return;
       if (o.deleted && !p.deleted) add('borrado', o, `La oficina eliminó el pedido de ${o.clientName}`, true);
-      else if (o.status === 'despachado' && p.status !== 'despachado') add('despachado', o, `${o.clientName}${o.noteNumber ? ' · Nota ' + Loads.noteCode(o.noteNumber) : ''}`);
+      else if (o.status === 'despachado' && p.status !== 'despachado') add('despachado', o, `${o.clientName}${o.valeryNote ? ' · Nota ' + o.valeryNote : ''}`);
       else if (o.status === 'en_espera' && p.status !== 'en_espera') add('espera', o, `${o.clientName}: la oficina lo dejó para otra carga`, true);
       else if (o.locked === true && p.locked !== true) add('aprobado', o, `${o.clientName} · ${o.loadStatusName || 'Aprobado para carga'}`);
       else if (o.officeEdited && o.officeEdited !== p.officeEdited) add('ajustado', o, `La oficina ajustó las cantidades de ${o.clientName}`, true);
@@ -955,7 +955,7 @@
     const orderRow = (o) => {
       const t = Matrix.orderTotals(o), l = loadOf(o), g = groupOf(o);
       return `<tr data-myo="${esc(o.id)}" style="cursor:pointer">
-        <td><b>${esc(o.clientName)}</b><div class="muted" style="font-size:12px">${esc(fmtDate(o.routeDate))}${l ? ' · ' + esc(Loads.labelOf(l)) + (l.number ? ' · ' + esc(Loads.loadCode(l)) : '') : ''}${o.noteNumber ? ' · ' + esc(Loads.noteCode(o.noteNumber)) : ''}</div>
+        <td><b>${esc(o.clientName)}</b><div class="muted" style="font-size:12px">${esc(fmtDate(o.routeDate))}${l ? ' · ' + esc(Loads.labelOf(l)) + (l.number ? ' · ' + esc(Loads.loadCode(l)) : '') : ''}${o.valeryNote ? ' · Nota ' + esc(o.valeryNote) : ''}</div>
           <span class="status ${g === 'aprobados' ? 'en_carga' : o.status}">${esc(GROUP_TEXT[g])}</span>${o.officeEdited ? ' <span class="status en_espera">ajustado por oficina</span>' : ''}</td>
         <td class="n" data-l="Monto">${usd(t.monto)}</td></tr>`;
     };
@@ -981,7 +981,7 @@
             return `<div class="card card-pad" style="margin-bottom:10px">
               <div class="row"><h3 class="grow" style="margin:0">${esc(Loads.labelOf(l))} ${l.number ? '<span class="mono muted">' + esc(Loads.loadCode(l)) + '</span>' : ''}</h3>
                 <span class="status ${st.locked ? 'en_carga' : 'enviado'}">${st.locked ? '🔒 ' : ''}${esc(st.name)}</span></div>
-              <div class="muted" style="margin:4px 0 8px">📅 ${esc(fmtDate(l.date || String(l.closedAt || l.createdAt).slice(0, 10)))} · Ruta ${esc(l.route || '—')} · Despachador: <b>${esc(l.dispatcherName || 'sin asignar')}</b>${l.firstNote ? ' · Notas ' + esc(Loads.noteCode(l.firstNote)) + ' a ' + esc(Loads.noteCode(l.lastNote)) : ''}</div>
+              <div class="muted" style="margin:4px 0 8px">📅 ${esc(fmtDate(l.date || String(l.closedAt || l.createdAt).slice(0, 10)))} · Ruta ${esc(l.route || '—')} · Despachador: <b>${esc(l.dispatcherName || 'sin asignar')}</b></div>
               ${os.length ? `<table class="inv"><tbody>${os.map(orderRow).join('')}</tbody></table>
                 <div class="row" style="justify-content:flex-end;margin-top:6px"><b>Tus clientes en esta hoja: ${os.length} · ${usd(sum(os))}</b></div>`
                 : '<p class="muted">Tus pedidos ya no están en esta hoja (se movieron o quedaron en espera).</p>'}
@@ -1018,7 +1018,7 @@
       ['Estado de la hoja', l ? Loads.statusOf(l, S.config).name : '—'],
       ['Despachador', (l && l.dispatcherName) || '—'],
       ['Fecha de carga', l && (l.date || l.closedAt) ? fmtDate(l.date || String(l.closedAt).slice(0, 10)) : '—'],
-      ['Nota de entrega', o.noteNumber ? Loads.noteCode(o.noteNumber) : '—'],
+      ['Nota de entrega', o.valeryNote || '—'],
     ];
     openSheet(`
       <div class="row"><h2 class="grow">${esc(o.clientName)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
