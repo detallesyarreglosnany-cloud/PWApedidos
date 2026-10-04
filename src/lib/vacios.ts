@@ -34,10 +34,14 @@ type OrderDoc = {
 const n0 = (v: unknown) => Math.max(0, Math.round(Number(v) || 0));
 const day = (s: unknown) => (typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : new Date().toISOString().slice(0, 10));
 
-/** Renglones que corresponden al estado actual del pedido (vacío si no está liquidado). */
-export function desiredMovs(o: OrderDoc): VacMov[] {
+/**
+ * Renglones que corresponden al estado actual del pedido. Solo cuenta lo
+ * LIQUIDADO: la hoja tiene su liquidación cerrada y este pedido trae lo que se
+ * entregó en ESE cierre (con devoluciones, anulaciones y pendientes ya aplicados).
+ */
+export function desiredMovs(o: OrderDoc, closedLoads: Map<string, string>): VacMov[] {
   const d = o.delivery;
-  if (!d || o.deleted || !d.at || !d.vac) return [];
+  if (!d || o.deleted || !d.at || !d.vac || !d.loadId || closedLoads.get(d.loadId) !== d.at) return [];
   const out: VacMov[] = [];
   for (const [pid, v] of Object.entries(d.vac)) {
     const base = {
@@ -68,6 +72,30 @@ async function insertMovs(rows: VacMov[]) {
   return n;
 }
 
+/** Hojas con la liquidación CERRADA → hora del cierre (la misma que lleva order.delivery.at). */
+async function closedLiquidations(loadIds: string[]) {
+  const out = new Map<string, string>();
+  const ids = [...new Set(loadIds)];
+  for (let i = 0; i < ids.length; i += 300) {
+    const rows = await db.distDoc.findMany({ where: { kind: 'loads', id: { in: ids.slice(i, i + 300) } }, select: { id: true, data: true } });
+    for (const r of rows) {
+      const l = JSON.parse(r.data) as { deleted?: boolean; liq?: { status?: string; closedAt?: string } | null };
+      if (!l.deleted && l.liq && l.liq.status === 'cerrada' && l.liq.closedAt) out.set(r.id, l.liq.closedAt);
+    }
+  }
+  return out;
+}
+
+/** Pedidos de estas hojas (la hoja llegó al servidor: su liquidación se abrió o se cerró). */
+export async function ordersOfLoads(loadIds: string[]) {
+  const out: OrderDoc[] = [];
+  for (const id of loadIds) {
+    const rows = await db.distDoc.findMany({ where: { kind: 'orders', data: { contains: `"loadId":${JSON.stringify(id)}` } }, select: { data: true } });
+    out.push(...rows.map((r) => JSON.parse(r.data) as OrderDoc));
+  }
+  return out;
+}
+
 let ensured: Promise<void> | null = null;
 /** Disparador que impide editar o borrar renglones (una vez por proceso). */
 export function ensureKardex() {
@@ -96,7 +124,8 @@ export async function syncKardexForOrders(orders: OrderDoc[]) {
   const existing = await db.$queryRaw<VacMov[]>`SELECT * FROM "DistVacMov" WHERE "orderId" IN (${Prisma.join(ids)})`;
   const reversed = new Set(existing.filter((m) => m.kind === 'reverso' && m.refId).map((m) => m.refId as string));
   const have = new Set(existing.map((m) => m.id));
-  const want = orders.flatMap(desiredMovs);
+  const closed = await closedLiquidations(orders.map((o) => o.delivery?.loadId).filter((x): x is string => !!x));
+  const want = orders.flatMap((o) => desiredMovs(o, closed));
   const wantIds = new Set(want.map((m) => m.id));
   const toAdd = want.filter((m) => !have.has(m.id));
   const now = new Date().toISOString().slice(0, 10);
