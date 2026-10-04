@@ -402,3 +402,9 @@ table.grid.sheet-grid td.tot, table.grid.sheet-grid th.tot, table.grid.sheet-gri
 .ord-item.active { border-color: var(--brand-2); box-shadow: var(--glow); }
 
 @media print { .topbar, .tabs, .toolbar, .no-print, .toast { display: none !important; } body { background: #fff; color: #000; } }
+
+/* Envases retornables y nota Valery (Fase 2) */
+.ret-box { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px 12px; margin: 4px 0 0; display: grid; gap: 10px; }
+.ret-box legend { padding: 0 6px; font-weight: 700; }
+.ret-tag { display: inline-block; margin-top: 3px; font-size: 11px; font-family: var(--font, inherit); color: var(--ok); border: 1px solid var(--ok); border-radius: 999px; padding: 0 6px; white-space: nowrap; }
+.valery-in { width: 110px; min-width: 0; }

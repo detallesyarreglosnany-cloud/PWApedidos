@@ -18,7 +18,7 @@
     pedido_nuevo: 'Abrió pedido', pedido_enviado: 'Envió pedido', pedido_reabierto: 'Reabrió pedido', pedido_modificado: 'Modificó pedido',
     pedido_eliminado: 'Eliminó pedido', espera: 'Puso en espera', reincorporado: 'Reincorporó', movido: 'Movió de hoja',
     pedido_editado_oficina: 'Ajuste de oficina', carga_estado: 'Estado de hoja', cliente_reasignado: 'Reasignó cliente', respaldo: 'Respaldo',
-    datos_borrados: 'Datos borrados por el navegador',
+    datos_borrados: 'Datos borrados por el navegador', nota_valery: 'Nota Valery', retornables: 'Retornables',
   };
   const daysAgo = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); };
 
