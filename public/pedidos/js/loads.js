@@ -126,8 +126,11 @@
   }
 
   /**
-   * Armado automático: cada pedido "enviado" entra en la primera hoja abierta
-   * (estado editable) de su vendedor y ruta donde quepa; si no, hoja nueva.
+   * Armado automático: cada pedido "enviado" entra en la hoja abierta MÁS
+   * RECIENTE de su vendedor y ruta, si cabe; si no, en una hoja nueva. Una hoja
+   * anterior que quedó con espacio (cliente en espera, movido o eliminado) ya no
+   * recibe pedidos sola: así ningún pedido nuevo se salta a los de hojas más
+   * nuevas. Ese espacio solo lo usa la oficina, moviendo clientes a mano.
    */
   /**
    * Deja cada hoja de acuerdo con sus pedidos (manda o.loadId):
@@ -180,8 +183,9 @@
       .filter((o) => !o.deleted && o.status === 'enviado' && !o.loadId && Matrix.orderTotals(o).items > 0)
       .sort((a, b) => String(a.sentAt || a.updatedAt).localeCompare(String(b.sentAt || b.updatedAt)));
     if (!queue.length) return { loads: [], orders: [] };
+    // Más vieja primero; a igual hora decide el id (todos los equipos eligen la misma)
     const open = loads.filter((l) => isOpen(l, config) && !isClosed(l))
-      .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+      .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)) || String(a.id).localeCompare(String(b.id)));
     const taken = new Set(loads.filter((l) => !l.deleted).map((l) => l.id));
     // Un pedido que ya figura en una hoja abierta no se vuelve a ubicar (evita duplicados)
     const placed = new Map();
@@ -194,11 +198,13 @@
       }
       const route = routeOf(o, sellersById);
       const m = measure(o, config);
-      let target = open.find((l) => {
-        if (!sellerIdsOf(l).includes(o.sellerId) || (l.route || '') !== route) return false;
-        const u = usage(l, ordersById, config);
-        return u.clients === 0 || (u.clients < L.maxClients && u.used + m <= L.limit);
-      });
+      // Solo la hoja más reciente de ese vendedor y ruta (las nuevas se agregan al final de open)
+      const mine = open.filter((l) => sellerIdsOf(l).includes(o.sellerId) && (l.route || '') === route);
+      let target = mine.length ? mine[mine.length - 1] : null;
+      if (target) {
+        const u = usage(target, ordersById, config);
+        if (!(u.clients === 0 || (u.clients < L.maxClients && u.used + m <= L.limit))) target = null;
+      }
       if (!target) {
         const s = sellersById.get(o.sellerId);
         // Id fijo según el pedido: si dos equipos de oficina arman a la vez, crean
