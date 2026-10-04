@@ -230,6 +230,47 @@
     printHTML('Saldos de vacíos', LOAD_CSS + ' table.load.wide{width:100%} @page{size:letter portrait;margin:10mm}', body);
   }
 
+  /* ------------------------ Reporte quincenal (E5) ------------------------ */
+  function printQuincena(d, ctx) {
+    const t = d.totals, RES = ctx.RES || {};
+    const tbl = (title, head, rows, foot) => `<h3>${title}</h3><table class="rep"><thead><tr>${head.map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows || `<tr><td colspan="${head.length}">Sin datos</td></tr>`}</tbody>${foot ? `<tfoot>${foot}</tfoot>` : ''}</table>`;
+    const n = (v) => `<td class="num">${nf0.format(v || 0)}</td>`, m = (v) => `<td class="num">${nf2.format(v || 0)}</td>`;
+    let prod = '', cat = null, sub = null;
+    const flush = () => { if (sub) prod += `<tr class="tot"><td colspan="2">Subtotal ${esc(cat)}</td>${n(sub.c)}${n(sub.u)}${m(sub.m)}</tr>`; };
+    d.byProduct.forEach((p) => { if (p.category !== cat) { flush(); cat = p.category; sub = { c: 0, u: 0, m: 0 }; } sub.c += p.cajas; sub.u += p.unidades; sub.m += p.monto;
+      prod += `<tr><td>${esc(p.code)}</td><td>${esc(p.name)} ${esc(p.presentation)}</td>${n(p.cajas)}${n(p.unidades)}${m(p.monto)}</tr>`; });
+    flush();
+    let vac = '', ty = null, vs = null;
+    const vflush = () => { if (vs) vac += `<tr class="tot"><td colspan="2">Subtotal ${esc(ty)}</td>${n(vs.d)}${n(vs.r)}${n(vs.a)}${n(vs.q)}<td class="num">${(d.vacios.devoluciones || {})[ty] || ''}</td></tr>`; };
+    d.vacios.byCode.forEach((v) => { if (v.type !== ty) { vflush(); ty = v.type; vs = { d: 0, r: 0, a: 0, q: 0 }; } vs.d += v.despachados; vs.r += v.recibidos; vs.a += v.asignados; vs.q += v.debe;
+      vac += `<tr><td>${esc(v.code)}</td><td>${esc(v.type)}</td>${n(v.despachados)}${n(v.recibidos)}${n(v.asignados)}${n(v.debe)}<td></td></tr>`; });
+    vflush();
+    const vt = d.vacios.byCode.reduce((a, v) => ({ d: a.d + v.despachados, r: a.r + v.recibidos, a: a.a + v.asignados, q: a.q + v.debe }), { d: 0, r: 0, a: 0, q: 0 });
+    const people = (arr) => arr.map((v) => `<tr><td>${esc(v.name)}</td><td>${esc(v.type)}</td>${n(v.despachados)}${n(v.recibidos)}${n(v.asignados)}${n(v.debe)}</tr>`).join('');
+    const body = `<section>
+      ${header(ctx.config, 'REPORTE · ' + (ctx.title || ''), fdate(d.from + 'T12:00:00') + ' al ' + fdate(d.to + 'T12:00:00'))}
+      <p class="muted">Solo lo entregado en hojas liquidadas, por fecha de entrega. ${d.pendingLoads.length ? `<b>${d.pendingLoads.length} hoja(s) del período sin liquidar (${nf2.format(d.pendingMonto)} $) no se suman.</b>` : 'Todas las hojas del período están liquidadas.'}</p>
+      <div class="meta">
+        <div><b>Venta entregada $</b>${nf2.format(t.monto)}</div><div><b>Pedido $</b>${nf2.format(t.pedido)}</div>
+        <div><b>Hojas liquidadas</b>${t.hojas}</div><div><b>Clientes atendidos</b>${t.clients}</div>
+        <div><b>Cajas</b>${nf0.format(t.cajas)}</div><div><b>Unidades sueltas</b>${nf0.format(t.unidades)}</div>
+        <div><b>Devoluciones parciales</b>${t.parcial}</div><div><b>Anuladas · después</b>${t.anulada} · ${t.pendiente}</div>
+      </div>
+      ${tbl('Ventas por categoría', ['Categoría', 'Cajas', 'Unidades', 'Monto $'], d.byCategory.map((c) => `<tr><td>${esc(c.category)}</td>${n(c.cajas)}${n(c.unidades)}${m(c.monto)}</tr>`).join(''), `<tr class="tot"><td>TOTAL</td>${n(t.cajas)}${n(t.unidades)}${m(t.monto)}</tr>`)}
+      ${tbl('Ventas por producto', ['Código', 'Producto', 'Cajas', 'Unidades', 'Monto $'], prod, `<tr class="tot"><td colspan="2">TOTAL</td>${n(t.cajas)}${n(t.unidades)}${m(t.monto)}</tr>`)}
+      ${tbl('Por vendedor', ['Vendedor', 'Clientes', 'Cajas', 'Unidades', 'Monto $', 'Novedades'], d.bySeller.map((s) => `<tr><td>${esc(s.sellerName)}</td>${n(s.clients)}${n(s.cajas)}${n(s.unidades)}${m(s.monto)}${n(s.novedades)}</tr>`).join(''))}
+      ${tbl('Despachos por despachador', ['Despachador', 'Hojas', 'Clientes', 'Cajas', 'Unidades', 'Monto $', 'Diferencias'], d.byDispatcher.map((x) => `<tr><td>${esc(x.dispatcherName)}</td>${n(x.hojas)}${n(x.clients)}${n(x.cajas)}${n(x.unidades)}${m(x.monto)}${n(x.diferencias)}</tr>`).join(''))}
+      ${tbl('Diferencias de camión', ['Fecha', 'Hoja', 'Despachador', 'Producto', 'Debe quedar', 'Devolución', 'Diferencia', 'Motivo'], d.diferencias.map((x) => `<tr><td>${esc(fdate(x.date + 'T12:00:00'))}</td><td>${esc(x.label || x.load)}</td><td>${esc(x.dispatcherName)}</td><td>${esc(x.code)} ${esc(x.name)} ${esc(x.um)}</td>${n(x.debe)}${n(x.dev)}${n(x.dif)}<td>${esc(x.motivo)}</td></tr>`).join(''))}
+      ${tbl('Novedades de las notas', ['Fecha', 'Cliente', 'Vendedor', 'Resultado', 'Nota', 'Nota nueva', 'Motivo', 'Pedido $', 'Entregado $'], d.novedades.map((x) => `<tr><td>${esc(fdate(x.date + 'T12:00:00'))}</td><td>${esc(x.clientName)}</td><td>${esc(x.sellerName)}</td><td>${esc(RES[x.result] || x.result)}</td><td>${esc(x.valeryNote)}</td><td>${esc(x.newValery)}</td><td>${esc(x.motivo)}</td>${m(x.pedido)}${m(x.entregado)}</tr>`).join(''))}
+      ${tbl('Vacíos por código', ['Código', 'Tipo', 'Despachados', 'Recibidos', 'Asignados', 'Quedan debiendo', 'Devoluciones posteriores'], vac, `<tr class="tot"><td colspan="2">TOTAL GENERAL</td>${n(vt.d)}${n(vt.r)}${n(vt.a)}${n(vt.q)}<td class="num">${Object.values(d.vacios.devoluciones || {}).reduce((a, x) => a + x, 0) || ''}</td></tr>`)}
+      ${tbl('Vacíos por despachador', ['Despachador', 'Tipo', 'Despachados', 'Recibidos', 'Asignados', 'Quedan debiendo'], people(d.vacios.byDispatcher))}
+      ${tbl('Vacíos por vendedor del cliente', ['Vendedor', 'Tipo', 'Despachados', 'Recibidos', 'Asignados', 'Quedan debiendo'], people(d.vacios.bySeller))}
+      <div class="sign" style="grid-template-columns:repeat(3,1fr)"><div>Elaborado (oficina)</div><div>Revisado</div><div>Gerencia</div></div>
+      </section>`;
+    printHTML('Reporte ' + d.from + ' a ' + d.to, `@page{size:letter portrait;margin:10mm} h3{font-size:12px;margin:10px 0 3px;color:#730101}
+      table.rep{margin-bottom:4px} table.rep th{font-size:9px} table.rep td{font-size:10px} table.rep tr.tot td{font-weight:bold;background:#f3e3e3} table.rep{page-break-inside:auto} table.rep tr{page-break-inside:avoid}`, body);
+  }
+
   /* ------------------------- Notas de entrega ------------------------- */
   function noteHTML(order, ctx, copy) {
     const cfg = ctx.config, client = ctx.clientsById.get(order.clientId) || {};
@@ -277,5 +318,5 @@
     printHTML('Notas de entrega', NOTE_CSS, body);
   }
 
-  global.Print = { printLoadSheet, printNotes, printLiquidation, printKardex };
+  global.Print = { printLoadSheet, printNotes, printLiquidation, printKardex, printQuincena };
 })(window);
