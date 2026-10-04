@@ -308,11 +308,11 @@
     } catch (e) { /* sin audio */ }
   }
   const NOTIF_TITLE = {
-    pedido: '🧾 Nuevo pedido', editado: '✏️ Pedido modificado', duplicado: '⚠️ Cliente duplicado', borrado: '🗑 Pedido eliminado',
+    pedido: '🧾 Nuevo pedido', editado: '✏️ Pedido modificado', duplicado: '⚠️ Cliente duplicado', borrado: '🗑 Pedido eliminado', mensaje: '💬 Mensaje de la oficina',
     aprobado: '✅ Pedido aprobado', espera: '⏸ Pedido en espera', despachado: '🚚 Pedido despachado', ajustado: '✏️ Pedido ajustado',
   };
   // Mismo tag que usa el servidor en el aviso push: si llegan los dos, se ve uno solo
-  const NOTIF_EV = { pedido: 'new', editado: 'mod', borrado: 'del', aprobado: 'apr', espera: 'esp', despachado: 'desp', ajustado: 'aj', duplicado: 'dup' };
+  const NOTIF_EV = { mensaje: 'msg', pedido: 'new', editado: 'mod', borrado: 'del', aprobado: 'apr', espera: 'esp', despachado: 'desp', ajustado: 'aj', duplicado: 'dup' };
   const SENT = ['enviado', 'en_carga', 'en_espera', 'despachado'];
   const isSent = (x) => !!x && !x.deleted && SENT.includes(x.status);
   /**
@@ -339,6 +339,8 @@
         return;
       }
       if (o.sellerId !== sid || !p) return;
+      const om = o.officeMsgs || [], pm = p.officeMsgs || [];
+      if (om.length > pm.length) add('mensaje', o, `${o.clientName}: ${om[om.length - 1].text}`, true);
       if (o.deleted && !p.deleted) add('borrado', o, `La oficina eliminó el pedido de ${o.clientName}`, true);
       else if (o.status === 'despachado' && p.status !== 'despachado') add('despachado', o, `${o.clientName}${o.valeryNote ? ' · Nota ' + o.valeryNote : ''}`);
       else if (o.status === 'en_espera' && p.status !== 'en_espera') add('espera', o, `${o.clientName}: la oficina lo dejó para otra carga`, true);
@@ -481,6 +483,15 @@
   function creditFooter() {
     const t = (S.config && S.config.footer) || '';
     return `<footer class="credit">${t ? `<span>${esc(t)}</span>` : ''}<button type="button" class="about-link" data-about>Acerca de</button></footer>`;
+  }
+
+  /* ======================= Mensajes oficina → vendedor ======================= */
+  /** Nota del vendedor + mensajes de la oficina de un pedido, en orden. */
+  function msgThreadHTML(o) {
+    const fmt = (iso) => new Date(iso).toLocaleString('es-VE', { dateStyle: 'short', timeStyle: 'short' });
+    const items = (o.notes ? [`<div class="msg msg-seller"><small>📝 Nota de ${esc(o.sellerName || 'vendedor')}</small>${esc(o.notes)}</div>`] : [])
+      .concat((o.officeMsgs || []).map((m) => `<div class="msg msg-office"><small>💬 ${esc(m.by || 'Oficina')} · ${esc(fmt(m.at))}</small>${esc(m.text)}</div>`));
+    return items.length ? `<div class="msg-list">${items.join('')}</div>` : '<p class="muted" style="margin:0 0 8px">Sin mensajes en este pedido.</p>';
   }
 
   /* ============================== Acerca de ============================== */
@@ -955,7 +966,7 @@
     const orderRow = (o) => {
       const t = Matrix.orderTotals(o), l = loadOf(o), g = groupOf(o);
       return `<tr data-myo="${esc(o.id)}" style="cursor:pointer">
-        <td><b>${esc(o.clientName)}</b><div class="muted" style="font-size:12px">${esc(fmtDate(o.routeDate))}${l ? ' · ' + esc(Loads.labelOf(l)) + (l.number ? ' · ' + esc(Loads.loadCode(l)) : '') : ''}${o.valeryNote ? ' · Nota ' + esc(o.valeryNote) : ''}</div>
+        <td><b>${esc(o.clientName)}</b><div class="muted" style="font-size:12px">${esc(fmtDate(o.routeDate))}${l ? ' · ' + esc(Loads.labelOf(l)) + (l.number ? ' · ' + esc(Loads.loadCode(l)) : '') : ''}${o.valeryNote ? ' · Nota ' + esc(o.valeryNote) : ''}${(o.officeMsgs || []).length ? ' · 💬 ' + o.officeMsgs.length : ''}</div>
           <span class="status ${g === 'aprobados' ? 'en_carga' : o.status}">${esc(GROUP_TEXT[g])}</span>${o.officeEdited ? ' <span class="status en_espera">ajustado por oficina</span>' : ''}</td>
         <td class="n" data-l="Monto">${usd(t.monto)}</td></tr>`;
     };
@@ -1027,7 +1038,8 @@
       <table class="lines"><thead><tr><th style="text-align:left">Producto</th>${sentL ? '<th class="num">Pediste</th>' : ''}<th class="num">${g === 'despachados' ? 'Despachado' : 'Queda'}</th></tr></thead>
         <tbody>${rows || '<tr><td class="muted">Sin productos</td></tr>'}</tbody></table>
       <div class="row" style="justify-content:space-between;margin-top:10px;font-size:18px"><b>Total · ${t.cajas} cj + ${t.unidades} un</b><b>${usd(t.monto)}</b></div>
-      ${o.notes ? `<p class="muted">📝 ${esc(o.notes)}</p>` : ''}`, { cls: 'sheet-order' });
+      <div class="section-title" style="margin:14px 0 6px">💬 Notas y mensajes</div>
+      ${msgThreadHTML(o)}`, { cls: 'sheet-order' });
   }
 
   function sellerMenu() {
@@ -1167,7 +1179,7 @@
   window.PV = {
     S, $, $$, esc, nf2, nf0, usd, bs, int, dec, norm, slug, today, fmtDate, fmtStock, hasStock, productSort, productLabel, rubroIcon,
     toast, openSheet, copyText, saveFile, pickFile, brandHeader, creditFooter,
-    loadAll, saveDocs, saveOrder, saveSettings, setSession, rememberOffice, forgetOffice, PERSIST_HINT, runSync, updateSyncPill, render, refreshAfterRemote, updateBell, beep, logEvent, isSupervisor,
+    loadAll, saveDocs, saveOrder, saveSettings, setSession, msgThreadHTML, rememberOffice, forgetOffice, PERSIST_HINT, runSync, updateSyncPill, render, refreshAfterRemote, updateBell, beep, logEvent, isSupervisor,
     notifSheet, refreshPush,
     productById, sellerById, orderById, clientById, rubros, orderLinesHTML,
     boot,

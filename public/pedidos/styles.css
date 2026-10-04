@@ -408,3 +408,10 @@ table.grid.sheet-grid td.tot, table.grid.sheet-grid th.tot, table.grid.sheet-gri
 .ret-box legend { padding: 0 6px; font-weight: 700; }
 .ret-tag { display: inline-block; margin-top: 3px; font-size: 11px; font-family: var(--font, inherit); color: var(--ok); border: 1px solid var(--ok); border-radius: 999px; padding: 0 6px; white-space: nowrap; }
 .valery-in { width: 110px; min-width: 0; }
+
+/* Mensajes oficina ↔ vendedor */
+.msg-list { display: grid; gap: 8px; margin-bottom: 10px; }
+.msg { padding: 8px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg-2); max-width: 92%; overflow-wrap: anywhere; }
+.msg small { display: block; color: var(--muted); font-size: 11px; margin-bottom: 2px; }
+.msg-seller { justify-self: start; }
+.msg-office { justify-self: end; border-color: var(--brand-2); background: var(--brand-soft); }

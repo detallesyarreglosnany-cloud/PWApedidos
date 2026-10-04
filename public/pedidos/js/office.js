@@ -368,7 +368,7 @@
           <td style="white-space:nowrap">${editableLoad ? `<button class="btn btn-sm" data-left="${i}" ${i ? '' : 'disabled'} aria-label="Mover a la izquierda">←</button><button class="btn btn-sm" data-right="${i}" ${i < os.length - 1 ? '' : 'disabled'} aria-label="Mover a la derecha">→</button>` : ''}</td>
           <td><b>${esc(o.clientName)}</b> <span class="muted">${esc(fmtDate(o.routeDate))}</span>${dupBadge(o, dups)}
             ${o.officeEdited ? ' <span class="status abierto">editado oficina</span>' : ''}${o.sellerEdited ? ' <span class="status en_espera">modificado por vendedor</span>' : ''}
-            ${o.notes ? `<div class="muted">📝 ${esc(o.notes)}</div>` : ''}</td>
+            ${o.notes ? `<div class="muted">📝 ${esc(o.notes)}</div>` : ''}${(o.officeMsgs || []).length ? `<div class="muted">💬 ${o.officeMsgs.length} mensaje${o.officeMsgs.length > 1 ? 's' : ''} de oficina</div>` : ''}</td>
           <td><span class="tag">${esc(Loads.initials(o.sellerName))}</span></td>
           <td class="n" data-l="Bultos">${t.bultos}</td><td class="n" data-l="Unid.">${t.totalUnidades}</td><td class="n" data-l="Monto">${usd(t.monto)}</td>
           <td data-l="Nota Valery"><input class="input sm mono valery-in" inputmode="numeric" maxlength="20" data-oid="${esc(o.id)}" value="${esc(o.valeryNote || '')}" placeholder="N°" aria-label="Nota Valery de ${esc(o.clientName)}"></td>
@@ -533,11 +533,28 @@
         <button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
       ${locked ? '<div class="hint warn">🔒 La carga de este pedido ya fue aprobada: no se puede modificar.</div>' : ''}
       <div id="oeBody"></div>
+      <div class="msg-box"><div class="section-title" style="margin:14px 0 6px">💬 Mensajes con ${esc(o.sellerName)}</div>
+        <div id="oeMsgs"></div>
+        <div class="row" style="gap:8px;align-items:flex-end"><label class="field grow"><span>Responder o pasar una novedad (le llega al teléfono)</span>
+          <textarea id="oeMsg" class="input" rows="2" maxlength="300" placeholder="Ej: el cliente pidió entregar después de las 2 pm"></textarea></label>
+          <button class="btn btn-primary" type="button" id="oeSend">Enviar</button></div></div>
       ${locked ? '' : `<label class="field" style="margin-top:12px"><span>Agregar producto</span>
         <input id="oeSearch" class="input" placeholder="Buscar por nombre o código…" autocomplete="off"></label><div id="oeResults" class="results"></div>
         <label class="field" style="margin-top:12px"><span>Nota para despacho</span><input id="oeNotes" class="input" maxlength="300" value="${esc(o.notes || '')}"></label>`}
       <div class="actions">${o.status !== 'despachado' ? '<button class="btn btn-danger" id="oeDel">🗑 Eliminar pedido</button>' : ''}<button class="btn btn-primary" data-close>Listo</button></div>`, { wide: true });
     draw(sh);
+    const drawMsgs = () => { $('#oeMsgs', sh.el).innerHTML = PV.msgThreadHTML(orderById(o.id) || o); };
+    drawMsgs();
+    $('#oeSend', sh.el).onclick = async () => {
+      const ta = $('#oeMsg', sh.el), text = ta.value.trim().slice(0, 300);
+      if (!text) { ta.focus(); return; }
+      const cur = orderById(o.id) || o;
+      const msg = { id: DB.uid('m'), at: DB.now(), text, by: (S.config && S.config.adminName) || 'Oficina' };
+      await saveOrder({ ...cur, officeMsgs: (cur.officeMsgs || []).concat(msg).slice(-30) });
+      await log('mensaje', `Mensaje a ${cur.sellerName} sobre ${cur.clientName}: ${text}`, { orderId: cur.id, clientName: cur.clientName });
+      ta.value = ''; drawMsgs(); if (onDone) onDone(); toast('Mensaje enviado a ' + cur.sellerName, 'ok');
+      PV.runSync(false);
+    };
     // Eliminar desde la oficina (p. ej. el vendedor se equivocó): sale de su hoja,
     // queda en el Historial y el vendedor recibe el aviso. Un pedido despachado no se elimina.
     const del = $('#oeDel', sh.el);
@@ -1131,7 +1148,7 @@
     pedido_nuevo: 'Abrió pedido', pedido_enviado: 'Envió pedido', pedido_reabierto: 'Reabrió pedido', pedido_modificado: 'Modificó pedido',
     pedido_eliminado: 'Eliminó pedido', espera: 'Puso en espera', reincorporado: 'Reincorporó', movido: 'Movió de hoja',
     pedido_editado_oficina: 'Ajuste de oficina', carga_estado: 'Estado de hoja', cliente_reasignado: 'Reasignó cliente', respaldo: 'Respaldo',
-    datos_borrados: 'Datos borrados por el navegador', nota_valery: 'Nota Valery', retornables: 'Retornables',
+    datos_borrados: 'Datos borrados por el navegador', nota_valery: 'Nota Valery', retornables: 'Retornables', mensaje: 'Mensaje a vendedor',
   };
   async function renderHistory(root) {
     const f = U().hist || (U().hist = { day: today(), who: '', type: '' });
