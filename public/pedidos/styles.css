@@ -422,3 +422,11 @@ table.grid.sheet-grid td.tot, table.grid.sheet-grid th.tot, table.grid.sheet-gri
 .asg-in { border-color: var(--ok) !important; }
 .vac-ask { border: 1px solid var(--line); border-radius: 12px; padding: 4px 12px 12px; margin-top: 12px; }
 .asg-code { display: block; font-size: 10px; color: var(--muted); line-height: 1; margin-top: 2px; }
+
+/* ---------- Liquidación (Fase 2 · E3) ---------- */
+tr.liq-mark td { background: var(--warn-soft); }
+tr.liq-count td { background: var(--brand-soft); }
+tr.liq-bad td { background: rgba(255, 77, 90, .14); }
+.warn-txt { color: var(--warn); font-weight: 800; }
+table.liq-truck input.qin, table.liq-vac input.qin { width: 64px; }
+table.liq-notes .select.sm, table.liq-truck .select.sm { min-width: 150px; }

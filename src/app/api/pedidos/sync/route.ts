@@ -47,7 +47,7 @@ const ADMIN_KINDS: readonly string[] = ['products', 'sellers', 'loads', 'config'
 type Kind = (typeof KINDS)[number];
 // Campos de un pedido que controla la oficina: un teléfono nunca los pisa
 // (aunque su copia local esté atrasada y no sepa que el pedido ya está en una hoja).
-const OFFICE_ORDER_FIELDS = ['loadId', 'locked', 'loadStatusName', 'noteNumber', 'loadNumber', 'dispatchedAt', 'officeEdited', 'heldAt', 'valeryNote', 'officeMsgs'];
+const OFFICE_ORDER_FIELDS = ['loadId', 'locked', 'loadStatusName', 'noteNumber', 'loadNumber', 'dispatchedAt', 'officeEdited', 'heldAt', 'valeryNote', 'officeMsgs', 'delivery', 'pendingFrom'];
 const OFFICE_ORDER_STATUS: readonly string[] = ['en_carga', 'en_espera', 'despachado'];
 // Solo se guardan en el equipo: el servidor calcula dupWith en cada bajada
 const LOCAL_ONLY_FIELDS = ['dirty', 'dupWith'];
