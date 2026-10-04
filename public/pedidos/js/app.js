@@ -884,6 +884,41 @@
       </table>`;
   }
 
+  /** Vacíos de contraentrega (102, COLIC…): ¿tiene vacíos? y cuántos se le asignan. */
+  function vacAskHTML(o, locked) {
+    const v = Envases.orderVac(o, new Map(S.products.map((p) => [p.id, p])));
+    const asg = v.lines.filter((l) => l.assign);
+    if (!v.contra && !asg.length) return '';
+    const has = o.envAssign && o.envAssign.has;
+    return `<div class="vac-ask"><div class="section-title" style="margin:14px 0 6px">♻ Vacíos</div>
+      <div class="row wrap" style="gap:8px;align-items:center"><span>¿El cliente tiene vacíos para entregar?</span>
+        <button type="button" class="chip ${has === 'si' ? 'active' : ''}" data-has="si" ${locked ? 'disabled' : ''}>Sí</button>
+        <button type="button" class="chip ${has === 'no' ? 'active' : ''}" data-has="no" ${locked ? 'disabled' : ''}>No</button></div>
+      ${asg.map((l) => `<label class="field" style="margin-top:8px"><span>Vacíos asignados · ${esc(l.code)} ${esc(l.name)} (${l.boxes} cj) — en blanco si no aplica</span>
+        <input class="input vac-asg" inputmode="numeric" data-pid="${esc(l.pid)}" value="${l.assigned === null ? '' : l.assigned}" placeholder="—" ${locked ? 'disabled' : ''}></label>`).join('')}
+      ${v.contra ? `<p class="muted" style="margin:6px 0 0">Debe recibir <b>${v.toReceive}</b> vacíos al entregar (contraentrega).</p>` : ''}</div>`;
+  }
+  function bindVacAsk(sh, o) {
+    const box = $('.vac-ask', sh.el); if (!box) return;
+    // Un 'change' tardío (al perder el foco) puede llegar con el bloque ya redibujado
+    const redraw = () => { if (!box.isConnected) return; box.outerHTML = vacAskHTML(o, !editable(o)); bindVacAsk(sh, o); };
+    box.onclick = async (e) => {
+      const b = e.target.closest('[data-has]'); if (!b || b.disabled) return;
+      const cur = o.envAssign && o.envAssign.has;
+      o.envAssign = { ...(o.envAssign || {}), has: cur === b.dataset.has ? null : b.dataset.has };
+      if (!o.envAssign.has) delete o.envAssign.has;
+      await saveOrder(o); redraw();
+    };
+    box.onchange = async (e) => {
+      const i = e.target.closest('.vac-asg'); if (!i) return;
+      const pid = i.dataset.pid, max = +((o.lines || {})[pid] || {}).cajas || 0, raw = i.value.trim();
+      const qty = { ...((o.envAssign && o.envAssign.qty) || {}) };
+      if (raw === '') delete qty[pid]; else qty[pid] = Math.min(max, Math.max(0, int(raw)));
+      o.envAssign = { ...(o.envAssign || {}), qty };
+      await saveOrder(o); redraw();
+    };
+  }
+
   function orderSheet() {
     const o = activeOrder(); if (!o) return;
     const locked = !editable(o);
@@ -896,6 +931,7 @@
       ${o.dupWith && o.dupWith.length ? dupHint(o) : ''}
       ${o.officeEdited ? '<div class="hint warn">La oficina ajustó cantidades de este pedido.</div>' : ''}
       ${orderLinesHTML(o)}
+      ${vacAskHTML(o, locked)}
       <label class="field" style="margin-top:14px"><span>Nota para despacho</span>
         <textarea id="notes" class="input" maxlength="300" placeholder="Ej: entregar antes de las 10am, cobrar en divisas…" ${locked ? 'disabled' : ''}>${esc(o.notes || '')}</textarea></label>
       <div class="actions">
@@ -905,6 +941,7 @@
       </div>`, { cls: 'sheet-order' });
     const notes = $('#notes', sh.el);
     notes.onchange = async () => { o.notes = notes.value.slice(0, 300); await saveOrder(o); };
+    bindVacAsk(sh, o);
     const send = $('#sendOrder', sh.el);
     if (send) send.onclick = async () => {
       o.notes = notes.value.slice(0, 300);

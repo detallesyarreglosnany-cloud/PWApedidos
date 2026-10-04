@@ -321,7 +321,15 @@
           : `<td class="n ${v ? '' : 'zero'}">${v ? nf0.format(v) : '·'}</td>`).join('')}
         <td class="n tot">${nf0.format(r.total)}</td></tr>`;
     }).join('');
-    const foot = m.footer.map((f) => `<tr><td class="sticky-col">${esc(f.label)}</td>${f.cells.map((v) => `<td class="n">${nf0.format(v)}</td>`).join('')}<td class="n tot">${nf0.format(f.total)}</td></tr>`).join('');
+    const pById = byIdMap(S.products);
+    const vacRows = m.rows.some((r) => r.um === 'CJ' && Envases.isReturnable(pById.get(r.productId))) ? Envases.sheetRows(m.cols.map((c) => c.order), pById) : [];
+    const vacFoot = vacRows.map((v) => `<tr class="vac-row"><td class="sticky-col">♻ ${esc(v.label)}</td>${v.cells.map((x, i) => {
+      if (v.assign && x !== undefined && editableLoad && Loads.editable(m.cols[i].order)) {
+        return `<td class="n"><input class="cell-in asg-in" inputmode="numeric" value="${x === null ? '' : x}" placeholder="—" data-oid="${esc(m.cols[i].id)}" data-pid="${esc(v.pid)}" title="En blanco = sin decidir · 0 = no se asigna" aria-label="Asignados ${esc(m.cols[i].client)}"></td>`;
+      }
+      return `<td class="n ${x ? '' : 'zero'}">${x === undefined ? '' : x === null ? '·' : nf0.format(x)}</td>`;
+    }).join('')}<td class="n tot">${nf0.format(v.total)}</td></tr>`).join('');
+    const foot = m.footer.map((f) => `<tr><td class="sticky-col">${esc(f.label)}</td>${f.cells.map((v) => `<td class="n">${nf0.format(v)}</td>`).join('')}<td class="n tot">${nf0.format(f.total)}</td></tr>`).join('') + vacFoot;
     const totalUSD = os.reduce((a, o) => a + Matrix.orderTotals(o).monto, 0);
     const dups = dupIndex();
     const initialsRow = `<tr class="ini-row"><th class="sticky-col">Vendedor →</th>${m.cols.map((c) => `<th>${esc(Loads.initials(c.order.sellerName))}</th>`).join('')}<th class="tot"></th></tr>`;
@@ -383,7 +391,7 @@
       U().loadId = null; U().archiveId = null; U().editQty = false;
       if (closed && !location.hash.includes('archivo')) location.hash = '#/oficina/archivo'; else PV.render();
     };
-    const ctx = () => ({ config: S.config, usage: Loads.usage(cur(), byIdMap(S.orders), S.config), draft: !cur().number, clientsById: byIdMap(S.clients),
+    const ctx = () => ({ config: S.config, products: S.products, usage: Loads.usage(cur(), byIdMap(S.orders), S.config), draft: !cur().number, clientsById: byIdMap(S.clients),
       load: cur(), productRank: productRank(), statusName: stName(cur()) });
     $('#dPrint').onclick = () => Print.printLoadSheet(cur(), Loads.loadOrders(cur(), byIdMap(S.orders)), ctx());
     $('#dCsv').onclick = () => saveFile(`hoja_${Loads.labelOf(cur())}_${cur().date || today()}.csv`, '\uFEFF' + Matrix.toDelimited(m, { sep: S.settings.csvSep, decimal: S.settings.csvDecimal }), 'text/csv;charset=utf-8');
@@ -433,6 +441,15 @@
         toast(dup ? `Ojo: la nota ${v} también está en ${dup.clientName}` : (v ? `Nota ${v} guardada · ${o.clientName}` : 'Nota borrada'), dup ? 'err' : 'ok');
         PV.logEvent('nota_valery', `Nota Valery ${v || '(borrada)'} para ${o.clientName} (${o.sellerName})`, { orderId: o.id, clientName: o.clientName }, { onceKey: 'val:' + o.id, everyMin: 1 });
         return;
+      }
+      const ai = e.target.closest('.asg-in');
+      if (ai) {
+        const o = orderById(ai.dataset.oid), pid = ai.dataset.pid; if (!o || !Loads.editable(o)) return;
+        const max = +((o.lines || {})[pid] || {}).cajas || 0, raw = ai.value.trim();
+        const qty = { ...((o.envAssign && o.envAssign.qty) || {}) };
+        if (raw === '') delete qty[pid]; else qty[pid] = Math.min(max, Math.max(0, int(raw)));
+        await saveOrder({ ...o, envAssign: { ...(o.envAssign || {}), qty }, officeEdited: DB.now() });
+        refresh(); return;
       }
       const inp = e.target.closest('.cell-in'); if (!inp) return;
       const key = [inp.dataset.oid, inp.dataset.pid, inp.dataset.kind].join('|');
@@ -502,7 +519,7 @@
         <div class="actions" style="flex-direction:column">
           <button class="btn btn-primary" id="pSheet">🖨 Imprimir hoja de carga</button>
           <button class="btn" data-close>Listo</button></div>`);
-      const ctx = { config: S.config, usage: Loads.usage(r.load, byIdMap(S.orders), S.config), clientsById: byIdMap(S.clients), load: r.load, productRank: productRank(), statusName: st.name };
+      const ctx = { config: S.config, products: S.products, usage: Loads.usage(r.load, byIdMap(S.orders), S.config), clientsById: byIdMap(S.clients), load: r.load, productRank: productRank(), statusName: st.name };
       $('#pSheet', sh.el).onclick = () => Print.printLoadSheet(r.load, r.orders, ctx);
     } else back();
     PV.runSync(false);

@@ -85,15 +85,23 @@
     const u = ctx.usage;
     const extra = cfg.sheetExtraCols || ['VACÍOS', 'DEVOLUCIÓN'];
     const blanks = extra.map(() => '<td class="blank"></td>').join('');
+    // VACÍOS: en las filas de cajas de productos retornables, la cantidad de esa fila
+    const pById = new Map((ctx.products || []).map((p) => [p.id, p]));
+    const extraCells = (r) => extra.map((x) => (Envases.isVacCol(x) && r.um === 'CJ' && Envases.isReturnable(pById.get(r.productId))
+      ? `<td class="num vac">${nf0.format(r.total)}</td>` : '<td class="blank"></td>')).join('');
     let lastCat = null;
     const rows = m.rows.map((r) => {
       const first = lastCat !== null && r.category !== lastCat;
       lastCat = r.category;
       return `<tr${first ? ' class="grp"' : ''}><td class="p"><span class="muted">${esc(r.code)}</span> ${esc(r.name)} <b>${esc(r.presentation)}</b> <span class="um">${r.um}</span></td>
-        ${r.cells.map((v) => `<td class="num${v ? ' has' : ''}">${v ? nf0.format(v) : ''}</td>`).join('')}<td class="num tot">${nf0.format(r.total)}</td>${blanks}</tr>`;
+        ${r.cells.map((v) => `<td class="num${v ? ' has' : ''}">${v ? nf0.format(v) : ''}</td>`).join('')}<td class="num tot">${nf0.format(r.total)}</td>${extraCells(r)}</tr>`;
     }).join('');
     // Al pie, una sola fila: el total de todo (cajas + unidades sueltas)
-    const foot = m.footer.filter((f) => f.key === 'TOTAL_BULTOS').map((f) => `<tr class="tot"><td>TOTAL (cajas + unidades)</td>${f.cells.map((v) => `<td class="num">${nf0.format(v)}</td>`).join('')}<td class="num tot">${nf0.format(f.total)}</td>${blanks}</tr>`).join('');
+    const vacTotal = m.rows.filter((r) => r.um === 'CJ' && Envases.isReturnable(pById.get(r.productId))).reduce((a, r) => a + r.total, 0);
+    const extraTot = extra.map((x) => (Envases.isVacCol(x) ? `<td class="num tot">${nf0.format(vacTotal)}</td>` : '<td class="blank"></td>')).join('');
+    const foot = m.footer.filter((f) => f.key === 'TOTAL_BULTOS').map((f) => `<tr class="tot"><td>TOTAL (cajas + unidades)</td>${f.cells.map((v) => `<td class="num">${nf0.format(v)}</td>`).join('')}<td class="num tot">${nf0.format(f.total)}</td>${extraTot}</tr>`).join('')
+      // Vacíos al pie (solo si la hoja lleva retornables)
+      + (vacTotal ? Envases.sheetRows(m.cols.map((c) => c.order), pById).map((v) => `<tr class="vacrow"><td>${esc(v.label)}</td>${v.cells.map((x) => `<td class="num">${x ? nf0.format(x) : ''}</td>`).join('')}<td class="num tot">${nf0.format(v.total)}</td>${blanks}</tr>`).join('') : '');
     const code = load.number ? Loads.loadCode(load) : 'BORRADOR';
     const fecha = load.date || String(load.closedAt || '').slice(0, 10) || new Date().toISOString().slice(0, 10);
     const [yy, mm, dd] = fecha.split('-');
@@ -141,7 +149,7 @@
     td.has{font-weight:bold}
     table.load td.tot,table.load th.tcol{font-size:14px;font-weight:900;border-left:2px solid #000;border-right:2px solid #000}
     table.load tfoot td{font-size:14px;font-weight:900;border-top:2px solid #000}
-    td.blank{min-width:34px}
+    td.blank{min-width:34px} td.vac{font-weight:900} tr.vacrow td{font-weight:700;border-top:1px dashed #000}
     .sheet .foot{margin:3px 0 0;font-size:9px} .sheet .sign{margin-top:14px}`;
 
   function printLoadSheet(load, orders, ctx) {

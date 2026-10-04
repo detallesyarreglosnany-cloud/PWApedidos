@@ -51,5 +51,61 @@
     return '♻ ' + (r.type || 'aparte') + (r.regime === 'contraentrega' ? ' · contraentrega' : '') + (r.assign ? ' · asignables' : '');
   }
 
-  global.Envases = { TEMPLATE, REGIMES, normCode, isReturnable, info, applyTemplate, label };
+  /* ---------------- Vacíos de un pedido y de una hoja (E2) ----------------
+   * Un vacío es una caja: solo cuentan las cajas (CJ) de productos retornables.
+   * Asignados (o.envAssign.qty[productId]): solo en productos que los admiten.
+   *   clave ausente → sin decidir · 0 → se decidió no asignar · N → asignados
+   * o.envAssign.has: '¿el cliente tiene vacíos?' → 'si' | 'no' | (ausente = sin responder)
+   */
+  function assignedOf(o, pid) {
+    const q = o && o.envAssign && o.envAssign.qty;
+    return q && Object.prototype.hasOwnProperty.call(q, pid) && q[pid] !== null && q[pid] !== '' ? Math.max(0, +q[pid] || 0) : null;
+  }
+
+  /** Vacíos de un pedido: total, por producto, contraentrega, asignados y a recibir. */
+  function orderVac(o, productsById) {
+    const out = { total: 0, contra: 0, assigned: null, toReceive: 0, lines: [] };
+    Object.entries((o && o.lines) || {}).forEach(([pid, l]) => {
+      const r = info(productsById.get(pid)); const boxes = +l.cajas || 0;
+      if (!r || !boxes) return;
+      const a = r.assign ? assignedOf(o, pid) : null;
+      out.total += boxes;
+      if (r.regime === 'contraentrega') out.contra += boxes;
+      if (a !== null) out.assigned = (out.assigned || 0) + Math.min(a, boxes);
+      out.lines.push({ pid, code: l.code, name: l.name, boxes, regime: r.regime, assign: r.assign, assigned: a });
+    });
+    out.toReceive = Math.max(0, out.contra - (out.assigned || 0));
+    return out;
+  }
+
+  /** Productos que admiten asignados y aparecen en estos pedidos (filas ASIGNADOS de la hoja). */
+  function assignableIn(orders, productsById) {
+    const m = new Map();
+    orders.forEach((o) => Object.entries(o.lines || {}).forEach(([pid, l]) => {
+      const r = info(productsById.get(pid));
+      if (r && r.assign && (+l.cajas || 0) > 0 && !m.has(pid)) m.set(pid, { pid, code: l.code, name: l.name });
+    }));
+    return [...m.values()];
+  }
+
+  /**
+   * Datos de vacíos de una hoja (columnas = pedidos en el orden de la hoja).
+   * Devuelve las filas de pie: VACÍOS POR CLIENTE, ASIGNADOS <código> y A RECIBIR.
+   */
+  function sheetRows(orders, productsById) {
+    const vac = orders.map((o) => orderVac(o, productsById));
+    const sum = (a) => a.reduce((x, y) => x + (y || 0), 0);
+    const rows = [{ key: 'VACIOS_CLIENTE', label: 'VACÍOS POR CLIENTE', cells: vac.map((v) => v.total) }];
+    const asg = assignableIn(orders, productsById);
+    asg.forEach((p) => rows.push({ key: 'ASIGNADOS', pid: p.pid, label: 'ASIGNADOS ' + p.code, assign: true,
+      cells: orders.map((o) => ((o.lines || {})[p.pid] && (+o.lines[p.pid].cajas || 0) > 0 ? assignedOf(o, p.pid) : undefined)) }));
+    if (vac.some((v) => v.contra)) rows.push({ key: 'A_RECIBIR', label: 'A RECIBIR (contraentrega)', cells: vac.map((v) => v.toReceive) });
+    rows.forEach((r) => { r.total = sum(r.cells); });
+    return rows;
+  }
+
+  /** ¿La columna extra de la hoja impresa es la de VACÍOS? */
+  const isVacCol = (name) => normCode(name).normalize('NFD').replace(/[\u0300-\u036f]/g, '') === 'VACIOS';
+
+  global.Envases = { TEMPLATE, REGIMES, normCode, isReturnable, info, applyTemplate, label, assignedOf, orderVac, assignableIn, sheetRows, isVacCol };
 })(window);

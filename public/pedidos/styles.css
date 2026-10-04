@@ -415,3 +415,9 @@ table.grid.sheet-grid td.tot, table.grid.sheet-grid th.tot, table.grid.sheet-gri
 .msg small { display: block; color: var(--muted); font-size: 11px; margin-bottom: 2px; }
 .msg-seller { justify-self: start; }
 .msg-office { justify-self: end; border-color: var(--brand-2); background: var(--brand-soft); }
+
+/* Vacíos en la hoja y en el pedido */
+.vac-row td { border-top: 1px dashed var(--line); color: var(--ok); }
+.vac-row td.sticky-col { font-weight: 700; }
+.asg-in { border-color: var(--ok) !important; }
+.vac-ask { border: 1px solid var(--line); border-radius: 12px; padding: 4px 12px 12px; margin-top: 12px; }
