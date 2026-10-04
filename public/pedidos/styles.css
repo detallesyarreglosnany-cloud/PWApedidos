@@ -452,3 +452,6 @@ table.kx-hist tr.kx-void td { text-decoration: line-through; opacity: .55; }
 table.kx-hist tr.kx-void td:last-child, table.kx-hist tr.kx-void td:nth-child(2) { text-decoration: none; }
 table.kx-hist tr.kx-cancel td { color: var(--muted); font-style: italic; }
 table.kx-list td.n div { font-size: 12px; }
+
+/* ---------- Reportes quincenales (Fase 2 · E5) ---------- */
+table.inv tr.kx-sub td { background: var(--bg-2); border-top: 1px solid var(--line); }

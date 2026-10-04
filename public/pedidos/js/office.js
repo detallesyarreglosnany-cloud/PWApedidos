@@ -18,7 +18,7 @@
     copyText, saveFile, pickFile, saveDocs, saveOrder, productById, sellerById, orderById, clientById, rubros } = PV;
   const U = () => S.ui.office;
 
-  const TABS = [['cargas', '🚚 Cargas'], ['pedidos', '🧾 Pedidos'], ['archivo', '🗄 Archivo'], ['envases', '♻ Envases'], ['inventario', '📦 Inventario'],
+  const TABS = [['cargas', '🚚 Cargas'], ['pedidos', '🧾 Pedidos'], ['archivo', '🗄 Archivo'], ['envases', '♻ Envases'], ['reportes', '📈 Reportes'], ['inventario', '📦 Inventario'],
     ['clientes', '👥 Clientes'], ['vendedores', '🧑‍💼 Vendedores'], ['historial', '🕘 Historial'], ['ajustes', '⚙ Ajustes']];
   const log = (type, text, extra) => PV.logEvent(type, text, extra);
 
@@ -78,7 +78,7 @@
     PV.updateSyncPill(); PV.updateBell();
     const body = $('#officeBody');
     if (!S.products.length && tab !== 'ajustes') body.insertAdjacentHTML('beforebegin', setupBanner());
-    ({ cargas: renderLoads, pedidos: renderOrders, archivo: renderArchive, envases: renderEnvases, inventario: renderInventory,
+    ({ cargas: renderLoads, pedidos: renderOrders, archivo: renderArchive, envases: renderEnvases, reportes: (root) => Reportes.render(root, U().rep || (U().rep = {})), inventario: renderInventory,
       clientes: renderClients, vendedores: renderSellers, historial: renderHistory, ajustes: renderSettings })[tab](body);
     const sb = $('#setupImport');
     if (sb) sb.onclick = importStarter;
@@ -679,7 +679,13 @@
       (!f.seller || Loads.sellerIdsOf(l).includes(f.seller)) && (!f.route || l.route === f.route) &&
       (!f.disp || l.dispatcherId === f.disp) && (!f.status || Loads.statusOf(l, S.config).id === f.status))
       .sort((a, b) => dateOf(b).localeCompare(dateOf(a)) || (b.number || 0) - (a.number || 0));
-    const sum = list.reduce((a, l) => { const t = l.totals || {}; a.c += t.clients || 0; a.b += t.bultos || 0; a.u += t.totalUnidades || 0; a.m += t.monto || 0; return a; }, { c: 0, b: 0, u: 0, m: 0 });
+    // Lo liquidado cuenta lo ENTREGADO; las hojas sin liquidar se suman aparte (lo despachado)
+    const ent = (l) => { const t = (l.liq && l.liq.totals) || {}; return { clients: t.clients || 0, bultos: t.bultos != null ? t.bultos : null, monto: t.monto || 0 }; };
+    const sum = list.reduce((a, l) => {
+      const t = l.totals || {};
+      if (Liq.isDone(l)) { const e = ent(l); a.c += e.clients; a.b += e.bultos != null ? e.bultos : t.bultos || 0; a.m += e.monto; a.n++; }
+      else { a.pm += t.monto || 0; a.pn++; }
+      return a; }, { c: 0, b: 0, m: 0, n: 0, pm: 0, pn: 0 });
     const opt = (arr, cur) => arr.map(([v, l]) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`).join('');
     root.innerHTML = `
       <div class="toolbar" id="aFilters">
@@ -692,20 +698,20 @@
         <button class="btn" id="aCsv" ${list.length ? '' : 'disabled'}>⇩ Exportar CSV</button>
       </div>
       <div class="kpi-row">
-        <div class="kpi"><small>Cargas</small><b>${list.length}</b></div>
-        <div class="kpi"><small>Clientes atendidos</small><b>${nf0.format(sum.c)}</b></div>
-        <div class="kpi"><small>Bultos despachados</small><b>${nf0.format(sum.b)}</b></div>
-        <div class="kpi"><small>Venta despachada</small><b>${usd(sum.m)}</b></div>
-        <div class="kpi"><small>Por liquidar</small><b>${list.filter((l) => !Liq.isDone(l)).length}</b></div>
+        <div class="kpi"><small>Cargas</small><b>${list.length}</b><small>${sum.n} liquidadas</small></div>
+        <div class="kpi"><small>Clientes atendidos</small><b>${nf0.format(sum.c)}</b><small>en hojas liquidadas</small></div>
+        <div class="kpi"><small>Bultos entregados</small><b>${nf0.format(sum.b)}</b><small>en hojas liquidadas</small></div>
+        <div class="kpi"><small>Venta entregada</small><b>${usd(sum.m)}</b><small>en hojas liquidadas</small></div>
+        <div class="kpi"><small>Por liquidar</small><b>${sum.pn}</b><small>${usd(sum.pm)} despachado, aún sin contar</small></div>
       </div>
       ${list.length ? `<div class="card" style="overflow:auto"><table class="inv">
-        <thead><tr><th>Código</th><th>Fecha</th><th>Estado</th><th>Vendedor(es)</th><th>Ruta</th><th>Despachador</th><th>Clientes</th><th>Bultos</th><th>Unid.</th><th>Monto</th><th>Liquidación</th><th></th></tr></thead>
+        <thead><tr><th>Código</th><th>Fecha</th><th>Estado</th><th>Vendedor(es)</th><th>Ruta</th><th>Despachador</th><th>Clientes</th><th>Bultos</th><th>Unid.</th><th>Entregado</th><th>Liquidación</th><th></th></tr></thead>
         <tbody>${list.map((l) => { const t = l.totals || {}; return `<tr>
           <td><b class="mono">${esc(Loads.labelOf(l))}</b><div class="muted mono">${esc(Loads.loadCode(l))}</div></td><td data-l="Fecha">${esc(dateOf(l))}</td>
           <td data-l="Estado"><span class="status aprobada">${esc(stName(l))}</span></td>
           <td data-l="Vendedor">${esc(l.sellerName)}</td><td data-l="Ruta">${esc(l.route || '')}</td><td data-l="Despachador">${esc(l.dispatcherName || '')}</td>
           <td class="n" data-l="Clientes">${t.clients || 0}</td><td class="n" data-l="Bultos">${nf0.format(t.bultos || 0)}</td><td class="n" data-l="Unid.">${nf0.format(t.totalUnidades || 0)}</td>
-          <td class="n" data-l="Monto">${usd(t.monto)}</td>
+          <td class="n" data-l="Monto">${Liq.isDone(l) ? `${usd(ent(l).monto)}<div class="muted">de ${usd(t.monto)}</div>` : `<span class="muted">${usd(t.monto)}</span>`}</td>
           <td data-l="Liquidación">${Liq.isDone(l) ? '<span class="status aprobada">✓ Liquidada</span>' : (l.liq ? '<span class="status en_espera">Borrador</span>' : '<span class="status abierto">Por liquidar</span>')}</td>
           <td style="white-space:nowrap"><button class="btn btn-sm" data-view="${esc(l.id)}">Ver</button> <button class="btn btn-sm btn-primary" data-liq="${esc(l.id)}">🧾 Liquidar</button></td></tr>`; }).join('')}</tbody></table></div>`
       : '<div class="empty card"><strong>Sin cargas cerradas</strong>con esos filtros.</div>'}`;
@@ -718,8 +724,8 @@
       const sep = S.settings.csvSep, d = S.settings.csvDecimal;
       const n = (v) => { const s = Number(v || 0).toFixed(2); return d === ',' ? s.replace('.', ',') : s; };
       const q = (v) => { let s = String(v == null ? '' : v); if (/^[=+\-@]/.test(s)) s = "'" + s; return s.includes(sep) || s.includes('"') ? '"' + s.replace(/"/g, '""') + '"' : s; };
-      const rows = [['CODIGO', 'CARGA', 'FECHA', 'ESTADO', 'VENDEDORES', 'RUTA', 'DESPACHADOR', 'CLIENTES', 'CAJAS', 'UNID_SUELTAS', 'BULTOS', 'TOTAL_UNIDADES', 'MONTO_USD'].join(sep)];
-      list.forEach((l) => { const t = l.totals || {}; rows.push([q(Loads.labelOf(l)), Loads.loadCode(l), dateOf(l), q(stName(l)), q(l.sellerName), q(l.route), q(l.dispatcherName), t.clients || 0, t.cajas || 0, t.unidades || 0, t.bultos || 0, t.totalUnidades || 0, n(t.monto)].join(sep)); });
+      const rows = [['CODIGO', 'CARGA', 'FECHA', 'ESTADO', 'VENDEDORES', 'RUTA', 'DESPACHADOR', 'CLIENTES', 'CAJAS', 'UNID_SUELTAS', 'BULTOS', 'TOTAL_UNIDADES', 'DESPACHADO_USD', 'LIQUIDADA', 'ENTREGADO_USD'].join(sep)];
+      list.forEach((l) => { const t = l.totals || {}; rows.push([q(Loads.labelOf(l)), Loads.loadCode(l), dateOf(l), q(stName(l)), q(l.sellerName), q(l.route), q(l.dispatcherName), t.clients || 0, t.cajas || 0, t.unidades || 0, t.bultos || 0, t.totalUnidades || 0, n(t.monto), Liq.isDone(l) ? 'SI' : 'NO', Liq.isDone(l) ? n(ent(l).monto) : ''].join(sep)); });
       saveFile('archivo_cargas_' + today() + '.csv', '\uFEFF' + rows.join('\r\n'), 'text/csv;charset=utf-8');
     };
   }
@@ -954,7 +960,11 @@
     const carryRows = Object.fromEntries(nextRows.map((r) => [r.key, r.dev]));
     const newLiq = { ...liq, status: 'cerrada', closedAt: at, closedBy: by, carryFrom: carry ? carry.fromId : null,
       carry: nextRows.length ? { dispatcherId: load.dispatcherId || '', rows: carryRows } : null, carryUsedBy: liq.carryUsedBy || null,
-      totals: { clients: os.length, monto: updOrders.reduce((a, o) => a + o.delivery.monto, 0),
+      // Foto del camión al cierre (reportes de despachos y diferencias)
+      snapshot: { rows: rows.map((r) => ({ key: r.key, code: r.code, name: r.name, presentation: r.presentation, um: r.um, pedido: r.pedido, entregado: r.entregado,
+        queda: r.queda, carga: r.carga, total: r.total, debe: r.debe, dev: r.dev, dif: r.dif, motivo: r.motivo, dest: r.dest })) },
+      totals: { clients: updOrders.filter((o) => Matrix.orderTotals({ lines: o.delivery.lines }).items > 0).length, monto: updOrders.reduce((a, o) => a + o.delivery.monto, 0),
+        ...(() => { const t = { cajas: 0, unidades: 0, bultos: 0, totalUnidades: 0 }; updOrders.forEach((o) => { const x = Matrix.orderTotals({ lines: o.delivery.lines }); t.cajas += x.cajas; t.unidades += x.unidades; t.bultos += x.bultos; t.totalUnidades += x.totalUnidades; }); return t; })(),
         parcial: os.filter((o) => Liq.entry(liq, o.id).result === 'parcial').length, pendiente: pend.length,
         anulada: os.filter((o) => Liq.entry(liq, o.id).result === 'anulada').length } };
     await saveDocs('orders', updOrders.concat(clones));
