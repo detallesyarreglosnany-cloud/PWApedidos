@@ -47,7 +47,7 @@ const ADMIN_KINDS: readonly string[] = ['products', 'sellers', 'loads', 'config'
 type Kind = (typeof KINDS)[number];
 // Campos de un pedido que controla la oficina: un teléfono nunca los pisa
 // (aunque su copia local esté atrasada y no sepa que el pedido ya está en una hoja).
-const OFFICE_ORDER_FIELDS = ['loadId', 'locked', 'loadStatusName', 'noteNumber', 'loadNumber', 'dispatchedAt', 'officeEdited', 'heldAt', 'valeryNote'];
+const OFFICE_ORDER_FIELDS = ['loadId', 'locked', 'loadStatusName', 'noteNumber', 'loadNumber', 'dispatchedAt', 'officeEdited', 'heldAt', 'valeryNote', 'officeMsgs'];
 const OFFICE_ORDER_STATUS: readonly string[] = ['en_carga', 'en_espera', 'despachado'];
 // Solo se guardan en el equipo: el servidor calcula dupWith en cada bajada
 const LOCAL_ONLY_FIELDS = ['dirty', 'dupWith'];
@@ -229,6 +229,12 @@ function orderNotice(cur: Record<string, unknown> | null, doc: Record<string, un
     return null;
   }
   if (!cur || !sid) return null;
+  // Mensaje nuevo de la oficina sobre este pedido
+  const nm = Array.isArray(doc.officeMsgs) ? doc.officeMsgs : [], cm = Array.isArray(cur.officeMsgs) ? cur.officeMsgs : [];
+  if (nm.length > cm.length) {
+    const last = nm[nm.length - 1] as { text?: unknown } | undefined;
+    return seller('💬 Mensaje de la oficina', `${client}: ${String((last && last.text) || '').slice(0, 200)}`, 'msg');
+  }
   if (doc.deleted && !cur.deleted) return seller('🗑 Pedido eliminado por oficina', client, 'del');
   if (doc.status === 'despachado' && cur.status !== 'despachado') {
     // Las notas oficiales son las de Valery (las internas NE no se muestran)
