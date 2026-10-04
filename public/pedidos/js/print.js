@@ -164,7 +164,8 @@
   function liquidationHTML(load, st, ctx) {
     const cfg = ctx.config, liq = st.liq, rate = +cfg.exchangeRate || 0;
     const sh = Liq.sheet(st.os, liq, st.rows, st.vac);
-    const n = sh.cols.length, R = 10; // columnas del lado derecho
+    const n = sh.cols.length, R = 12; // columnas del lado derecho
+    const vacT = sh.rows.reduce((a, r) => (r.vacEnt === null ? a : { ent: a.ent + r.vacEnt, dev: a.dev + r.vacDev }), { ent: 0, dev: 0 });
     const blankR = (k) => `<td colspan="${k}" class="nob"></td>`;
     let lastCat = null;
     const body = sh.rows.map((r) => {
@@ -173,9 +174,10 @@
         ${r.cells.map((c) => `<td class="num${c.del ? ' has' : ''}">${c.del ? nf0.format(c.del) : ''}${c.ret ? `<span class="ret">↩${c.ret}</span>` : ''}</td>`).join('')}
         <td class="num tot">${nf0.format(r.entregado)}</td><td class="num">${r.queda ? nf0.format(r.queda) : ''}</td><td class="num">${nf0.format(r.carga)}</td><td class="num">${nf0.format(r.total)}</td>
         <td class="num tot">${nf0.format(r.debe)}</td><td class="num">${r.dev === null ? '' : nf0.format(r.dev)}</td><td class="num tot">${r.dif === null ? '' : nf0.format(r.dif)}</td>
-        <td class="mot">${esc(r.motivo)}</td><td class="mot">${r.debe > 0 || r.dev > 0 ? (r.dest === 'siguiente' ? 'Sig. carga' : 'Almacén') : ''}</td><td class="num usd">${nf2.format(r.usd)}</td></tr>`;
+        <td class="mot">${esc(r.motivo)}</td><td class="mot">${r.debe > 0 || r.dev > 0 ? (r.dest === 'siguiente' ? 'Sig. carga' : 'Almacén') : ''}</td>
+        <td class="num vac">${r.vacEnt === null ? '' : nf0.format(r.vacEnt)}</td><td class="num vac">${r.vacEnt === null ? '' : nf0.format(r.vacDev)}</td><td class="num usd">${nf2.format(r.usd)}</td></tr>`;
     }).join('');
-    const foot = `<tr class="tot"><td>TOTAL (cajas + unidades)</td>${sh.totals.bultos.map((v) => `<td class="num">${nf0.format(v)}</td>`).join('')}<td class="num tot">${nf0.format(sh.totals.bultos.reduce((x, y) => x + y, 0))}</td>${blankR(R - 1)}</tr>
+    const foot = `<tr class="tot"><td>TOTAL (cajas + unidades)</td>${sh.totals.bultos.map((v) => `<td class="num">${nf0.format(v)}</td>`).join('')}<td class="num tot">${nf0.format(sh.totals.bultos.reduce((x, y) => x + y, 0))}</td>${blankR(R - 4)}<td class="num tot">${vacT.ent ? nf0.format(vacT.ent) : ''}</td><td class="num tot">${vacT.ent ? nf0.format(vacT.dev) : ''}</td>${blankR(1)}</tr>
       <tr class="tot money"><td>TOTAL $ POR CLIENTE</td>${sh.totals.monto.map((v) => `<td class="num">${nf2.format(v)}</td>`).join('')}${blankR(R - 1)}<td class="num usd">${nf2.format(sh.totals.usd)}</td></tr>
       ${rate ? `<tr class="tot"><td>TOTAL Bs (tasa ${nf2.format(rate)})</td>${sh.totals.monto.map((v) => `<td class="num">${nf0.format(v * rate)}</td>`).join('')}${blankR(R - 1)}<td class="num usd">${nf0.format(sh.totals.usd * rate)}</td></tr>` : ''}
       ${sh.vac.map((v) => `<tr class="vacrow"><td>${esc(v.label)}</td>${v.cells.map((x) => `<td class="num">${x === null ? '' : nf0.format(x)}</td>`).join('')}<td class="num tot">${nf0.format(v.total)}</td>${blankR(R - 1)}</tr>`).join('')}`;
@@ -198,7 +200,7 @@
         <tr class="ini nota"><th style="text-align:right">NOTA VALERY →</th>${sh.cols.map((c) => `<th>${esc(c.order.valeryNote || '')}${c.entry.result === 'parcial' && c.entry.newValery ? `<br>→${esc(c.entry.newValery)}` : ''}</th>`).join('')}${blankR(R).replace(/td/g, 'th')}</tr>
         <tr class="ini novd"><th style="text-align:right">NOVEDAD →</th>${sh.cols.map((c) => `<th>${esc(Liq.shortResult(c.entry))}</th>`).join('')}${blankR(R).replace(/td/g, 'th')}</tr>
         <tr><th style="text-align:left">PRODUCTO</th>${sh.cols.map((c, i) => `<th class="cl"><div>${i + 1}. ${esc(c.order.clientName)}</div></th>`).join('')}
-          ${['ENTREGADO', 'QUEDAN', 'CARGA', 'TOTAL', 'DEBE QUEDAR', 'DEVOLUCIÓN', 'DIFERENCIA', 'MOTIVO', 'LO QUE SOBRA', 'TOTAL $'].map((x) => `<th class="cl rt"><div>${x}</div></th>`).join('')}</tr></thead>
+          ${['ENTREGADO', 'QUEDAN', 'CARGA', 'TOTAL', 'DEBE QUEDAR', 'DEVOLUCIÓN', 'DIFERENCIA', 'MOTIVO', 'LO QUE SOBRA', 'VACÍOS', 'VACÍOS DEVUELTOS', 'TOTAL $'].map((x) => `<th class="cl rt"><div>${x}</div></th>`).join('')}</tr></thead>
         <tbody>${body}</tbody><tfoot>${foot}</tfoot></table>
       ${novs.length ? `<p class="novs"><b>Novedades:</b> ${novs.map(({ c, i }) => `${i + 1}. ${esc(c.order.clientName)} — ${esc(Liq.shortResult(c.entry).toLowerCase())}${c.entry.result === 'parcial' || c.entry.result === 'anulada' ? ` · nota ${esc(c.order.valeryNote || '—')} anulada` : ''}${c.entry.newValery && c.entry.result === 'parcial' ? ` → nueva ${esc(c.entry.newValery)}` : ''}${c.entry.motivo ? ` · ${esc(c.entry.motivo)}` : ''}`).join(' &nbsp;|&nbsp; ')}</p>` : ''}
       <p class="muted foot">↩ = devuelto por el cliente · Total = Quedan + Carga · Debe quedar = Total − Entregado · Diferencia = Debe quedar − Devolución.</p>
