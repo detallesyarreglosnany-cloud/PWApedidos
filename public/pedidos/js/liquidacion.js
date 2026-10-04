@@ -139,5 +139,42 @@
     return out;
   }
 
-  global.Liq = { RESULTS, MOTIVOS, isDone, entry, deliveredLines, delivered, returnedAny, carryFor, truckRows, vacRows, problems };
+
+  /**
+   * Matriz de la liquidación (como la hoja de carga): una columna por cliente
+   * con lo que se le entregó (y lo devuelto), $ por cliente y por producto, y
+   * filas de vacíos por tipo al pie.
+   */
+  function sheet(orders, liq, rows, vac) {
+    const cols = orders.map((o) => {
+      const e = entry(liq, o.id), lines = deliveredLines(o, e), t = Matrix.orderTotals({ lines });
+      return { order: o, entry: e, lines, monto: t.monto, bultos: t.bultos };
+    });
+    const qty = (l, um) => (l ? (um === 'CJ' ? +l.cajas || 0 : +l.unidades || 0) : 0);
+    const usdOf = (l, um) => (l ? Matrix.lineTotals(um === 'CJ' ? { ...l, unidades: 0 } : { ...l, cajas: 0 }).monto : 0);
+    const mrows = rows.map((r) => {
+      const cells = cols.map((c) => { const ped = qty((c.order.lines || {})[r.productId], r.um), del = qty(c.lines[r.productId], r.um); return { del, ret: Math.max(0, ped - del) }; });
+      const usd = Matrix.r2(cols.reduce((a, c) => a + usdOf(c.lines[r.productId], r.um), 0));
+      return { ...r, cells, usd };
+    });
+    // Vacíos por tipo: recibidos, asignados y lo que quedan debiendo, por cliente
+    const types = [];
+    (vac || []).forEach((v) => { if (!types.includes(v.type)) types.push(v.type); });
+    const vacRowsOut = [];
+    types.forEach((ty) => {
+      const of = (c, f) => vac.filter((v) => v.type === ty && v.orderId === c.order.id).reduce((a, v) => (v[f] === null ? a : a + v[f]), null);
+      const mk = (key, label, f) => { const cells = cols.map((c) => of(c, f)); return { key, label: `${label} ${ty}`, cells, total: cells.reduce((a, x) => a + (x || 0), 0) }; };
+      const recv = mk('RECIBIDOS', 'VACÍOS RECIBIDOS', 'recv'), asg = mk('ASIGNADOS', 'ASIGNADOS', 'asg'), pend = mk('DEBEN', 'QUEDAN DEBIENDO', 'pending');
+      vacRowsOut.push(recv);
+      if (asg.cells.some((x) => x !== null)) vacRowsOut.push(asg);
+      if (pend.total) vacRowsOut.push(pend);
+    });
+    return { cols, rows: mrows, vac: vacRowsOut,
+      totals: { bultos: cols.map((c) => c.bultos), monto: cols.map((c) => c.monto), usd: Matrix.r2(cols.reduce((a, c) => a + c.monto, 0)) } };
+  }
+
+  /** Texto corto de la novedad de un cliente (encabezado de su columna). */
+  const shortResult = (e) => ({ entregada: '', parcial: 'DEV. PARCIAL', pendiente: 'SE ENTREGA DESPUÉS', anulada: 'ANULADA' })[e.result] || '';
+
+  global.Liq = { RESULTS, MOTIVOS, isDone, entry, deliveredLines, delivered, returnedAny, carryFor, truckRows, vacRows, problems, sheet, shortResult };
 })(window);
