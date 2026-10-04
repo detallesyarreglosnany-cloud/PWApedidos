@@ -134,6 +134,7 @@
     S.notifs = await DB.getMeta('notifs', []);
     S.epoch = await DB.getMeta('epoch', '');
     S.officePin = await DB.getMeta('officePin', '');
+    S.wipeNotice = await DB.getMeta('wipeNotice', null);
   }
   const byId = (arr, id) => arr.find((x) => x.id === id);
   const productById = (id) => byId(S.products, id);
@@ -177,7 +178,11 @@
     return (await DB.getMeta('epoch', '')) !== (S.epoch || '') || !!(await DB.getMeta('resetPending', null));
   }
   async function saveSettings(patch) { S.settings = { ...S.settings, ...patch }; await DB.setMeta('settings', S.settings); }
-  async function setSession(sess) { S.session = sess; await DB.setMeta('session', sess); }
+  async function setSession(sess) {
+    S.session = sess; await DB.setMeta('session', sess);
+    // El último vendedor también queda en una cookie: sobrevive si el navegador borra los datos
+    if (sess && sess.sellerId) DB.setCookie('pv_seller', sess.sellerId);
+  }
 
   /* ====================== Historial de actividad ====================== */
   // Cada acción queda con hora, quién y equipo. Solo se agrega: nadie la edita.
@@ -192,6 +197,17 @@
       if (k && Date.now() - (lastLogged.get(k) || 0) < (opts.everyMin || 10) * 60000) return;
       if (k) lastLogged.set(k, Date.now());
       const seller = office ? null : sellerById(sid);
+      // Aviso pendiente: el navegador borró los datos de este equipo (queda en el Historial)
+      if (S.wipeNotice) {
+        const w = S.wipeNotice; S.wipeNotice = null;
+        await DB.remove('meta', 'wipeNotice');
+        const wt = DB.now(), wd = new Date(Date.parse(wt));
+        await DB.put('events', {
+          id: DB.uid('ev'), at: wt, day: wd.getFullYear() + '-' + String(wd.getMonth() + 1).padStart(2, '0') + '-' + String(wd.getDate()).padStart(2, '0'),
+          type: 'datos_borrados', text: 'El navegador borró los datos guardados de este equipo (detectado ' + new Date(w.at).toLocaleString('es-VE') + '). Se recuperaron del servidor.',
+          sellerId: sid, sellerName: office ? 'Oficina' : (seller ? seller.name : sid), deviceId: await Sync.deviceId(), prevDeviceId: w.prev || '', updatedAt: wt, dirty: true,
+        });
+      }
       const at = DB.now();
       const d = new Date(Date.parse(at));
       const day = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
@@ -247,6 +263,8 @@
     // La oficina reinició los datos: este equipo ya borró su copia y bajó todo de nuevo
     if (r.reset) { location.reload(); return r; }
     lastSyncResult = r;
+    // Marca de equipo ya conectado (cookie): permite detectar si el navegador borra los datos
+    if (r.ok && !DB.getCookie('pv_dev')) DB.setCookie('pv_dev', await Sync.deviceId());
     // También se recarga si el servidor devolvió su versión de algo rechazado:
     // si no, la pantalla seguiría mostrando (y volvería a guardar) la copia vieja.
     if (r.ok && (r.pulled || r.reverted)) {
@@ -474,7 +492,8 @@
   /* =============================== Login =============================== */
   function renderLogin() {
     const active = S.sellers.filter((s) => s.active).sort((a, b) => a.name.localeCompare(b.name, 'es'));
-    const last = S.session && S.session.sellerId;
+    const cookieSeller = DB.getCookie('pv_seller');
+    const last = (S.session && S.session.sellerId) || (sellerById(cookieSeller) ? cookieSeller : null);
     app.innerHTML = `
       <section class="login">
         <img class="login-logo" src="./icons/logo-white.png" alt="Distribuidora de Suministros Puerto Venado">
@@ -1014,6 +1033,7 @@
           <div class="muted" style="font-size:13px">${last ? (last.ok ? 'Último sync correcto.' : 'Último intento: ' + esc(last.error || 'sin señal')) : ''}</div>
         </div>
       </details>
+      ${S.persisted === false ? `<div class="hint warn" style="margin-top:12px">${PERSIST_HINT}</div>` : ''}
       <div class="actions"><button class="btn btn-danger" id="mOut">Cambiar de vendedor</button></div>
       ${creditFooter()}`);
     $('#mSync', sh.el).onclick = () => runSync(true);
@@ -1034,6 +1054,40 @@
     $('#mOut', sh.el).onclick = async () => { await logEvent('salida', 'Salió de su ruta (cambiar de vendedor)'); await setSession(null); sh.close(); location.hash = '#/'; };
   }
 
+  /* ================== Claves y almacenamiento del equipo ================== */
+  const PERSIST_HINT = '⚠ El navegador puede borrar los datos de este equipo si se queda sin espacio. Para protegerlos: en Chrome abre el menú ⋮ → <b>Instalar app</b> (o «Agregar a pantalla principal») y entra siempre desde ese ícono. Activar los avisos 🔔 también ayuda.';
+
+  /**
+   * Equipo que ya estaba conectado y perdió sus claves (el navegador borró los
+   * datos): las pide al servidor con la cookie de acceso, que sobrevive.
+   */
+  async function recoverKeys() {
+    const st = S.settings;
+    if (st.syncKey && (st.adminKey || st.supervisorKey || !DB.getCookie('pv_office_on'))) return false;
+    const r = await Sync.keysCall('recover');
+    if (!r.ok || !r.data) return false;
+    const patch = {};
+    if (!st.syncKey && r.data.syncKey) patch.syncKey = r.data.syncKey;
+    if (!st.adminKey && !st.supervisorKey && r.data.adminKey) patch.adminKey = r.data.adminKey;
+    if (!Object.keys(patch).length) return false;
+    await saveSettings(patch);
+    return true;
+  }
+  /** La PC de oficina deja (o renueva cada 30 días) su cookie para recuperar la clave admin. */
+  async function rememberOffice(force) {
+    if (!S.settings.adminKey) return;
+    const at = await DB.getMeta('officeKeyAt', '');
+    if (!force && at && Date.now() - Date.parse(at) < 30 * 86400000) return;
+    const r = await Sync.keysCall('remember');
+    if (r.ok) { await DB.setMeta('officeKeyAt', new Date().toISOString()); DB.setCookie('pv_office_on', '1'); }
+  }
+  /** El equipo deja de ser oficina (quitaron la clave admin o entró como supervisor). */
+  async function forgetOffice() {
+    await DB.remove('meta', 'officeKeyAt');
+    DB.setCookie('pv_office_on', '');
+    await Sync.keysCall('forget');
+  }
+
   /* =============================== Arranque =============================== */
   async function boot() {
     try {
@@ -1044,7 +1098,13 @@
       app.innerHTML = `<div class="empty"><strong>No se pudo abrir la base local</strong>${esc(e.message)}</div>`;
       return;
     }
-    DB.requestPersistence();
+    // Equipo que ya trabajaba con la app (cookie) y amanece sin datos: el navegador los borró
+    const prevDev = DB.getCookie('pv_dev');
+    if (prevDev && !(await DB.getMeta('deviceId', null)) && !S.wipeNotice) {
+      S.wipeNotice = { at: new Date().toISOString(), prev: prevDev };
+      await DB.setMeta('wipeNotice', S.wipeNotice);
+    }
+    DB.requestPersistence().then((v) => { S.persisted = !!v; });
     window.addEventListener('hashchange', () => { render(); refreshPush(); });
     window.addEventListener('online', () => { updateSyncPill(); runSync(false); });
     window.addEventListener('offline', updateSyncPill);
@@ -1075,14 +1135,19 @@
     render();
     refreshPush();
     logEvent('apertura', isOffice() ? 'Abrió la oficina' : isSupervisor() ? 'Entró como supervisor' : 'Abrió la app');
-    scheduleSync(1200);
+    // Primero se recuperan las claves perdidas (si hace falta); luego se sincroniza y baja todo
+    recoverKeys().catch(() => false).then((ok) => {
+      if (ok) { toast('Conexión recuperada: bajando tus datos del servidor…', 'ok'); render(); }
+      rememberOffice(false).catch(() => {});
+      scheduleSync(ok ? 0 : 1200);
+    });
   }
   // Arranque: lo invoca index.html después de cargar office.js
 
   window.PV = {
     S, $, $$, esc, nf2, nf0, usd, bs, int, dec, norm, slug, today, fmtDate, fmtStock, hasStock, productSort, productLabel, rubroIcon,
     toast, openSheet, copyText, saveFile, pickFile, brandHeader, creditFooter,
-    loadAll, saveDocs, saveOrder, saveSettings, setSession, runSync, updateSyncPill, render, refreshAfterRemote, updateBell, beep, logEvent, isSupervisor,
+    loadAll, saveDocs, saveOrder, saveSettings, setSession, rememberOffice, forgetOffice, PERSIST_HINT, runSync, updateSyncPill, render, refreshAfterRemote, updateBell, beep, logEvent, isSupervisor,
     notifSheet, refreshPush,
     productById, sellerById, orderById, clientById, rubros, orderLinesHTML,
     boot,

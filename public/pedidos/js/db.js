@@ -73,7 +73,7 @@
         }
       };
       let settled = false;
-      const finish = (v) => { if (settled) return; settled = true; clearTimeout(blockedTimer); resolve(v); };
+      const finish = (v) => { if (settled) return; settled = true; clearTimeout(slowTimer); resolve(v); };
       req.onsuccess = () => {
         const db = req.result;
         // Si otra pestaña abre una versión nueva, esta suelta la base y se recarga
@@ -82,14 +82,20 @@
       };
       // Safari en modo privado / cuota bloqueada → localStorage
       req.onerror = () => { useFallback = true; finish(null); };
-      // Otra pestaña con la versión anterior sigue abierta: normalmente se cierra
-      // sola (ve onversionchange) y esto sigue en 1-2 s. Si no (pestaña vieja sin
-      // ese código, o colgada), no se deja la app esperando para siempre: pasa a
-      // localStorage para no bloquear el login ni la sincronización.
-      const blockedTimer = setTimeout(() => { useFallback = true; finish(null); }, 4000);
-      req.onblocked = () => console.warn('Base local ocupada por otra pestaña: esperando');
+      // Una base lenta (PC recién encendida, teléfono con poca memoria) o
+      // bloqueada por otra pestaña se ESPERA: pasar a localStorage abría la app
+      // vacía, sin claves ni datos, aunque todo seguía guardado en IndexedDB.
+      const slowTimer = setTimeout(() => showWait('La base de datos de este equipo está tardando en abrir. Espera un momento: tus datos están guardados.'), 6000);
+      req.onblocked = () => showWait('Otra ventana de Pedidos está usando la base de datos. Ciérrala y esta pantalla seguirá sola.');
     });
     return dbPromise;
+  }
+
+  /** Mensaje en la pantalla de carga mientras se espera la base local. */
+  function showWait(msg) {
+    console.warn(msg);
+    const el = global.document && document.querySelector('#app > .empty');
+    if (el) { el.textContent = ''; const b = document.createElement('strong'); b.textContent = 'Abriendo…'; el.append(b, msg); }
   }
 
   /* ---------- Fallback localStorage (misma API, JSON por store) ---------- */
@@ -271,8 +277,20 @@
     return false;
   }
 
+  /* ---------- Cookies de equipo (no se borran con el almacenamiento) ----------
+   * Si el navegador limpia IndexedDB por falta de espacio, las cookies quedan:
+   * así el equipo sabe que ya trabajaba con la app y qué vendedor lo usaba. */
+  function getCookie(name) {
+    const m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+    return m ? decodeURIComponent(m[1]) : '';
+  }
+  function setCookie(name, value) {
+    try { document.cookie = name + '=' + encodeURIComponent(value) + '; Max-Age=31536000; Path=/; SameSite=Lax' + (location.protocol === 'https:' ? '; Secure' : ''); }
+    catch (e) { /* sin cookies */ }
+  }
+
   global.DB = {
-    STORES, open, getAll, get, put, putMany, remove, getMeta, setMeta,
+    STORES, open, getAll, get, put, putMany, remove, getMeta, setMeta, getCookie, setCookie,
     uid, now, touch, setClockOffset, requestPersistence, clear, stampFields, mergeFields, after, FV_GROUPS: GROUPS,
     get isFallback() { return useFallback; },
   };

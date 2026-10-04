@@ -42,3 +42,27 @@ export async function validToken(token: string | undefined) {
   if (!exp || !sig || !/^\d+$/.test(exp) || Number(exp) < Date.now() / 1000) return false;
   return safeEqual(sig, await hmac(exp));
 }
+
+// ---- Recuperación de claves (ver /api/pedidos/llaves) ----
+// La PC de la oficina guarda una segunda cookie firmada con la clave admin: si el
+// navegador borra los datos del equipo, la app recupera sola su clave admin.
+// Cambiar la clave admin (o usuario/clave de acceso) en Vercel la invalida.
+export const OFFICE_COOKIE = 'pv_office';
+
+async function officeHmac(adminKey: string, message: string) {
+  const key = await crypto.subtle.importKey('raw', enc.encode('pv-office|' + adminKey + '|' + USER + '|' + PASS), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(message)));
+  return Array.from(sig, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+export async function issueOfficeToken(adminKey: string) {
+  const exp = String(Math.floor(Date.now() / 1000) + ACCESS_MAX_AGE);
+  return exp + '.' + (await officeHmac(adminKey, exp));
+}
+
+export async function validOfficeToken(token: string | undefined, adminKey: string) {
+  if (!token || !adminKey) return false;
+  const [exp, sig] = token.split('.');
+  if (!exp || !sig || !/^\d+$/.test(exp) || Number(exp) < Date.now() / 1000) return false;
+  return safeEqual(sig, await officeHmac(adminKey, exp));
+}

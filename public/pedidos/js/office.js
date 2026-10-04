@@ -103,7 +103,8 @@
 
   function setupBanner() {
     return `<div class="container"><div class="hint warn setup">
-      <b>Primer paso:</b> carga el <b>paquete de arranque</b> (catálogo con precios, cartera de clientes por vendedor, rutas y despachadores).
+      ${S.settings.syncKey ? '<b>Bajando los datos del servidor…</b> Si este equipo ya trabajaba con la app, no subas nada: todo baja solo al sincronizar. Usa el botón solo en una instalación nueva.'
+        : '<b>Primer paso:</b> carga el <b>paquete de arranque</b> (catálogo con precios, cartera de clientes por vendedor, rutas y despachadores).'}
       <button class="btn btn-primary" id="setupImport">⇩ Cargar paquete de arranque</button></div></div>`;
   }
 
@@ -1082,6 +1083,7 @@
     pedido_nuevo: 'Abrió pedido', pedido_enviado: 'Envió pedido', pedido_reabierto: 'Reabrió pedido', pedido_modificado: 'Modificó pedido',
     pedido_eliminado: 'Eliminó pedido', espera: 'Puso en espera', reincorporado: 'Reincorporó', movido: 'Movió de hoja',
     pedido_editado_oficina: 'Ajuste de oficina', carga_estado: 'Estado de hoja', cliente_reasignado: 'Reasignó cliente', respaldo: 'Respaldo',
+    datos_borrados: 'Datos borrados por el navegador',
   };
   async function renderHistory(root) {
     const f = U().hist || (U().hist = { day: today(), who: '', type: '' });
@@ -1293,7 +1295,8 @@
               <option value=",|." ${st.csvSep === ',' ? 'selected' : ''}>Excel en inglés ( , y punto decimal)</option></select></label>
           </div>
           <div class="row wrap" style="margin-top:12px"><button class="btn btn-primary" id="sSave">Guardar y sincronizar</button><span class="muted" id="sLast"></span></div></section>
-        <p class="muted" style="font-size:13px">Almacenamiento: ${DB.isFallback ? 'localStorage (limitado)' : 'IndexedDB'} · ${S.products.length} productos · ${S.clients.length} clientes · ${S.orders.length} pedidos</p>
+        <p class="muted" style="font-size:13px">Almacenamiento: ${DB.isFallback ? 'localStorage (limitado)' : 'IndexedDB'} · ${S.persisted ? '🛡 protegido contra borrado' : 'sin protección contra borrado'} · ${S.products.length} productos · ${S.clients.length} clientes · ${S.orders.length} pedidos</p>
+        ${S.persisted === false ? `<div class="hint warn">${PV.PERSIST_HINT}</div>` : ''}
       </div>`;
 
     const saveCfg = async (patch) => { await saveDocs('config', { ...S.config, ...patch }); renderSettings(root); toast('Guardado', 'ok'); };
@@ -1358,6 +1361,8 @@
     $('#sSave').onclick = async () => {
       const [sep, decimal] = $('#sSep').value.split('|');
       await PV.saveSettings({ syncKey: $('#sKey').value.trim(), adminKey: $('#sAdmin').value.trim(), syncUrl: $('#sUrl').value.trim(), csvSep: sep, csvDecimal: decimal });
+      // Con clave admin, esta PC podrá recuperarla sola si el navegador borra sus datos
+      if (S.settings.adminKey) PV.rememberOffice(true).catch(() => {}); else PV.forgetOffice().catch(() => {});
       await PV.runSync(true); renderSettings(root);
     };
     $('#bImp').onclick = importStarter;

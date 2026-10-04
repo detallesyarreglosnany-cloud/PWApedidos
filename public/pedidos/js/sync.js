@@ -341,6 +341,23 @@
     return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/push'), headers, body);
   }
 
+  /**
+   * Claves del equipo (/api/pedidos/llaves). action: 'recover' las pide con la
+   * cookie de acceso (equipo cuyo navegador borró los datos), 'remember' deja la
+   * cookie de oficina (con la clave admin), 'forget' la quita.
+   */
+  async function keysCall(action) {
+    if (!navigator.onLine) return { ok: false, offline: true };
+    const cfg = await settings();
+    const headers = { 'Content-Type': 'application/json' };
+    if (action === 'remember') {
+      if (!cfg.adminKey) return { ok: false, error: 'Falta la clave admin' };
+      headers['x-admin-key'] = cfg.adminKey;
+      if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
+    }
+    return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/llaves'), headers, { action });
+  }
+
   /** Reporte de ventas del servidor para un rango de fechas (sin límite de historial local). */
   const report = (from, to) => readerCall('report', { from, to });
 
@@ -420,5 +437,5 @@
     return n;
   }
 
-  global.Sync = { KINDS, isLocked, syncNow, pendingCount, hasCursor, reserveNumbers, adminCall, readerCall, report, pushCall, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
+  global.Sync = { KINDS, isLocked, syncNow, pendingCount, hasCursor, reserveNumbers, adminCall, readerCall, report, pushCall, keysCall, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
 })(window);
