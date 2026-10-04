@@ -210,7 +210,9 @@
     table.load.liq .ret{display:block;font-size:9px;font-weight:bold;line-height:1} tr.nov td{font-weight:bold}
     table.load.liq th.rt div{height:90px} table.load.liq td.usd{font-weight:900;border-left:2px solid #000}
     tr.nota th{font-size:9px;font-weight:bold;white-space:nowrap} tr.novd th{font-size:8px;line-height:1;white-space:normal;max-width:40px}
-    tr.money td{font-weight:900} tr.vacrow.k-DESPACHADOS td{border-top:2px solid #000} tr.vacrow.k-DEBEN td{font-weight:900} .sheet .novs{margin:4px 0 0;font-size:10px}`;
+    tr.money td{font-weight:900} table.load.liq td.p{white-space:normal;min-width:120px;max-width:150px;line-height:1.05;overflow-wrap:anywhere;padding:1px 3px}
+    table.load.liq td.p .um{white-space:nowrap} table.load.liq tfoot td:first-child{white-space:normal;max-width:150px;line-height:1.05}
+    table.load.liq th.cl div{height:175px} table.load.liq th.rt div{height:90px} table.load.liq tr.money td{font-size:10px;padding:1px 1px} table.load.liq tr.money td.usd{font-size:13px} tr.vacrow.k-DESPACHADOS td{border-top:2px solid #000} tr.vacrow.k-DEBEN td{font-weight:900} .sheet .novs{margin:4px 0 0;font-size:10px}`;
 
   function printLiquidation(load, st, ctx) {
     printHTML('Liquidación ' + Loads.loadCode(load), LIQ_CSS, liquidationHTML(load, st, ctx), LETTER_LANDSCAPE);
