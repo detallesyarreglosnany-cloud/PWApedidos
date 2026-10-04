@@ -428,5 +428,18 @@ tr.liq-mark td { background: var(--warn-soft); }
 tr.liq-count td { background: var(--brand-soft); }
 tr.liq-bad td { background: rgba(255, 77, 90, .14); }
 .warn-txt { color: var(--warn); font-weight: 800; }
-table.liq-truck input.qin, table.liq-vac input.qin { width: 64px; }
-table.liq-notes .select.sm, table.liq-truck .select.sm { min-width: 150px; }
+table.liq-vac input.qin { width: 64px; }
+table.liq-notes .select.sm { min-width: 150px; }
+table.liq-grid th.lq { background: #3a2f0e; color: var(--accent); vertical-align: bottom; }
+table.liq-grid th.lq.usd, table.liq-grid td.lq-usd { position: sticky; right: 0; z-index: 2; background: #3a2f0e; font-weight: 900; box-shadow: -6px 0 10px rgba(0,0,0,.35); }
+table.liq-grid thead th.lq.usd, table.liq-grid tfoot td.lq-usd { z-index: 6; }
+table.liq-grid td.lq-tot { background: #2b2410; font-weight: 900; border-left: 2px solid var(--accent); }
+table.liq-grid small.ret { display: block; font-size: 11px; color: var(--warn); font-weight: 800; }
+table.liq-grid .cell-in.wide { width: 140px; text-align: left; }
+table.liq-grid .select.sm { min-height: 34px; min-width: 150px; }
+table.liq-grid tr.liq-nota th { color: var(--ink); font-family: var(--mono); }
+table.liq-grid tr.liq-nov th { font-size: 10px; white-space: normal; max-width: 70px; line-height: 1.1; }
+table.liq-grid tr.liq-nov th.parcial, table.liq-grid tr.liq-nov th.pendiente { color: var(--warn); }
+table.liq-grid tr.liq-nov th.anulada { color: var(--danger); }
+table.liq-grid tr.liq-nov th.entregada { color: #53d68e; }
+table.liq-grid tr.liq-money td { color: var(--accent); }

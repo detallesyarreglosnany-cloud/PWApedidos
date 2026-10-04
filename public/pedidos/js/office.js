@@ -749,6 +749,7 @@
     const carrySrc = carry ? S.loads.find((l) => l.id === carry.fromId) : null;
     const opt = (arr, cur) => arr.map(([v, l]) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`).join('');
     const motivoSel = (cur, attr) => `<select class="select sm" ${attr} ${dis}><option value="">— Motivo —</option>${Liq.MOTIVOS.map((m) => `<option ${m === cur ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>`;
+    const sh = Liq.sheet(os, liq, rows, vac), rate = +S.config.exchangeRate || 0;
     const counts = { parcial: 0, pendiente: 0, anulada: 0 };
     os.forEach((o) => { const r = Liq.entry(liq, o.id).result; if (counts[r] !== undefined) counts[r]++; });
 
@@ -797,20 +798,34 @@
           <td class="n"><input class="input qin small" inputmode="numeric" data-v="recv" value="${v.recv}" ${dis}></td>
           <td class="n ${v.pending ? 'warn-txt' : ''}">${v.pending}</td></tr>`).join('')}</tbody></table></div>` : ''}
 
-      <div class="section-title">${vac.length ? 3 : 2} · Camión <span class="muted">(CARGA viene de la hoja; corrígela con el cuaderno de almacén)</span></div>
+      <div class="section-title">${vac.length ? 3 : 2} · Hoja de liquidación <span class="muted">(lo entregado a cada cliente y el cuadre del camión · CARGA viene de la hoja; corrígela con el cuaderno de almacén)</span></div>
       ${carry ? `<div class="hint">🚚 QUEDAN viene de la liquidación de <b>${esc(carrySrc ? Loads.labelOf(carrySrc) : carry.fromId)}</b> (mismo despachador, marcada «siguiente carga»).</div>` : ''}
       <div class="toolbar no-print"><button class="btn btn-sm" id="qAllStore" ${dis}>Todo lo que sobra → volvió a almacén</button><button class="btn btn-sm" id="qAllNext" ${dis}>Todo lo que sobra → siguiente carga</button></div>
-      <div class="card" style="overflow:auto"><table class="inv liq-truck">
-        <thead><tr><th>Producto</th><th class="n">Pedido</th><th class="n">Entregado</th><th class="n">Quedan</th><th class="n">Carga</th><th class="n">Total</th><th class="n">Debe quedar</th><th class="n">Devolución</th><th class="n">Diferencia</th><th>Motivo</th><th>Lo que sobra</th></tr></thead>
-        <tbody>${rows.map((r) => `<tr data-key="${esc(r.key)}" class="${r.dev === null ? 'liq-count' : r.dif !== 0 ? 'liq-bad' : ''}">
-          <td><span class="mono muted">${esc(r.code)}</span> ${esc(r.name)} <b>${esc(r.presentation)}</b> <span class="um ${r.um}">${r.um}</span></td>
-          <td class="n">${r.pedido}</td><td class="n">${r.entregado}</td><td class="n">${r.queda || ''}</td>
-          <td class="n"><input class="input qin small" inputmode="numeric" data-t="carga" value="${r.carga}" ${dis}></td>
+      <div class="table-wrap"><table class="grid sheet-grid liq-grid">
+        <thead>
+          <tr class="ini-row"><th class="sticky-col">Vendedor →</th>${sh.cols.map((c) => `<th>${esc(Loads.initials(c.order.sellerName))}</th>`).join('')}<th colspan="10"></th></tr>
+          <tr class="ini-row liq-nota"><th class="sticky-col">Nota Valery →</th>${sh.cols.map((c) => `<th>${esc(c.order.valeryNote || '—')}${c.entry.result === 'parcial' && c.entry.newValery ? `<br>→ ${esc(c.entry.newValery)}` : ''}</th>`).join('')}<th colspan="10"></th></tr>
+          <tr class="ini-row liq-nov"><th class="sticky-col">Novedad →</th>${sh.cols.map((c) => `<th class="${c.entry.result}">${esc(Liq.shortResult(c.entry)) || '✓'}</th>`).join('')}<th colspan="10"></th></tr>
+          <tr><th class="sticky-col">Producto</th>${sh.cols.map((c, i) => `<th class="client" title="${esc(c.order.clientName)}"><div>${i + 1}. ${esc(c.order.clientName)}</div></th>`).join('')}
+            <th class="lq">Entregado</th><th class="lq">Quedan</th><th class="lq">Carga</th><th class="lq">Total</th><th class="lq">Debe quedar</th><th class="lq">Devolución</th><th class="lq">Diferencia</th><th class="lq">Motivo</th><th class="lq">Lo que sobra</th><th class="lq usd">Total $</th></tr>
+        </thead>
+        <tbody>${sh.rows.map((r) => `<tr data-key="${esc(r.key)}" class="${r.dev === null ? 'liq-count' : r.dif !== 0 ? 'liq-bad' : ''}">
+          <td class="sticky-col"><span class="mono muted">${esc(r.code)}</span> ${esc(r.name)} <b>${esc(r.presentation)}</b> <span class="um ${r.um}">${r.um}</span></td>
+          ${r.cells.map((c) => `<td class="n ${c.del || c.ret ? '' : 'zero'}">${c.del ? nf0.format(c.del) : ''}${c.ret ? `<small class="ret" title="Devuelto">↩${c.ret}</small>` : ''}</td>`).join('')}
+          <td class="n lq-tot">${r.entregado}</td><td class="n">${r.queda || ''}</td>
+          <td class="n"><input class="cell-in" inputmode="numeric" data-t="carga" value="${r.carga}" aria-label="Carga ${esc(r.code)}" ${dis}></td>
           <td class="n">${r.total}</td><td class="n"><b>${r.debe}</b></td>
-          <td class="n"><input class="input qin small" inputmode="numeric" data-t="dev" value="${r.dev === null ? '' : r.dev}" placeholder="contar" ${dis}></td>
+          <td class="n"><input class="cell-in" inputmode="numeric" data-t="dev" value="${r.dev === null ? '' : r.dev}" placeholder="contar" aria-label="Devolución ${esc(r.code)}" ${dis}></td>
           <td class="n"><b>${r.dif === null ? '' : r.dif}</b></td>
-          <td><input class="input sm" data-t="motivo" maxlength="80" list="liqMot" value="${esc(r.motivo)}" ${r.dif ? '' : 'placeholder="—"'} ${dis}></td>
-          <td>${r.debe > 0 || r.dev > 0 ? `<select class="select sm" data-t="dest" ${dis}>${opt([['almacen', 'Volvió a almacén'], ['siguiente', 'Siguiente carga']], r.dest)}</select>` : ''}</td></tr>`).join('')}</tbody></table></div>
+          <td><input class="cell-in wide" data-t="motivo" maxlength="80" list="liqMot" value="${esc(r.motivo)}" ${r.dif ? '' : 'placeholder="—"'} aria-label="Motivo ${esc(r.code)}" ${dis}></td>
+          <td>${r.debe > 0 || r.dev > 0 ? `<select class="select sm" data-t="dest" ${dis}>${opt([['almacen', 'Volvió a almacén'], ['siguiente', 'Siguiente carga']], r.dest)}</select>` : ''}</td>
+          <td class="n lq-usd">${usd(r.usd)}</td></tr>`).join('')}</tbody>
+        <tfoot>
+          <tr><td class="sticky-col">TOTAL (cajas + unidades)</td>${sh.totals.bultos.map((v) => `<td class="n">${nf0.format(v)}</td>`).join('')}<td class="n lq-tot">${nf0.format(sh.totals.bultos.reduce((x, y) => x + y, 0))}</td><td colspan="8"></td><td></td></tr>
+          <tr class="liq-money"><td class="sticky-col">TOTAL $ POR CLIENTE</td>${sh.totals.monto.map((v) => `<td class="n">${usd(v)}</td>`).join('')}<td colspan="9"></td><td class="n lq-usd">${usd(sh.totals.usd)}</td></tr>
+          ${rate ? `<tr><td class="sticky-col">TOTAL Bs (tasa ${nf2.format(rate)})</td>${sh.totals.monto.map((v) => `<td class="n">${nf2.format(v * rate)}</td>`).join('')}<td colspan="9"></td><td class="n lq-usd">${nf2.format(sh.totals.usd * rate)}</td></tr>` : ''}
+          ${sh.vac.map((v) => `<tr class="vac-row"><td class="sticky-col">${esc(v.label)}</td>${v.cells.map((x) => `<td class="n">${x === null ? '' : nf0.format(x)}</td>`).join('')}<td class="n lq-tot">${nf0.format(v.total)}</td><td colspan="9"></td></tr>`).join('')}
+        </tfoot></table></div>
       <datalist id="liqMot">${Liq.MOTIVOS.map((m) => `<option value="${esc(m)}">`).join('')}</datalist>
       <p class="muted">Total = Quedan + Carga · Debe quedar = Total − Entregado · Diferencia = Debe quedar − Devolución. «Siguiente carga» solo pasa a la próxima hoja del mismo despachador.</p>
 

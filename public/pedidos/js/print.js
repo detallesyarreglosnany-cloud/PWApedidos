@@ -157,35 +157,29 @@
   }
 
   /* --------------------------- Liquidación --------------------------- */
-  // Horizontal: lo ENTREGADO (productos × clientes) con $ por cliente y por
-  // producto, el cuadre del camión, los vacíos y la lista de notas.
+  // Horizontal, UNA tabla como la hoja de carga: productos × clientes con lo
+  // entregado (↩ devuelto), arriba la nota Valery y la novedad de cada cliente,
+  // a la derecha el cuadre del camión y el $ por producto; al pie el $ por
+  // cliente y los vacíos.
   function liquidationHTML(load, st, ctx) {
-    const cfg = ctx.config, liq = st.liq;
-    const del = st.os.map((o) => Liq.delivered(o, liq));
-    const m = Matrix.build(del, 'bultos', { keepOrder: true, money: true, rubros: cfg.rubros, productRank: ctx.productRank });
-    // $ por fila (CJ con precio de caja, UN con precio de unidad)
-    const usdBy = new Map();
-    del.forEach((o) => Object.entries(o.lines || {}).forEach(([pid, l]) => {
-      const cj = Matrix.lineTotals({ ...l, unidades: 0 }).monto, un = Matrix.lineTotals({ ...l, cajas: 0 }).monto;
-      if (cj) usdBy.set(pid + '|CJ', (usdBy.get(pid + '|CJ') || 0) + cj);
-      if (un) usdBy.set(pid + '|UN', (usdBy.get(pid + '|UN') || 0) + un);
-    }));
-    const prodCell = (r) => `<td class="p"><span class="muted">${esc(r.code)}</span> ${esc(r.name)} <b>${esc(r.presentation)}</b> <span class="um">${r.um}</span></td>`;
-    const rows = m.rows.map((r) => `<tr>${prodCell(r)}${r.cells.map((v) => `<td class="num${v ? ' has' : ''}">${v ? nf0.format(v) : ''}</td>`).join('')}<td class="num tot">${nf0.format(r.total)}</td><td class="num">${nf2.format(usdBy.get(r.key) || 0)}</td></tr>`).join('');
-    const fb = m.footer.find((f) => f.key === 'TOTAL_BULTOS'), fu = m.footer.find((f) => f.key === 'TOTAL_USD');
-    const foot = (fb ? `<tr class="tot"><td>TOTAL (cajas + unidades)</td>${fb.cells.map((v) => `<td class="num">${nf0.format(v)}</td>`).join('')}<td class="num tot">${nf0.format(fb.total)}</td><td></td></tr>` : '')
-      + (fu ? `<tr class="tot"><td>TOTAL USD</td>${fu.cells.map((v) => `<td class="num">${nf2.format(v)}</td>`).join('')}<td></td><td class="num tot">${nf2.format(fu.total)}</td></tr>` : '');
-    const RT = Object.fromEntries(Liq.RESULTS.map(([k, v]) => [k, v.replace(/^\S+\s/, '')]));
-    const notes = st.os.map((o, i) => {
-      const e = Liq.entry(liq, o.id), d = Matrix.orderTotals(Liq.delivered(o, liq)).monto;
-      return `<tr${e.result !== 'entregada' ? ' class="nov"' : ''}><td>${i + 1}</td><td>${esc(o.clientName)}</td><td>${esc(o.valeryNote || '')}</td><td>${esc(RT[e.result] || e.result)}</td>
-        <td>${esc(e.result === 'parcial' ? e.newValery || '' : '')}</td><td>${esc(e.motivo || '')}</td><td class="num">${nf2.format(Matrix.orderTotals(o).monto)}</td><td class="num">${nf2.format(d)}</td></tr>`;
+    const cfg = ctx.config, liq = st.liq, rate = +cfg.exchangeRate || 0;
+    const sh = Liq.sheet(st.os, liq, st.rows, st.vac);
+    const n = sh.cols.length, R = 10; // columnas del lado derecho
+    const blankR = (k) => `<td colspan="${k}" class="nob"></td>`;
+    let lastCat = null;
+    const body = sh.rows.map((r) => {
+      const first = lastCat !== null && r.category !== lastCat; lastCat = r.category;
+      return `<tr class="${first ? 'grp ' : ''}${r.dif ? 'nov' : ''}"><td class="p"><span class="muted">${esc(r.code)}</span> ${esc(r.name)} <b>${esc(r.presentation)}</b> <span class="um">${r.um}</span></td>
+        ${r.cells.map((c) => `<td class="num${c.del ? ' has' : ''}">${c.del ? nf0.format(c.del) : ''}${c.ret ? `<span class="ret">↩${c.ret}</span>` : ''}</td>`).join('')}
+        <td class="num tot">${nf0.format(r.entregado)}</td><td class="num">${r.queda ? nf0.format(r.queda) : ''}</td><td class="num">${nf0.format(r.carga)}</td><td class="num">${nf0.format(r.total)}</td>
+        <td class="num tot">${nf0.format(r.debe)}</td><td class="num">${r.dev === null ? '' : nf0.format(r.dev)}</td><td class="num tot">${r.dif === null ? '' : nf0.format(r.dif)}</td>
+        <td class="mot">${esc(r.motivo)}</td><td class="mot">${r.debe > 0 || r.dev > 0 ? (r.dest === 'siguiente' ? 'Sig. carga' : 'Almacén') : ''}</td><td class="num usd">${nf2.format(r.usd)}</td></tr>`;
     }).join('');
-    const truck = st.rows.map((r) => `<tr${r.dif ? ' class="nov"' : ''}>${prodCell(r)}<td class="num">${nf0.format(r.pedido)}</td><td class="num">${nf0.format(r.entregado)}</td><td class="num">${r.queda ? nf0.format(r.queda) : ''}</td>
-      <td class="num">${nf0.format(r.carga)}</td><td class="num">${nf0.format(r.total)}</td><td class="num tot">${nf0.format(r.debe)}</td><td class="num">${r.dev === null ? '' : nf0.format(r.dev)}</td>
-      <td class="num tot">${r.dif === null ? '' : nf0.format(r.dif)}</td><td>${esc(r.motivo)}</td><td>${r.debe > 0 || r.dev > 0 ? (r.dest === 'siguiente' ? 'Siguiente carga' : 'Almacén') : ''}</td></tr>`).join('');
-    const vac = st.vac.map((v) => `<tr><td>${esc(v.client)}</td><td>${esc(v.code)} ${esc(v.name)}</td><td>${v.regime === 'contraentrega' ? 'Contraentrega' : 'Préstamo'}</td>
-      <td class="num">${v.boxes}</td><td class="num">${v.asg === null ? '' : v.asg}</td><td class="num">${v.recv}</td><td class="num tot">${v.pending || ''}</td></tr>`).join('');
+    const foot = `<tr class="tot"><td>TOTAL (cajas + unidades)</td>${sh.totals.bultos.map((v) => `<td class="num">${nf0.format(v)}</td>`).join('')}<td class="num tot">${nf0.format(sh.totals.bultos.reduce((x, y) => x + y, 0))}</td>${blankR(R - 1)}</tr>
+      <tr class="tot money"><td>TOTAL $ POR CLIENTE</td>${sh.totals.monto.map((v) => `<td class="num">${nf2.format(v)}</td>`).join('')}${blankR(R - 1)}<td class="num usd">${nf2.format(sh.totals.usd)}</td></tr>
+      ${rate ? `<tr class="tot"><td>TOTAL Bs (tasa ${nf2.format(rate)})</td>${sh.totals.monto.map((v) => `<td class="num">${nf0.format(v * rate)}</td>`).join('')}${blankR(R - 1)}<td class="num usd">${nf0.format(sh.totals.usd * rate)}</td></tr>` : ''}
+      ${sh.vac.map((v) => `<tr class="vacrow"><td>${esc(v.label)}</td>${v.cells.map((x) => `<td class="num">${x === null ? '' : nf0.format(x)}</td>`).join('')}<td class="num tot">${nf0.format(v.total)}</td>${blankR(R - 1)}</tr>`).join('')}`;
+    const novs = sh.cols.map((c, i) => ({ c, i })).filter(({ c }) => c.entry.result !== 'entregada');
     const done = Liq.isDone(load);
     return `<section class="sheet">
       ${header(cfg, 'LIQUIDACIÓN · ' + (load.number ? Loads.loadCode(load) : 'BORRADOR'), Loads.labelOf(load))}
@@ -195,25 +189,27 @@
         <div><b>Ruta</b>${esc(load.route || '—')}</div>
         <div><b>Despachador</b>${esc(load.dispatcherName || '—')}</div>
         <div><b>Vendedor(es)</b>${esc(load.sellerName)}</div>
-        <div><b>Estado</b>${done ? 'Liquidada ' + esc(fdate(liq.closedAt)) + ' ' + esc(ftime(liq.closedAt)) : 'BORRADOR'}</div>
-        <div><b>Clientes</b>${st.os.length}</div>
-        <div><b>Entregado USD</b>${nf2.format(fu ? fu.total : 0)}</div>
+        <div><b>Estado</b>${done ? 'Liquidada ' + esc(fdate(liq.closedAt)) : 'BORRADOR'}</div>
+        <div><b>Clientes</b>${n}</div>
+        <div><b>Total entregado $</b>${nf2.format(sh.totals.usd)}</div>
       </div>
-      <h3>Entregado por cliente</h3>
-      <table class="load ${m.cols.length > 14 ? 'many' : ''}"><thead><tr><th style="text-align:left">PRODUCTO</th>
-        ${m.cols.map((c, i) => `<th class="cl"><div>${i + 1}. ${esc(c.client)}</div></th>`).join('')}<th class="cl tcol"><div>TOTAL</div></th><th class="cl"><div>USD</div></th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="${m.cols.length + 3}">Sin entregas</td></tr>`}</tbody><tfoot>${foot}</tfoot></table>
-      </section>
-      <section class="sheet">
-      <h3>Notas</h3>
-      <table class="load wide"><thead><tr><th>#</th><th style="text-align:left">Cliente</th><th>Nota Valery</th><th>Resultado</th><th>Nota nueva</th><th>Motivo</th><th>Pedido $</th><th>Entregado $</th></tr></thead><tbody>${notes}</tbody></table>
-      <h3>Camión</h3>
-      <table class="load wide"><thead><tr><th style="text-align:left">PRODUCTO</th><th>PEDIDO</th><th>ENTREGADO</th><th>QUEDAN</th><th>CARGA</th><th>TOTAL</th><th>DEBE QUEDAR</th><th>DEVOLUCIÓN</th><th>DIFERENCIA</th><th>MOTIVO</th><th>LO QUE SOBRA</th></tr></thead><tbody>${truck}</tbody></table>
-      ${vac ? `<h3>Vacíos</h3><table class="load wide"><thead><tr><th style="text-align:left">Cliente</th><th style="text-align:left">Envase</th><th>Régimen</th><th>Cajas</th><th>Asignados</th><th>Recibidos</th><th>Deben</th></tr></thead><tbody>${vac}</tbody></table>` : ''}
+      <table class="load liq ${n > 14 ? 'many' : ''}"><thead>
+        <tr class="ini"><th style="text-align:right">VENDEDOR →</th>${sh.cols.map((c) => `<th>${esc(Loads.initials(c.order.sellerName))}</th>`).join('')}${blankR(R).replace(/td/g, 'th')}</tr>
+        <tr class="ini nota"><th style="text-align:right">NOTA VALERY →</th>${sh.cols.map((c) => `<th>${esc(c.order.valeryNote || '')}${c.entry.result === 'parcial' && c.entry.newValery ? `<br>→${esc(c.entry.newValery)}` : ''}</th>`).join('')}${blankR(R).replace(/td/g, 'th')}</tr>
+        <tr class="ini novd"><th style="text-align:right">NOVEDAD →</th>${sh.cols.map((c) => `<th>${esc(Liq.shortResult(c.entry))}</th>`).join('')}${blankR(R).replace(/td/g, 'th')}</tr>
+        <tr><th style="text-align:left">PRODUCTO</th>${sh.cols.map((c, i) => `<th class="cl"><div>${i + 1}. ${esc(c.order.clientName)}</div></th>`).join('')}
+          ${['ENTREGADO', 'QUEDAN', 'CARGA', 'TOTAL', 'DEBE QUEDAR', 'DEVOLUCIÓN', 'DIFERENCIA', 'MOTIVO', 'LO QUE SOBRA', 'TOTAL $'].map((x) => `<th class="cl rt"><div>${x}</div></th>`).join('')}</tr></thead>
+        <tbody>${body}</tbody><tfoot>${foot}</tfoot></table>
+      ${novs.length ? `<p class="novs"><b>Novedades:</b> ${novs.map(({ c, i }) => `${i + 1}. ${esc(c.order.clientName)} — ${esc(Liq.shortResult(c.entry).toLowerCase())}${c.entry.result === 'parcial' || c.entry.result === 'anulada' ? ` · nota ${esc(c.order.valeryNote || '—')} anulada` : ''}${c.entry.newValery && c.entry.result === 'parcial' ? ` → nueva ${esc(c.entry.newValery)}` : ''}${c.entry.motivo ? ` · ${esc(c.entry.motivo)}` : ''}`).join(' &nbsp;|&nbsp; ')}</p>` : ''}
+      <p class="muted foot">↩ = devuelto por el cliente · Total = Quedan + Carga · Debe quedar = Total − Entregado · Diferencia = Debe quedar − Devolución.</p>
       <div class="sign"><div>Despachador</div><div>Almacén</div><div>Liquidó (oficina)</div><div>Gerencia</div></div>
       </section>`;
   }
-  const LIQ_CSS = LOAD_CSS + ` .sheet h3{font-size:13px;margin:8px 0 3px} table.load.wide{width:100%} tr.nov td{font-weight:bold;border-top:2px solid #000;border-bottom:2px solid #000}`;
+  const LIQ_CSS = LOAD_CSS + ` td.nob,th.nob{border:0 !important} table.load.liq td.mot{font-size:10px;white-space:nowrap}
+    table.load.liq .ret{display:block;font-size:9px;font-weight:bold;line-height:1} tr.nov td{font-weight:bold}
+    table.load.liq th.rt div{height:90px} table.load.liq td.usd{font-weight:900;border-left:2px solid #000}
+    tr.nota th{font-size:9px;font-weight:bold;white-space:nowrap} tr.novd th{font-size:8px;line-height:1;white-space:normal;max-width:40px}
+    tr.money td{font-weight:900} .sheet .novs{margin:4px 0 0;font-size:10px}`;
 
   function printLiquidation(load, st, ctx) {
     printHTML('Liquidación ' + Loads.loadCode(load), LIQ_CSS, liquidationHTML(load, st, ctx), LETTER_LANDSCAPE);
