@@ -168,6 +168,7 @@
   const openLoads = () => S.loads.filter((l) => Loads.isOpen(l, S.config) && !Loads.isClosed(l));
 
   function renderLoads(root) {
+    if (U().liqId) { const l = S.loads.find((x) => x.id === U().liqId); if (l) return renderLiquidation(root, l); U().liqId = null; }
     if (U().loadId) { const l = S.loads.find((x) => x.id === U().loadId); if (l) return renderLoadDetail(root, l); U().loadId = null; }
     const ordersById = byIdMap(S.orders);
     const sid = U().loadSeller || '';
@@ -362,6 +363,7 @@
       <div class="toolbar no-print">
         ${editableLoad ? `<button class="btn ${edit ? 'btn-accent' : ''}" id="dEdit">${edit ? '✓ Terminar edición' : '✎ Editar cantidades'}</button>
           <button class="btn" id="dMerge">⇄ Fusionar con otra hoja</button>` : ''}
+        ${closed ? `<button class="btn btn-primary" id="dLiq">🧾 ${Liq.isDone(load) ? 'Ver liquidación' : 'Liquidar'}</button>` : ''}
         <button class="btn" id="dPrint" title="En la ventana de impresión elige tu impresora o «Guardar como PDF»">🖨 Imprimir / PDF hoja</button>
         <button class="btn" id="dCsv">⇩ Descargar Excel</button>
         <button class="btn" id="dCopy">📋 Copiar para Excel</button>
@@ -397,6 +399,7 @@
     const ctx = () => ({ config: S.config, products: S.products, usage: Loads.usage(cur(), byIdMap(S.orders), S.config), draft: !cur().number, clientsById: byIdMap(S.clients),
       load: cur(), productRank: productRank(), statusName: stName(cur()) });
     $('#dPrint').onclick = () => Print.printLoadSheet(cur(), Loads.loadOrders(cur(), byIdMap(S.orders)), ctx());
+    const dl = $('#dLiq'); if (dl) dl.onclick = () => { U().liqId = load.id; renderLiquidation(root, cur()); };
     $('#dCsv').onclick = () => saveFile(`hoja_${Loads.labelOf(cur())}_${cur().date || today()}.csv`, '\uFEFF' + Matrix.toDelimited(m, { sep: S.settings.csvSep, decimal: S.settings.csvDecimal }), 'text/csv;charset=utf-8');
     $('#dCopy').onclick = async () => {
       const ok = await copyText(Matrix.toDelimited(m, { sep: '\t', decimal: S.settings.csvDecimal }));
@@ -667,6 +670,7 @@
 
   /* ============================== ARCHIVO ============================== */
   function renderArchive(root) {
+    if (U().liqId) { const l = S.loads.find((x) => x.id === U().liqId); if (l) return renderLiquidation(root, l); U().liqId = null; }
     if (U().archiveId) { const l = S.loads.find((x) => x.id === U().archiveId); if (l) return renderLoadDetail(root, l); U().archiveId = null; }
     const f = U().arch || (U().arch = { from: '', to: '', seller: '', route: '', disp: '', status: '' });
     const dateOf = (l) => String(l.date || l.closedAt || l.approvedAt || '').slice(0, 10);
@@ -692,19 +696,24 @@
         <div class="kpi"><small>Clientes atendidos</small><b>${nf0.format(sum.c)}</b></div>
         <div class="kpi"><small>Bultos despachados</small><b>${nf0.format(sum.b)}</b></div>
         <div class="kpi"><small>Venta despachada</small><b>${usd(sum.m)}</b></div>
+        <div class="kpi"><small>Por liquidar</small><b>${list.filter((l) => !Liq.isDone(l)).length}</b></div>
       </div>
       ${list.length ? `<div class="card" style="overflow:auto"><table class="inv">
-        <thead><tr><th>Código</th><th>Fecha</th><th>Estado</th><th>Vendedor(es)</th><th>Ruta</th><th>Despachador</th><th>Clientes</th><th>Bultos</th><th>Unid.</th><th>Monto</th><th></th></tr></thead>
+        <thead><tr><th>Código</th><th>Fecha</th><th>Estado</th><th>Vendedor(es)</th><th>Ruta</th><th>Despachador</th><th>Clientes</th><th>Bultos</th><th>Unid.</th><th>Monto</th><th>Liquidación</th><th></th></tr></thead>
         <tbody>${list.map((l) => { const t = l.totals || {}; return `<tr>
           <td><b class="mono">${esc(Loads.labelOf(l))}</b><div class="muted mono">${esc(Loads.loadCode(l))}</div></td><td data-l="Fecha">${esc(dateOf(l))}</td>
           <td data-l="Estado"><span class="status aprobada">${esc(stName(l))}</span></td>
           <td data-l="Vendedor">${esc(l.sellerName)}</td><td data-l="Ruta">${esc(l.route || '')}</td><td data-l="Despachador">${esc(l.dispatcherName || '')}</td>
           <td class="n" data-l="Clientes">${t.clients || 0}</td><td class="n" data-l="Bultos">${nf0.format(t.bultos || 0)}</td><td class="n" data-l="Unid.">${nf0.format(t.totalUnidades || 0)}</td>
           <td class="n" data-l="Monto">${usd(t.monto)}</td>
-          <td style="white-space:nowrap"><button class="btn btn-sm" data-view="${esc(l.id)}">Ver</button></td></tr>`; }).join('')}</tbody></table></div>`
+          <td data-l="Liquidación">${Liq.isDone(l) ? '<span class="status aprobada">✓ Liquidada</span>' : (l.liq ? '<span class="status en_espera">Borrador</span>' : '<span class="status abierto">Por liquidar</span>')}</td>
+          <td style="white-space:nowrap"><button class="btn btn-sm" data-view="${esc(l.id)}">Ver</button> <button class="btn btn-sm btn-primary" data-liq="${esc(l.id)}">🧾 Liquidar</button></td></tr>`; }).join('')}</tbody></table></div>`
       : '<div class="empty card"><strong>Sin cargas cerradas</strong>con esos filtros.</div>'}`;
     $('#aFilters').onchange = (e) => { const k = e.target.dataset.f; if (k) { f[k] = e.target.value; renderArchive(root); } };
-    root.onclick = (e) => { const v = e.target.closest('[data-view]'); if (v) { U().archiveId = v.dataset.view; renderArchive(root); } };
+    root.onclick = (e) => {
+      const q = e.target.closest('[data-liq]'); if (q) { U().liqId = q.dataset.liq; renderArchive(root); return; }
+      const v = e.target.closest('[data-view]'); if (v) { U().archiveId = v.dataset.view; renderArchive(root); }
+    };
     $('#aCsv').onclick = () => {
       const sep = S.settings.csvSep, d = S.settings.csvDecimal;
       const n = (v) => { const s = Number(v || 0).toFixed(2); return d === ',' ? s.replace('.', ',') : s; };
@@ -714,8 +723,259 @@
       saveFile('archivo_cargas_' + today() + '.csv', '\uFEFF' + rows.join('\r\n'), 'text/csv;charset=utf-8');
     };
   }
+
+  /* ============================ LIQUIDACIÓN ============================ */
+  // Fase 2 · E3. Se abre desde el Archivo o desde una hoja cerrada. Todo viene
+  // prellenado como «entregado»: la oficina solo marca las novedades.
+  const liqOpts = () => ({ rubros: rubros(), productRank: productRank(), productsById: byIdMap(S.products) });
+  const blankLiq = () => ({ status: 'borrador', startedAt: DB.now(), orders: {}, truck: {} });
+  const RESULT_TXT = Object.fromEntries(Liq.RESULTS);
+
+  function liqState(load) {
+    const os = Loads.loadOrders(load, byIdMap(S.orders));
+    const liq = load.liq || blankLiq();
+    const carry = Liq.carryFor(load, S.loads);
+    const rows = Liq.truckRows(os, liq, carry, liqOpts());
+    const vac = Liq.vacRows(os, liq, byIdMap(S.products));
+    return { os, liq, carry, rows, vac, probs: Liq.problems(os, liq, rows, vac) };
+  }
+
+  function renderLiquidation(root, load) {
+    const { os, liq, carry, rows, vac, probs } = liqState(load);
+    const done = Liq.isDone(load);
+    const dis = done ? 'disabled' : '';
+    const pedido$ = (o) => Matrix.orderTotals(o).monto, entregado$ = (o) => Matrix.orderTotals(Liq.delivered(o, liq)).monto;
+    const totPed = os.reduce((a, o) => a + pedido$(o), 0), totEnt = os.reduce((a, o) => a + entregado$(o), 0);
+    const carrySrc = carry ? S.loads.find((l) => l.id === carry.fromId) : null;
+    const opt = (arr, cur) => arr.map(([v, l]) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`).join('');
+    const motivoSel = (cur, attr) => `<select class="select sm" ${attr} ${dis}><option value="">— Motivo —</option>${Liq.MOTIVOS.map((m) => `<option ${m === cur ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>`;
+    const counts = { parcial: 0, pendiente: 0, anulada: 0 };
+    os.forEach((o) => { const r = Liq.entry(liq, o.id).result; if (counts[r] !== undefined) counts[r]++; });
+
+    root.innerHTML = `
+      <div class="toolbar no-print">
+        <button class="btn" id="qBack">← Volver</button>
+        <div class="grow"><h2 style="margin:0">🧾 Liquidación · ${esc(Loads.labelOf(load))} ${load.number ? `<span class="muted mono">${esc(Loads.loadCode(load))}</span>` : ''}</h2>
+          <div class="muted">${esc(load.sellerName)} · Despachador: <b>${esc(load.dispatcherName || '—')}</b> · Fecha de la carga ${esc(load.date || '—')} · pedidos del ${esc(Loads.orderDateRange(os) || '—')}</div></div>
+        <span class="status ${done ? 'aprobada' : 'en_espera'}">${done ? '✓ Liquidada' : 'Borrador'}</span>
+        <button class="btn" id="qPrint">🖨 Imprimir liquidación</button>
+        ${done ? '<button class="btn" id="qReopen">↺ Reabrir</button>' : `<button class="btn btn-ok" id="qClose" ${probs.length ? 'title="Revisa la lista de pendientes"' : ''}>✓ Cerrar liquidación</button>`}
+      </div>
+      <div class="kpi-row">
+        <div class="kpi"><small>Clientes</small><b>${os.length}</b></div>
+        <div class="kpi"><small>Devolución parcial</small><b>${counts.parcial}</b></div>
+        <div class="kpi"><small>Se entregan después</small><b>${counts.pendiente}</b></div>
+        <div class="kpi"><small>Notas anuladas</small><b>${counts.anulada}</b></div>
+        <div class="kpi"><small>Entregado</small><b>${usd(totEnt)}</b><small>de ${usd(totPed)}</small></div>
+      </div>
+      ${done ? `<div class="hint">✓ Liquidada el ${esc(new Date(liq.closedAt).toLocaleString('es-VE'))} por ${esc(liq.closedBy || 'oficina')}. Para corregir, usa «Reabrir».</div>` : ''}
+
+      <div class="section-title">1 · Notas de los clientes <span class="muted">(todas vienen como entregadas: marca solo las novedades)</span></div>
+      <div class="card" style="overflow:auto"><table class="inv liq-notes">
+        <thead><tr><th>#</th><th>Cliente</th><th>Nota Valery</th><th>Resultado</th><th>Nota nueva</th><th>Motivo</th><th>Entregado</th><th></th></tr></thead>
+        <tbody>${os.map((o, i) => {
+          const e = Liq.entry(liq, o.id), nret = Object.values(e.ret || {}).reduce((a, r) => a + (+r.cajas || 0) + (+r.unidades || 0), 0);
+          return `<tr data-oid="${esc(o.id)}" class="${e.result !== 'entregada' ? 'liq-mark' : ''}">
+            <td>${i + 1}</td>
+            <td><b>${esc(o.clientName)}</b> <span class="tag">${esc(Loads.initials(o.sellerName))}</span></td>
+            <td data-l="Nota Valery"><input class="input sm mono valery-in" inputmode="numeric" maxlength="20" data-oid="${esc(o.id)}" value="${esc(o.valeryNote || '')}" placeholder="N°" ${dis}></td>
+            <td data-l="Resultado"><select class="select sm" data-q="result" ${dis}>${opt(Liq.RESULTS, e.result)}</select></td>
+            <td data-l="Nota nueva">${e.result === 'parcial' ? `<input class="input sm mono" data-q="newValery" inputmode="numeric" maxlength="20" value="${esc(e.newValery || '')}" placeholder="N° nueva" ${dis}>` : (e.result === 'anulada' ? '<span class="muted">anulada</span>' : '')}</td>
+            <td data-l="Motivo">${e.result !== 'entregada' ? motivoSel(e.motivo || '', 'data-q="motivo"') : ''}</td>
+            <td class="n" data-l="Entregado">${usd(entregado$(o))}${entregado$(o) !== pedido$(o) ? `<div class="muted">de ${usd(pedido$(o))}</div>` : ''}</td>
+            <td>${e.result === 'parcial' ? `<button class="btn btn-sm" data-ret="${esc(o.id)}">↩ Devolución${nret ? ' (' + nret + ')' : ''}</button>` : ''}</td></tr>`;
+        }).join('')}</tbody></table></div>
+      <p class="muted">Anulada = la nota se anula en Valery en este momento. Devolución parcial = se anula la nota y se escribe la nueva de Valery que la reemplaza. «Se entrega después» deja la misma nota y el pedido vuelve a la cola para la próxima hoja.</p>
+
+      ${vac.length ? `<div class="section-title">2 · Vacíos <span class="muted">(prellenado: recibió los que le tocaban)</span></div>
+      <div class="card" style="overflow:auto"><table class="inv liq-vac">
+        <thead><tr><th>Cliente</th><th>Envase</th><th class="n">Cajas entregadas</th><th class="n">Asignados</th><th class="n">Vacíos recibidos</th><th class="n">Quedan debiendo</th></tr></thead>
+        <tbody>${vac.map((v) => `<tr data-oid="${esc(v.orderId)}" data-pid="${esc(v.pid)}">
+          <td><b>${esc(v.client)}</b></td><td>${esc(v.code)} ${esc(v.name)} <span class="muted">${v.regime === 'contraentrega' ? '· contraentrega' : '· préstamo'}</span></td>
+          <td class="n">${v.boxes}</td>
+          <td class="n">${v.assign ? `<input class="input qin small" inputmode="numeric" data-v="asg" value="${v.asg === null ? '' : v.asg}" placeholder="—" ${dis}>` : '—'}</td>
+          <td class="n"><input class="input qin small" inputmode="numeric" data-v="recv" value="${v.recv}" ${dis}></td>
+          <td class="n ${v.pending ? 'warn-txt' : ''}">${v.pending}</td></tr>`).join('')}</tbody></table></div>` : ''}
+
+      <div class="section-title">${vac.length ? 3 : 2} · Camión <span class="muted">(CARGA viene de la hoja; corrígela con el cuaderno de almacén)</span></div>
+      ${carry ? `<div class="hint">🚚 QUEDAN viene de la liquidación de <b>${esc(carrySrc ? Loads.labelOf(carrySrc) : carry.fromId)}</b> (mismo despachador, marcada «siguiente carga»).</div>` : ''}
+      <div class="toolbar no-print"><button class="btn btn-sm" id="qAllStore" ${dis}>Todo lo que sobra → volvió a almacén</button><button class="btn btn-sm" id="qAllNext" ${dis}>Todo lo que sobra → siguiente carga</button></div>
+      <div class="card" style="overflow:auto"><table class="inv liq-truck">
+        <thead><tr><th>Producto</th><th class="n">Pedido</th><th class="n">Entregado</th><th class="n">Quedan</th><th class="n">Carga</th><th class="n">Total</th><th class="n">Debe quedar</th><th class="n">Devolución</th><th class="n">Diferencia</th><th>Motivo</th><th>Lo que sobra</th></tr></thead>
+        <tbody>${rows.map((r) => `<tr data-key="${esc(r.key)}" class="${r.dev === null ? 'liq-count' : r.dif !== 0 ? 'liq-bad' : ''}">
+          <td><span class="mono muted">${esc(r.code)}</span> ${esc(r.name)} <b>${esc(r.presentation)}</b> <span class="um ${r.um}">${r.um}</span></td>
+          <td class="n">${r.pedido}</td><td class="n">${r.entregado}</td><td class="n">${r.queda || ''}</td>
+          <td class="n"><input class="input qin small" inputmode="numeric" data-t="carga" value="${r.carga}" ${dis}></td>
+          <td class="n">${r.total}</td><td class="n"><b>${r.debe}</b></td>
+          <td class="n"><input class="input qin small" inputmode="numeric" data-t="dev" value="${r.dev === null ? '' : r.dev}" placeholder="contar" ${dis}></td>
+          <td class="n"><b>${r.dif === null ? '' : r.dif}</b></td>
+          <td><input class="input sm" data-t="motivo" maxlength="80" list="liqMot" value="${esc(r.motivo)}" ${r.dif ? '' : 'placeholder="—"'} ${dis}></td>
+          <td>${r.debe > 0 || r.dev > 0 ? `<select class="select sm" data-t="dest" ${dis}>${opt([['almacen', 'Volvió a almacén'], ['siguiente', 'Siguiente carga']], r.dest)}</select>` : ''}</td></tr>`).join('')}</tbody></table></div>
+      <datalist id="liqMot">${Liq.MOTIVOS.map((m) => `<option value="${esc(m)}">`).join('')}</datalist>
+      <p class="muted">Total = Quedan + Carga · Debe quedar = Total − Entregado · Diferencia = Debe quedar − Devolución. «Siguiente carga» solo pasa a la próxima hoja del mismo despachador.</p>
+
+      ${!done ? (probs.length ? `<div class="hint warn"><b>Antes de cerrar:</b><ul style="margin:6px 0 0">${probs.slice(0, 25).map((p) => `<li>${esc(p)}</li>`).join('')}${probs.length > 25 ? `<li>… y ${probs.length - 25} más</li>` : ''}</ul></div>`
+        : '<div class="hint">✓ Todo cuadra. Puedes cerrar la liquidación.</div>') : ''}`;
+
+    const cur = () => S.loads.find((x) => x.id === load.id) || load;
+    const refresh = (focusSel) => { renderLiquidation(root, cur()); if (focusSel) { const el = root.querySelector(focusSel); if (el) el.focus(); } };
+    const saveLiq = async (fn, focusSel) => {
+      if (Liq.isDone(cur())) { toast('La liquidación está cerrada: reábrela para corregir', 'err'); return; }
+      const l = cur(); const liq2 = JSON.parse(JSON.stringify(l.liq || blankLiq()));
+      liq2.orders = liq2.orders || {}; liq2.truck = liq2.truck || {};
+      fn(liq2);
+      await saveDocs('loads', { ...l, liq: liq2 });
+      refresh(focusSel);
+    };
+    $('#qBack').onclick = () => { U().liqId = null; PV.render(); };
+    $('#qPrint').onclick = () => { const st = liqState(cur()); Print.printLiquidation(cur(), st, { config: S.config, products: S.products, productRank: productRank() }); };
+    const qc = $('#qClose'); if (qc) qc.onclick = () => closeLiquidation(cur(), root);
+    const qr = $('#qReopen'); if (qr) qr.onclick = () => reopenLiquidation(cur(), root);
+    const setAll = (dest) => saveLiq((q) => rows.forEach((r) => { if (r.debe > 0 || r.dev > 0) q.truck[r.key] = { ...(q.truck[r.key] || {}), dest }; }));
+    const sa = $('#qAllStore'); if (sa) sa.onclick = () => setAll('almacen');
+    const sn = $('#qAllNext'); if (sn) sn.onclick = () => setAll('siguiente');
+
+    root.onclick = (e) => {
+      const b = e.target.closest('[data-ret]'); if (b) returnsDialog(orderById(b.dataset.ret), saveLiq);
+    };
+    root.onchange = async (e) => {
+      const t = e.target;
+      const vi = t.closest('.valery-in');
+      if (vi) {
+        const o = orderById(vi.dataset.oid), v = vi.value.replace(/\s+/g, '').toUpperCase();
+        if (o && (o.valeryNote || '') !== v) { await saveOrder({ ...o, valeryNote: v }); toast(v ? `Nota ${v} guardada · ${o.clientName}` : 'Nota borrada', 'ok'); }
+        return;
+      }
+      const tr = t.closest('tr');
+      if (t.dataset.q && tr && tr.dataset.oid) {
+        const oid = tr.dataset.oid, k = t.dataset.q, val = t.value.trim();
+        await saveLiq((q) => {
+          const en = { result: 'entregada', ...(q.orders[oid] || {}) };
+          en[k] = k === 'newValery' ? val.replace(/\s+/g, '').toUpperCase() : val;
+          if (k === 'result' && val === 'entregada') { delete en.ret; delete en.newValery; delete en.motivo; }
+          if (k === 'result' && val === 'anulada') delete en.newValery;
+          if (k === 'result' && (val === 'pendiente' || val === 'anulada')) delete en.ret;
+          q.orders[oid] = en;
+        }, k === 'newValery' ? null : `tr[data-oid="${oid}"] [data-q="${k === 'result' ? (val === 'parcial' ? 'newValery' : 'result') : k}"]`);
+        if (k === 'result' && val === 'parcial') returnsDialog(orderById(oid), saveLiq);
+        return;
+      }
+      if (t.dataset.v && tr && tr.dataset.pid) {
+        const oid = tr.dataset.oid, pid = tr.dataset.pid, raw = t.value.trim();
+        await saveLiq((q) => {
+          const en = { result: 'entregada', ...(q.orders[oid] || {}) };
+          en.vac = { ...(en.vac || {}) }; en.vac[pid] = { ...(en.vac[pid] || {}) };
+          if (raw === '') delete en.vac[pid][t.dataset.v]; else en.vac[pid][t.dataset.v] = int(raw);
+          q.orders[oid] = en;
+        });
+        return;
+      }
+      if (t.dataset.t && tr && tr.dataset.key) {
+        const key = tr.dataset.key, f = t.dataset.t, raw = t.value.trim();
+        await saveLiq((q) => {
+          const x = { ...(q.truck[key] || {}) };
+          if (f === 'carga' || f === 'dev') { if (raw === '') delete x[f]; else x[f] = int(raw); } else x[f] = raw;
+          q.truck[key] = x;
+        }, f === 'motivo' ? null : `tr[data-key="${key}"] [data-t="${f}"]`);
+      }
+    };
+  }
+
+  /** Qué devolvió el cliente (devolución parcial): cajas y unidades por producto. */
+  function returnsDialog(o, saveLiq) {
+    if (!o) return;
+    const l0 = (S.loads.find((l) => l.id === o.loadId) || {}).liq || {};
+    const e = Liq.entry(l0, o.id);
+    const lines = Object.entries(o.lines || {}).filter(([, l]) => (+l.cajas || 0) || (+l.unidades || 0));
+    const sh = openSheet(`
+      <div class="row"><h2 class="grow">↩ Devolución · ${esc(o.clientName)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <p class="muted">Escribe solo lo que el cliente devolvió. Lo demás cuenta como entregado.</p>
+      <table class="lines">${lines.map(([pid, l]) => { const r = (e.ret || {})[pid] || {}; return `<tr><td><b>${esc(l.name)} ${esc(l.presentation || '')}</b><div class="muted mono" style="font-size:12px">${esc(l.code)} · pidió ${l.cajas ? l.cajas + ' cj' : ''}${l.cajas && l.unidades ? ' + ' : ''}${l.unidades ? l.unidades + ' un' : ''}</div></td>
+        <td style="white-space:nowrap">${l.cajas ? `<label class="mini">CJ <input class="input mini-in" inputmode="numeric" data-pid="${esc(pid)}" data-k="cajas" data-max="${l.cajas}" value="${r.cajas || ''}"></label>` : ''}
+          ${l.unidades ? `<label class="mini">UN <input class="input mini-in" inputmode="numeric" data-pid="${esc(pid)}" data-k="unidades" data-max="${l.unidades}" value="${r.unidades || ''}"></label>` : ''}</td></tr>`; }).join('')}</table>
+      <div class="actions"><button class="btn btn-primary" id="rtOk">Guardar devolución</button></div>`, { wide: true });
+    $('#rtOk', sh.el).onclick = async () => {
+      const ret = {};
+      sh.el.querySelectorAll('.mini-in').forEach((i) => {
+        const v = Math.min(+i.dataset.max || 0, Math.max(0, int(i.value)));
+        if (v) { ret[i.dataset.pid] = ret[i.dataset.pid] || {}; ret[i.dataset.pid][i.dataset.k] = v; }
+      });
+      sh.close();
+      await saveLiq((q) => { q.orders[o.id] = { result: 'parcial', ...(q.orders[o.id] || {}), ret }; });
+    };
+  }
+
+  /** Cierra la liquidación: guarda lo entregado en cada pedido, reprograma pendientes y deja la carga del camión. */
+  async function closeLiquidation(load, root) {
+    const { os, liq, carry, rows, vac, probs } = liqState(load);
+    if (probs.length) { toast('Revisa la lista «Antes de cerrar» al final de la pantalla', 'err'); return; }
+    const pend = os.filter((o) => Liq.entry(liq, o.id).result === 'pendiente');
+    const nextRows = rows.filter((r) => r.dest === 'siguiente' && r.dev > 0);
+    if (!confirm(`Cerrar la liquidación de ${Loads.labelOf(load)}:\n\n• ${os.length} clientes · entregado ${usd(os.reduce((a, o) => a + Matrix.orderTotals(Liq.delivered(o, liq)).monto, 0))}${pend.length ? `\n• ${pend.length} pedido(s) vuelven a la cola para la próxima hoja` : ''}${nextRows.length ? `\n• ${nextRows.length} producto(s) quedan en el camión para la siguiente carga de ${load.dispatcherName}` : ''}\n\n¿Continuar?`)) return;
+    const at = DB.now(), by = (S.config && S.config.adminName) || 'Oficina';
+    const vacBy = {};
+    vac.forEach((v) => { (vacBy[v.orderId] = vacBy[v.orderId] || {})[v.pid] = { code: v.code, type: v.type, regime: v.regime, boxes: v.boxes, recv: v.recv, asg: v.asg }; });
+    const updOrders = [], clones = [];
+    os.forEach((o) => {
+      const e = Liq.entry(liq, o.id), lines = Liq.deliveredLines(o, e);
+      updOrders.push({ ...o, delivery: {
+        loadId: load.id, result: e.result, lines, monto: Matrix.orderTotals({ lines }).monto, motivo: e.motivo || '',
+        voidedNote: e.result === 'parcial' || e.result === 'anulada' ? (o.valeryNote || '') : '',
+        newValery: e.result === 'parcial' ? String(e.newValery || '').trim() : '',
+        vac: vacBy[o.id] || {}, date: load.date || at.slice(0, 10), at, by,
+        dispatcherId: load.dispatcherId || '', dispatcherName: load.dispatcherName || '',
+      } });
+      if (e.result === 'pendiente') {
+        const id = 'o_pend_' + o.id;
+        const prev = S.orders.find((x) => x.id === id);
+        if (prev && !prev.deleted) return; // ya se reprogramó (liquidación reabierta y cerrada de nuevo)
+        const c = { ...o, id, status: 'enviado', loadId: null, locked: false, loadStatusName: '', sentAt: at, createdAt: at, routeDate: today(),
+          pendingFrom: o.id, deleted: false, notes: [o.notes, `Pendiente de ${Loads.labelOf(load)}`].filter(Boolean).join(' · ').slice(0, 300) };
+        ['noteNumber', 'loadNumber', 'dispatchedAt', 'heldAt', 'delivery', 'fv', 'dupWith', 'sentLines', 'officeEdited', 'sellerEdited'].forEach((k) => delete c[k]);
+        clones.push(c);
+      }
+    });
+    const carryRows = Object.fromEntries(nextRows.map((r) => [r.key, r.dev]));
+    const newLiq = { ...liq, status: 'cerrada', closedAt: at, closedBy: by, carryFrom: carry ? carry.fromId : null,
+      carry: nextRows.length ? { dispatcherId: load.dispatcherId || '', rows: carryRows } : null, carryUsedBy: liq.carryUsedBy || null,
+      totals: { clients: os.length, monto: updOrders.reduce((a, o) => a + o.delivery.monto, 0),
+        parcial: os.filter((o) => Liq.entry(liq, o.id).result === 'parcial').length, pendiente: pend.length,
+        anulada: os.filter((o) => Liq.entry(liq, o.id).result === 'anulada').length } };
+    await saveDocs('orders', updOrders.concat(clones));
+    const loadsToSave = [{ ...load, liq: newLiq }];
+    if (carry) { const src = S.loads.find((l) => l.id === carry.fromId); if (src && src.liq) loadsToSave.push({ ...src, liq: { ...src.liq, carryUsedBy: load.id } }); }
+    await saveDocs('loads', loadsToSave);
+    await log('liquidacion', `Liquidó ${Loads.labelOf(load)} (${load.dispatcherName || 'sin despachador'}) · ${os.length} clientes · ${usd(newLiq.totals.monto)}${newLiq.totals.parcial ? ` · ${newLiq.totals.parcial} devoluciones` : ''}${pend.length ? ` · ${pend.length} reprogramados` : ''}${newLiq.totals.anulada ? ` · ${newLiq.totals.anulada} anuladas` : ''}`, { loadId: load.id });
+    toast('Liquidación cerrada', 'ok');
+    renderLiquidation(root, S.loads.find((l) => l.id === load.id) || load);
+    PV.runSync(false);
+  }
+
+  /** Reabre una liquidación cerrada (con motivo). Quita lo entregado y los pedidos reprogramados que aún no salieron. */
+  async function reopenLiquidation(load, root) {
+    const os = Loads.loadOrders(load, byIdMap(S.orders));
+    const clones = S.orders.filter((o) => !o.deleted && o.pendingFrom && os.some((x) => x.id === o.pendingFrom));
+    const stuck = clones.filter((c) => !Loads.editable(c));
+    if (stuck.length) { toast(`No se puede reabrir: ${stuck.map((c) => c.clientName).join(', ')} ya salió en otra hoja aprobada`, 'err'); return; }
+    if (load.liq && load.liq.carryUsedBy && load.liq.carryUsedBy !== load.id) {
+      const u = S.loads.find((l) => l.id === load.liq.carryUsedBy);
+      if (u && Liq.isDone(u)) { toast(`No se puede reabrir: su carga ya se usó en ${Loads.labelOf(u)}, que está liquidada`, 'err'); return; }
+    }
+    const motivo = (prompt('Motivo para reabrir la liquidación:') || '').trim();
+    if (!motivo) return;
+    await saveDocs('orders', os.filter((o) => o.delivery).map((o) => ({ ...o, delivery: null }))
+      .concat(clones.map((c) => ({ ...c, deleted: true, deletedBy: 'oficina', deletedAt: DB.now() }))));
+    const loadsToSave = [{ ...load, liq: { ...load.liq, status: 'borrador', closedAt: null, reopenedAt: DB.now(), reopenReason: motivo } }];
+    const src = load.liq && load.liq.carryFrom ? S.loads.find((l) => l.id === load.liq.carryFrom) : null;
+    if (src && src.liq && src.liq.carryUsedBy === load.id) loadsToSave.push({ ...src, liq: { ...src.liq, carryUsedBy: null } });
+    await saveDocs('loads', loadsToSave);
+    await log('liquidacion', `Reabrió la liquidación de ${Loads.labelOf(load)} · motivo: ${motivo}`, { loadId: load.id });
+    toast('Liquidación reabierta', 'ok');
+    renderLiquidation(root, S.loads.find((l) => l.id === load.id) || load);
+  }
+
   // Al cambiar de pestaña se sale de cualquier detalle abierto
-  window.addEventListener('hashchange', () => { U().archiveId = null; U().loadId = null; U().editQty = false; });
+  window.addEventListener('hashchange', () => { U().archiveId = null; U().loadId = null; U().liqId = null; U().editQty = false; });
 
   /* ============================= INVENTARIO ============================= */
   function renderInventory(root) {
@@ -1168,7 +1428,7 @@
     pedido_nuevo: 'Abrió pedido', pedido_enviado: 'Envió pedido', pedido_reabierto: 'Reabrió pedido', pedido_modificado: 'Modificó pedido',
     pedido_eliminado: 'Eliminó pedido', espera: 'Puso en espera', reincorporado: 'Reincorporó', movido: 'Movió de hoja',
     pedido_editado_oficina: 'Ajuste de oficina', carga_estado: 'Estado de hoja', cliente_reasignado: 'Reasignó cliente', respaldo: 'Respaldo',
-    datos_borrados: 'Datos borrados por el navegador', nota_valery: 'Nota Valery', retornables: 'Retornables', mensaje: 'Mensaje a vendedor',
+    datos_borrados: 'Datos borrados por el navegador', nota_valery: 'Nota Valery', retornables: 'Retornables', mensaje: 'Mensaje a vendedor', liquidacion: 'Liquidación',
   };
   async function renderHistory(root) {
     const f = U().hist || (U().hist = { day: today(), who: '', type: '' });

@@ -40,7 +40,7 @@
   }
 
   // Campos de un pedido que decide la oficina (espejo del servidor)
-  const OFFICE_ORDER_FIELDS = ['loadId', 'locked', 'loadStatusName', 'noteNumber', 'loadNumber', 'dispatchedAt', 'officeEdited', 'heldAt', 'valeryNote', 'officeMsgs'];
+  const OFFICE_ORDER_FIELDS = ['loadId', 'locked', 'loadStatusName', 'noteNumber', 'loadNumber', 'dispatchedAt', 'officeEdited', 'heldAt', 'valeryNote', 'officeMsgs', 'delivery', 'pendingFrom'];
   const OFFICE_ORDER_STATUS = ['en_carga', 'en_espera', 'despachado'];
 
   /**
