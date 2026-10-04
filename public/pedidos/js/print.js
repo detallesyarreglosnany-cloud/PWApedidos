@@ -216,6 +216,18 @@
     printHTML('Liquidación ' + Loads.loadCode(load), LIQ_CSS, liquidationHTML(load, st, ctx), LETTER_LANDSCAPE);
   }
 
+  /* ------------------------ Saldos de vacíos (E4) ------------------------ */
+  function printKardex(list, types, ctx) {
+    const body = `<section class="sheet">${header(ctx.config, 'SALDOS DE VACÍOS', fdate(new Date().toISOString()))}
+      <table class="load wide"><thead><tr><th style="text-align:left">#</th><th style="text-align:left">CLIENTE</th><th style="text-align:left">VENDEDOR</th>
+        ${types.map((t) => `<th>${esc(t)} DEBE</th><th>${esc(t)} ASIG.</th>`).join('')}</tr></thead>
+      <tbody>${list.map((c, i) => `<tr><td>${i + 1}</td><td>${esc(c.clientName)}</td><td>${esc(c.sellerName || '')}</td>
+        ${types.map((t) => { const b = c.types[t] || {}; return `<td class="num tot">${b.debe ? nf0.format(b.debe) : ''}</td><td class="num">${b.asignados ? nf0.format(b.asignados) : ''}</td>`; }).join('')}</tr>`).join('')}</tbody>
+      <tfoot><tr class="tot"><td colspan="3">TOTAL</td>${types.map((t) => `<td class="num">${nf0.format(list.reduce((a, c) => a + ((c.types[t] || {}).debe || 0), 0))}</td><td class="num">${nf0.format(list.reduce((a, c) => a + ((c.types[t] || {}).asignados || 0), 0))}</td>`).join('')}</tr></tfoot></table>
+      <p class="muted foot">Debe = despachados − recibidos − asignados − devoluciones (+ saldo de apertura). Asig. = vacíos asignados que tiene el cliente.</p></section>`;
+    printHTML('Saldos de vacíos', LOAD_CSS + ' table.load.wide{width:100%} @page{size:letter portrait;margin:10mm}', body);
+  }
+
   /* ------------------------- Notas de entrega ------------------------- */
   function noteHTML(order, ctx, copy) {
     const cfg = ctx.config, client = ctx.clientsById.get(order.clientId) || {};
@@ -263,5 +275,5 @@
     printHTML('Notas de entrega', NOTE_CSS, body);
   }
 
-  global.Print = { printLoadSheet, printNotes, printLiquidation };
+  global.Print = { printLoadSheet, printNotes, printLiquidation, printKardex };
 })(window);

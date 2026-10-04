@@ -56,3 +56,36 @@ ALTER TABLE "DistDoc" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "DistCounter" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "DistPush" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "DistSetting" ENABLE ROW LEVEL SECURITY;
+
+-- Kardex de vacíos (Fase 2 · E4): solo se agregan renglones
+CREATE TABLE IF NOT EXISTS "DistVacMov" (
+    "id" TEXT NOT NULL,
+    "at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "date" TEXT NOT NULL,
+    "kind" TEXT NOT NULL,
+    "clientId" TEXT NOT NULL,
+    "clientName" TEXT NOT NULL,
+    "sellerId" TEXT NOT NULL DEFAULT '',
+    "sellerName" TEXT NOT NULL DEFAULT '',
+    "type" TEXT NOT NULL,
+    "pid" TEXT NOT NULL DEFAULT '',
+    "code" TEXT NOT NULL DEFAULT '',
+    "qty" INTEGER NOT NULL,
+    "orderId" TEXT,
+    "loadId" TEXT,
+    "refId" TEXT,
+    "motivo" TEXT NOT NULL DEFAULT '',
+    "by" TEXT NOT NULL DEFAULT '',
+    "data" TEXT NOT NULL DEFAULT '{}',
+
+    CONSTRAINT "DistVacMov_pkey" PRIMARY KEY ("id")
+);
+CREATE INDEX IF NOT EXISTS "DistVacMov_clientId_idx" ON "DistVacMov"("clientId");
+CREATE INDEX IF NOT EXISTS "DistVacMov_orderId_idx" ON "DistVacMov"("orderId");
+CREATE INDEX IF NOT EXISTS "DistVacMov_refId_idx" ON "DistVacMov"("refId");
+ALTER TABLE "DistVacMov" ENABLE ROW LEVEL SECURITY;
+-- Nadie edita ni borra el kardex (ni siquiera desde el panel de la base)
+CREATE OR REPLACE FUNCTION "dist_vacmov_inmutable"() RETURNS trigger LANGUAGE plpgsql AS $f$
+BEGIN RAISE EXCEPTION 'El kardex de vacíos no se edita ni se borra: se registra una anulación'; END $f$;
+DROP TRIGGER IF EXISTS "DistVacMov_inmutable" ON "DistVacMov";
+CREATE TRIGGER "DistVacMov_inmutable" BEFORE UPDATE OR DELETE ON "DistVacMov" FOR EACH ROW EXECUTE FUNCTION "dist_vacmov_inmutable"();

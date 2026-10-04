@@ -8,7 +8,7 @@ import { RESET_LOCK } from '@/lib/epoch';
 //
 // POST /api/pedidos/reset
 //   body: { mode: 'pedidos' | 'todo', confirm: 'REINICIAR', day, deviceId }
-//   pedidos → borra pedidos, hojas de carga, historial y numeración.
+//   pedidos → borra pedidos, hojas de carga, historial, kardex de vacíos y numeración.
 //             Conserva catálogo, clientes, vendedores y ajustes.
 //   todo    → borra todo; luego se vuelve a cargar el paquete de arranque.
 //   resp:   { ok, epoch, deleted }
@@ -47,6 +47,8 @@ export async function POST(req: NextRequest) {
       await tx.$executeRaw`INSERT INTO "DistSetting" ("name", "value") VALUES ('epochAt', ${now}) ON CONFLICT ("name") DO UPDATE SET "value" = EXCLUDED."value"`;
       const d = await tx.distDoc.deleteMany({ where: { kind: { in: all ? ALL_KINDS : OPS_KINDS } } });
       await tx.distCounter.deleteMany({});
+      // El kardex de vacíos se arma con los pedidos: se vacía con ellos (TRUNCATE no pasa por el disparador)
+      await tx.$executeRawUnsafe(`DO $d$ BEGIN IF to_regclass('"DistVacMov"') IS NOT NULL THEN TRUNCATE "DistVacMov"; END IF; END $d$`);
       // Se conservan los ajustes, pero la numeración de cargas y notas vuelve a empezar
       await tx.$executeRaw`UPDATE "DistDoc" SET
         "data" = jsonb_set(jsonb_set("data"::jsonb, '{counters}', '{"load":0,"note":0}'::jsonb), '{updatedAt}', to_jsonb(${now}::text))::text,

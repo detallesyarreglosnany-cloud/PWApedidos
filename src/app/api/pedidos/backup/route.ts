@@ -7,7 +7,7 @@ import { requireAdmin } from '@/lib/keys';
 // que el paquete de arranque, así que se puede restaurar con "Cargar paquete".
 //
 // POST /api/pedidos/backup  body: { after?: { kind, id } }
-// resp: { docs: [{kind, doc}], next: {kind, id} | null, counters }
+// resp: { docs: [{kind, doc}], next: {kind, id} | null, counters, vacmovs (última página) }
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -42,7 +42,11 @@ export async function POST(req: NextRequest) {
       if (rows.length < 300) break;
     }
     const counters = await db.distCounter.findMany();
-    return NextResponse.json({ docs: out, next: null, counters: Object.fromEntries(counters.map((c) => [c.name, c.value])) });
+    // Kardex de vacíos: va en la última página (al restaurar, los renglones de la
+    // oficina se reponen; los de las liquidaciones se rehacen desde los pedidos)
+    let vacmovs: unknown[] = [];
+    try { vacmovs = (await db.distVacMov.findMany({ orderBy: { id: 'asc' } })).map((m) => ({ ...m, at: m.at.toISOString() })); } catch (e) { console.warn('[backup] kardex', e); }
+    return NextResponse.json({ docs: out, next: null, counters: Object.fromEntries(counters.map((c) => [c.name, c.value])), vacmovs });
   } catch (error) {
     console.error('[pedidos/backup]', error);
     return NextResponse.json({ error: 'No se pudo leer el respaldo' }, { status: 500 });

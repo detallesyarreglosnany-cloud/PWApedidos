@@ -18,7 +18,7 @@
     copyText, saveFile, pickFile, saveDocs, saveOrder, productById, sellerById, orderById, clientById, rubros } = PV;
   const U = () => S.ui.office;
 
-  const TABS = [['cargas', '🚚 Cargas'], ['pedidos', '🧾 Pedidos'], ['archivo', '🗄 Archivo'], ['inventario', '📦 Inventario'],
+  const TABS = [['cargas', '🚚 Cargas'], ['pedidos', '🧾 Pedidos'], ['archivo', '🗄 Archivo'], ['envases', '♻ Envases'], ['inventario', '📦 Inventario'],
     ['clientes', '👥 Clientes'], ['vendedores', '🧑‍💼 Vendedores'], ['historial', '🕘 Historial'], ['ajustes', '⚙ Ajustes']];
   const log = (type, text, extra) => PV.logEvent(type, text, extra);
 
@@ -78,7 +78,7 @@
     PV.updateSyncPill(); PV.updateBell();
     const body = $('#officeBody');
     if (!S.products.length && tab !== 'ajustes') body.insertAdjacentHTML('beforebegin', setupBanner());
-    ({ cargas: renderLoads, pedidos: renderOrders, archivo: renderArchive, inventario: renderInventory,
+    ({ cargas: renderLoads, pedidos: renderOrders, archivo: renderArchive, envases: renderEnvases, inventario: renderInventory,
       clientes: renderClients, vendedores: renderSellers, historial: renderHistory, ajustes: renderSettings })[tab](body);
     const sb = $('#setupImport');
     if (sb) sb.onclick = importStarter;
@@ -962,6 +962,7 @@
     if (carry) { const src = S.loads.find((l) => l.id === carry.fromId); if (src && src.liq) loadsToSave.push({ ...src, liq: { ...src.liq, carryUsedBy: load.id } }); }
     await saveDocs('loads', loadsToSave);
     await log('liquidacion', `Liquidó ${Loads.labelOf(load)} (${load.dispatcherName || 'sin despachador'}) · ${os.length} clientes · ${usd(newLiq.totals.monto)}${newLiq.totals.parcial ? ` · ${newLiq.totals.parcial} devoluciones` : ''}${pend.length ? ` · ${pend.length} reprogramados` : ''}${newLiq.totals.anulada ? ` · ${newLiq.totals.anulada} anuladas` : ''}`, { loadId: load.id });
+    if (U().kx) U().kx.at = 0; // el kardex se vuelve a leer al abrir Envases
     toast('Liquidación cerrada', 'ok');
     renderLiquidation(root, S.loads.find((l) => l.id === load.id) || load);
     PV.runSync(false);
@@ -986,12 +987,196 @@
     if (src && src.liq && src.liq.carryUsedBy === load.id) loadsToSave.push({ ...src, liq: { ...src.liq, carryUsedBy: null } });
     await saveDocs('loads', loadsToSave);
     await log('liquidacion', `Reabrió la liquidación de ${Loads.labelOf(load)} · motivo: ${motivo}`, { loadId: load.id });
+    if (U().kx) U().kx.at = 0;
     toast('Liquidación reabierta', 'ok');
     renderLiquidation(root, S.loads.find((l) => l.id === load.id) || load);
   }
 
   // Al cambiar de pestaña se sale de cualquier detalle abierto
-  window.addEventListener('hashchange', () => { U().archiveId = null; U().loadId = null; U().liqId = null; U().editQty = false; });
+  window.addEventListener('hashchange', () => { U().archiveId = null; U().loadId = null; U().liqId = null; U().editQty = false; U().kxClient = null; });
+
+  /* ============================== ENVASES ============================== */
+  // Fase 2 · E4: kardex de vacíos. Vive en el servidor (no se edita ni se borra):
+  // esta pantalla necesita internet. Los despachos los escribe la liquidación.
+  const vacTypes = () => [...new Set(S.products.map((p) => (Envases.info(p) || {}).type).filter(Boolean))]
+    .sort((a, b) => parseFloat(String(a).replace(',', '.')) - parseFloat(String(b).replace(',', '.')) || String(a).localeCompare(String(b)));
+  const kxState = () => U().kx || (U().kx = { movs: null, loading: false, err: '', at: 0, canWrite: false });
+
+  async function kxLoad(root, force) {
+    const k = kxState();
+    if (k.loading || (!force && k.movs && Date.now() - k.at < 60000)) return;
+    k.loading = true; k.err = '';
+    const r = await Sync.readerCall('envases', { action: 'list' });
+    k.loading = false;
+    if (r.ok) { k.movs = r.data.movs || []; k.at = Date.now(); k.canWrite = !!r.data.canWrite; } else k.err = r.error || 'No se pudo leer el kardex';
+    if (root.isConnected) renderEnvases(root);
+  }
+
+  function renderEnvases(root) {
+    const k = kxState();
+    if (!k.movs) {
+      root.innerHTML = `<div class="empty card"><strong>♻ Kardex de vacíos</strong>${k.err ? `<span class="warn-txt">${esc(k.err)}</span><br>El kardex vive en el servidor: se necesita internet.` : 'Cargando…'}
+        ${k.err ? '<div class="row" style="justify-content:center;margin-top:10px"><button class="btn" id="kxRetry">⟳ Reintentar</button></div>' : ''}</div>`;
+      const b = $('#kxRetry'); if (b) b.onclick = () => kxLoad(root, true);
+      if (!k.loading && !k.err) kxLoad(root, true);
+      return;
+    }
+    kxLoad(root, false);
+    if (U().kxClient) return renderKxClient(root, U().kxClient);
+    const types = [...new Set(vacTypes().concat(Kardex.balances(k.movs).map((b) => b.type)))];
+    const tot = Kardex.totalsByType(k.movs);
+    const q = norm(U().kxQ || ''), only = U().kxOnly !== '0';
+    const list = Kardex.byClient(k.movs).filter((c) => (!q || norm(c.clientName + ' ' + (c.sellerName || '')).includes(q)) && (!only || c.debe || c.asignados))
+      .sort((a, b) => b.debe - a.debe || b.asignados - a.asignados || a.clientName.localeCompare(b.clientName, 'es'));
+    const cell = (c, t) => { const b = c.types[t]; if (!b || (!b.debe && !b.asignados)) return '<td class="n zero">·</td>'; return `<td class="n"><b class="${b.debe > 0 ? 'warn-txt' : ''}">${nf0.format(b.debe)}</b>${b.asignados ? `<div class="muted" title="Asignados">+${nf0.format(b.asignados)} asig.</div>` : ''}</td>`; };
+    root.innerHTML = `
+      <div class="toolbar">
+        <div class="grow"><h2 style="margin:0">♻ Kardex de vacíos</h2><div class="muted">Debe = despachados − recibidos − asignados − devoluciones · se actualiza solo al cerrar cada liquidación</div></div>
+        <button class="btn" id="kxRef">⟳ Actualizar</button>
+        ${k.canWrite ? '<button class="btn" id="kxOpen">+ Saldo de apertura</button>' : ''}
+        <button class="btn" id="kxPrint">🖨 Imprimir saldos</button>
+        <button class="btn" id="kxCsv">⇩ Excel (CSV)</button>
+      </div>
+      <div class="kpi-row">${tot.length ? tot.map((t) => `<div class="kpi"><small>Vacíos ${esc(t.type)} · deben</small><b>${nf0.format(t.debe)}</b><small>${t.clientes} clientes · ${nf0.format(t.asignados)} asignados · despachados ${nf0.format(t.despacho)}</small></div>`).join('')
+        : '<div class="kpi"><small>Vacíos</small><b>0</b><small>Aún no hay liquidaciones cerradas con retornables</small></div>'}</div>
+      <div class="toolbar">
+        <label class="field grow"><span>Buscar cliente o vendedor</span><input class="input" id="kxQ" value="${esc(U().kxQ || '')}" placeholder="Nombre…"></label>
+        <label class="row"><input type="checkbox" id="kxOnly" ${only ? 'checked' : ''} style="width:22px;height:22px"> Solo con saldo</label>
+      </div>
+      <div class="card" style="overflow:auto"><table class="inv kx-list">
+        <thead><tr><th>Cliente</th><th>Vendedor</th>${types.map((t) => `<th class="n">${esc(t)}</th>`).join('')}<th>Último mov.</th><th></th></tr></thead>
+        <tbody>${list.map((c) => `<tr><td><b>${esc(c.clientName)}</b></td><td>${esc(c.sellerName || '—')}</td>${types.map((t) => cell(c, t)).join('')}
+          <td>${esc(fmtDate(c.last))}</td><td><button class="btn btn-sm" data-kc="${esc(c.clientId)}">Ver kardex</button></td></tr>`).join('')
+          || `<tr><td colspan="${types.length + 4}" class="muted">Sin clientes${only ? ' con saldo' : ''}.</td></tr>`}</tbody></table></div>
+      <p class="muted">Los números grandes son lo que el cliente <b>debe</b>; debajo, los vacíos que tiene <b>asignados</b>. Un error se corrige con una anulación o reabriendo la liquidación: nada se borra.</p>`;
+    $('#kxRef').onclick = () => kxLoad(root, true);
+    const op = $('#kxOpen'); if (op) op.onclick = () => kxDialog(root, 'apertura', null);
+    $('#kxQ').oninput = (e) => { U().kxQ = e.target.value; clearTimeout(U().kxT); U().kxT = setTimeout(() => { renderEnvases(root); const i = $('#kxQ'); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }, 250); };
+    $('#kxOnly').onchange = (e) => { U().kxOnly = e.target.checked ? '1' : '0'; renderEnvases(root); };
+    $('#kxPrint').onclick = () => Print.printKardex(list, types, { config: S.config });
+    $('#kxCsv').onclick = () => {
+      const sep = S.settings.csvSep;
+      const qv = (v) => { let s = String(v == null ? '' : v); if (/^[=+\-@]/.test(s)) s = "'" + s; return s.includes(sep) || s.includes('"') ? '"' + s.replace(/"/g, '""') + '"' : s; };
+      const rows = [['CLIENTE', 'VENDEDOR', 'TIPO', 'DESPACHADOS', 'RECIBIDOS', 'ASIGNADOS_EN_LIQ', 'DEVOLUCIONES', 'APERTURA', 'DEBE', 'ASIGNADOS', 'ULTIMO_MOV'].join(sep)];
+      Kardex.balances(k.movs).forEach((b) => rows.push([qv(b.clientName), qv(b.sellerName), qv(b.type), b.despacho, b.recibido, b.asignado, b.devolucion, b.apertura, b.debe, b.asignados, b.last].join(sep)));
+      saveFile('kardex_vacios_' + today() + '.csv', '﻿' + rows.join('\r\n'), 'text/csv;charset=utf-8');
+    };
+    root.onclick = (e) => { const b = e.target.closest('[data-kc]'); if (b) { U().kxClient = b.dataset.kc; renderEnvases(root); } };
+  }
+
+  function renderKxClient(root, clientId) {
+    const k = kxState();
+    const h = Kardex.history(k.movs, clientId);
+    const bal = Kardex.balances(k.movs).filter((b) => b.clientId === clientId);
+    const cl = clientById(clientId);
+    const name = (h[h.length - 1] || {}).clientName || (cl && cl.name) || clientId;
+    const types = [...new Set(bal.map((b) => b.type))];
+    const parse = (m) => { try { return JSON.parse(m.data || '{}'); } catch (e) { return {}; } };
+    root.innerHTML = `
+      <div class="toolbar">
+        <button class="btn" id="kcBack">← Kardex</button>
+        <div class="grow"><h2 style="margin:0">♻ ${esc(name)}</h2><div class="muted">${esc((bal[0] || {}).sellerName || '')}</div></div>
+        ${k.canWrite ? '<button class="btn btn-primary" id="kcDev">↩ Registrar devolución</button><button class="btn" id="kcOpen">+ Saldo de apertura</button>' : ''}
+      </div>
+      <div class="kpi-row">${bal.map((b) => `<div class="kpi"><small>Vacíos ${esc(b.type)} · debe</small><b class="${b.debe > 0 ? 'warn-txt' : ''}">${nf0.format(b.debe)}</b><small>${nf0.format(b.asignados)} asignados · en su poder ${nf0.format(b.enPoder)}</small></div>`).join('') || '<div class="kpi"><small>Sin movimientos</small><b>0</b></div>'}</div>
+      ${types.map((t) => { const f = Kardex.fifo(k.movs, clientId, t); return f.rows.length ? `
+        <div class="section-title">Lo que debe de ${esc(t)}, por despacho <span class="muted">(las devoluciones cubren primero lo más antiguo)</span></div>
+        <div class="card" style="overflow:auto"><table class="inv"><thead><tr><th>Fecha</th><th>Despacho</th><th class="n">Debía</th><th class="n">Devuelto</th><th class="n">Queda</th></tr></thead>
+        <tbody>${f.rows.map((r) => `<tr class="${r.left ? '' : 'inactive'}"><td>${esc(fmtDate(r.date))}</td><td>${esc(r.label)}</td><td class="n">${r.owed}</td><td class="n">${r.paid}</td><td class="n"><b class="${r.left ? 'warn-txt' : ''}">${r.left}</b></td></tr>`).join('')}</tbody></table></div>
+        ${f.extra ? `<p class="muted">Devolvió ${f.extra} vacíos de ${esc(t)} de más (quedan a su favor).</p>` : ''}` : ''; }).join('')}
+      <div class="section-title">Historial</div>
+      <div class="card" style="overflow:auto"><table class="inv kx-hist">
+        <thead><tr><th>Fecha</th><th>Movimiento</th><th>Tipo</th><th>Código</th><th class="n">Cant.</th><th>Detalle</th><th class="n">Debe</th><th class="n">Asignados</th><th></th></tr></thead>
+        <tbody>${h.map((m) => { const d = parse(m); const cancel = m.kind === 'anulacion' || m.kind === 'reverso'; return `<tr class="${m.cancelled ? 'kx-void' : ''} ${cancel ? 'kx-cancel' : ''}">
+          <td>${esc(fmtDate(m.date))}</td><td>${esc(m.label)}${m.cancelled ? ` <span class="status over">${m.cancelled.kind === 'reverso' ? 'revertido' : 'anulado'}</span>` : ''}</td><td>${esc(m.type)}</td><td class="mono">${esc(m.code)}</td>
+          <td class="n">${cancel ? '' : (Kardex.EFFECT[m.kind] && Kardex.EFFECT[m.kind][0] < 0 ? '−' : Kardex.EFFECT[m.kind] && Kardex.EFFECT[m.kind][1] < 0 ? '−' : '+') + m.qty}</td>
+          <td class="muted">${esc([d.valeryNote && 'Nota ' + d.valeryNote, d.dispatcherName, m.motivo, m.by && m.by !== 'Oficina' ? m.by : ''].filter(Boolean).join(' · '))}</td>
+          <td class="n">${cancel ? '' : `<b>${m.debe}</b>`}</td><td class="n">${cancel ? '' : m.asignados}</td>
+          <td>${k.canWrite && Kardex.MANUAL.includes(m.kind) && !m.cancelled ? `<button class="btn btn-sm" data-anu="${esc(m.id)}">Anular</button>` : ''}</td></tr>`; }).join('')}</tbody></table></div>
+      <p class="muted">Los despachos, vacíos recibidos y asignados vienen de las liquidaciones: para corregirlos, reabre la liquidación. Las devoluciones y aperturas se anulan aquí, con motivo.</p>`;
+    $('#kcBack').onclick = () => { U().kxClient = null; renderEnvases(root); };
+    const dv = $('#kcDev'); if (dv) dv.onclick = () => kxDialog(root, 'devolucion', { clientId, name, seller: bal[0] || {}, types });
+    const ao = $('#kcOpen'); if (ao) ao.onclick = () => kxDialog(root, 'apertura', { clientId, name, seller: bal[0] || {}, types });
+    root.onclick = async (e) => {
+      const b = e.target.closest('[data-anu]'); if (!b) return;
+      const m = k.movs.find((x) => x.id === b.dataset.anu); if (!m) return;
+      const motivo = (prompt(`Anular «${Kardex.KIND_LABEL[m.kind]}» de ${m.qty} (${m.type}) del ${fmtDate(m.date)}.\nMotivo:`) || '').trim();
+      if (!motivo) return;
+      const r = await Sync.adminCall('envases', { action: 'anular', id: m.id, motivo, by: S.config.adminName || 'Oficina' });
+      if (!r.ok) { toast(r.error, 'err'); return; }
+      k.movs.push(r.data.mov);
+      await log('vacios', `Anuló ${Kardex.KIND_LABEL[m.kind].toLowerCase()} de ${m.qty} vacíos ${m.type} · ${name} · ${motivo}`);
+      toast('Movimiento anulado', 'ok'); renderEnvases(root);
+    };
+  }
+
+  /** Devolución posterior (cliente conocido) o saldo de apertura (elige el cliente). */
+  function kxDialog(root, mode, who) {
+    const k = kxState(), types = vacTypes();
+    const isDev = mode === 'devolucion';
+    const opt = (arr, cur) => arr.map(([v, l]) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`).join('');
+    const typeOpts = [...new Set((who && who.types || []).concat(types))];
+    const sh = openSheet(`
+      <div class="row"><h2 class="grow">${isDev ? '↩ Devolución de vacíos' : '+ Saldo de apertura'}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      ${who ? `<p><b>${esc(who.name)}</b></p>` : `<label class="field"><span>Cliente</span><input class="input" id="kdQ" placeholder="Buscar cliente…" autocomplete="off"></label><div class="suggest" id="kdSug"></div><p id="kdCl" class="muted">Ningún cliente elegido</p>`}
+      ${isDev ? '' : '<p class="muted">Para clientes que ya tenían vacíos antes de usar la app. Se registra una sola vez por cliente y tipo.</p>'}
+      <div class="row" style="gap:10px;flex-wrap:wrap">
+        <label class="field"><span>Tipo de envase</span><select class="select" id="kdType">${opt(typeOpts.map((t) => [t, t]), typeOpts[0])}</select></label>
+        <label class="field"><span>Fecha</span><input type="date" class="input" id="kdDate" value="${today()}"></label>
+      </div>
+      ${isDev ? `<div class="row" style="gap:10px;flex-wrap:wrap">
+          <label class="field"><span>Vacíos que devolvió</span><input class="input" id="kdQty" inputmode="numeric" placeholder="0"></label>
+          <label class="field"><span>Son de</span><select class="select" id="kdFrom">${opt([['devolucion', 'Lo que debe'], ['dev_asignado', 'Sus asignados']], 'devolucion')}</select></label>
+          <label class="field grow"><span>Se aplica a</span><select class="select" id="kdRef"></select></label></div>`
+        : `<div class="row" style="gap:10px;flex-wrap:wrap">
+          <label class="field"><span>Debe (vacíos)</span><input class="input" id="kdQty" inputmode="numeric" placeholder="0"></label>
+          <label class="field"><span>Asignados</span><input class="input" id="kdAsg" inputmode="numeric" placeholder="0"></label></div>`}
+      <label class="field"><span>Nota (opcional)</span><input class="input" id="kdNote" maxlength="200" placeholder="${isDev ? 'Ej.: los trajo a la oficina' : 'Ej.: saldo del cuaderno al 30/09'}"></label>
+      <div class="actions"><button class="btn btn-primary" id="kdOk">Guardar</button></div>`);
+    let pick = who ? { clientId: who.clientId, name: who.name, sellerId: who.seller.sellerId || '', sellerName: who.seller.sellerName || '' } : null;
+    const refSel = $('#kdRef', sh.el);
+    const fillRef = () => {
+      if (!refSel || !pick) return;
+      const f = Kardex.fifo(k.movs, pick.clientId, $('#kdType', sh.el).value);
+      refSel.innerHTML = '<option value="">Lo más antiguo (automático)</option>' + f.rows.filter((r) => r.left > 0 && r.id && r.orderId).map((r) => `<option value="${esc(r.id)}">${esc(fmtDate(r.date) + ' · ' + r.label + ' · queda ' + r.left)}</option>`).join('');
+      refSel.disabled = $('#kdFrom', sh.el).value !== 'devolucion';
+    };
+    fillRef();
+    $('#kdType', sh.el).onchange = fillRef;
+    const fr = $('#kdFrom', sh.el); if (fr) fr.onchange = fillRef;
+    const qIn = $('#kdQ', sh.el);
+    if (qIn) qIn.oninput = () => {
+      const t = norm(qIn.value).split(' ').filter(Boolean);
+      const hits = t.length ? S.clients.filter((c) => !c.deleted && t.every((x) => norm(c.name + ' ' + (c.rif || '')).includes(x))).slice(0, 12) : [];
+      $('#kdSug', sh.el).innerHTML = hits.map((c) => `<button type="button" class="sug-item" data-cid="${esc(c.id)}"><b>${esc(c.name)}</b><span class="muted">${esc((sellerById(c.sellerId) || {}).name || '')}</span></button>`).join('');
+    };
+    sh.el.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-cid]'); if (!b) return;
+      const c = clientById(b.dataset.cid); if (!c) return;
+      pick = { clientId: c.id, name: c.name, sellerId: c.sellerId || '', sellerName: (sellerById(c.sellerId) || {}).name || '' };
+      $('#kdCl', sh.el).innerHTML = `Cliente: <b>${esc(c.name)}</b>`; $('#kdSug', sh.el).innerHTML = ''; qIn.value = '';
+    });
+    $('#kdOk', sh.el).onclick = async () => {
+      if (!pick) { toast('Elige el cliente', 'err'); return; }
+      const type = $('#kdType', sh.el).value, date = $('#kdDate', sh.el).value || today(), note = $('#kdNote', sh.el).value.trim();
+      const qty = int($('#kdQty', sh.el).value), asg = isDev ? 0 : int(($('#kdAsg', sh.el) || {}).value);
+      if (!type) { toast('Elige el tipo de envase', 'err'); return; }
+      if (qty <= 0 && asg <= 0) { toast('Escribe la cantidad', 'err'); return; }
+      const base = { clientId: pick.clientId, clientName: pick.name, sellerId: pick.sellerId, sellerName: pick.sellerName, type, date, motivo: note, by: S.config.adminName || 'Oficina' };
+      const movs = isDev ? [{ ...base, kind: $('#kdFrom', sh.el).value, qty, refId: $('#kdFrom', sh.el).value === 'devolucion' ? (refSel.value || null) : null }]
+        : [qty > 0 && { ...base, kind: 'apertura', qty }, asg > 0 && { ...base, kind: 'apertura_asig', qty: asg }].filter(Boolean);
+      $('#kdOk', sh.el).disabled = true;
+      for (const mov of movs) {
+        const r = await Sync.adminCall('envases', { action: 'add', mov });
+        if (!r.ok) { toast(r.error, 'err'); $('#kdOk', sh.el).disabled = false; return; }
+        k.movs.push(r.data.mov);
+      }
+      await log('vacios', isDev ? `Devolución de ${qty} vacíos ${type} · ${pick.name}${note ? ' · ' + note : ''}` : `Saldo de apertura ${type} · ${pick.name}: debe ${qty}${asg ? ', asignados ' + asg : ''}`);
+      sh.close(); toast(isDev ? 'Devolución registrada' : 'Saldo de apertura registrado', 'ok');
+      if (!isDev) U().kxClient = pick.clientId;
+      renderEnvases(root);
+    };
+  }
 
   /* ============================= INVENTARIO ============================= */
   function renderInventory(root) {
@@ -1444,7 +1629,7 @@
     pedido_nuevo: 'Abrió pedido', pedido_enviado: 'Envió pedido', pedido_reabierto: 'Reabrió pedido', pedido_modificado: 'Modificó pedido',
     pedido_eliminado: 'Eliminó pedido', espera: 'Puso en espera', reincorporado: 'Reincorporó', movido: 'Movió de hoja',
     pedido_editado_oficina: 'Ajuste de oficina', carga_estado: 'Estado de hoja', cliente_reasignado: 'Reasignó cliente', respaldo: 'Respaldo',
-    datos_borrados: 'Datos borrados por el navegador', nota_valery: 'Nota Valery', retornables: 'Retornables', mensaje: 'Mensaje a vendedor', liquidacion: 'Liquidación',
+    datos_borrados: 'Datos borrados por el navegador', nota_valery: 'Nota Valery', retornables: 'Retornables', mensaje: 'Mensaje a vendedor', liquidacion: 'Liquidación', vacios: 'Kardex de vacíos',
   };
   async function renderHistory(root) {
     const f = U().hist || (U().hist = { day: today(), who: '', type: '' });
@@ -1581,7 +1766,7 @@
 
         <section class="card card-pad"><h3>⚠ Reiniciar datos (empezar de cero)</h3>
           <p class="muted">Para borrar los datos de prueba antes de empezar a trabajar en serio. Se borra en el servidor y en <b>todos</b> los equipos (oficina, vendedores y supervisor) en su próxima sincronización, incluido lo que tenían sin enviar de antes del reinicio (lo que un vendedor sin señal haga después se conserva). No se puede deshacer: descarga antes el respaldo.</p>
-          <label style="display:flex;gap:8px;align-items:flex-start;margin-top:6px"><input type="radio" name="rsMode" value="pedidos" checked> Pedidos, hojas de carga, historial y numeración (se conservan catálogo, clientes, vendedores y ajustes)</label>
+          <label style="display:flex;gap:8px;align-items:flex-start;margin-top:6px"><input type="radio" name="rsMode" value="pedidos" checked> Pedidos, hojas de carga, historial, kardex de vacíos y numeración (se conservan catálogo, clientes, vendedores y ajustes)</label>
           <label style="display:flex;gap:8px;align-items:flex-start;margin-top:6px"><input type="radio" name="rsMode" value="todo"> Todo (después cargas de nuevo el paquete de arranque)</label>
           <div class="row" style="margin-top:10px"><button class="btn btn-danger" id="rsGo">Reiniciar datos…</button></div>
           <div id="rsOut" class="muted" style="margin-top:10px"></div></section>
