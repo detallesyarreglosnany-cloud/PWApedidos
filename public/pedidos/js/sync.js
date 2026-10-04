@@ -372,7 +372,7 @@
       r.data.docs.forEach(({ kind, doc }) => { (bundle[kind] = bundle[kind] || []).push(doc); });
       n += r.data.docs.length;
       if (onProgress) onProgress(n);
-      if (!r.data.next) { bundle.counters = r.data.counters || {}; break; }
+      if (!r.data.next) { bundle.counters = r.data.counters || {}; bundle.vacmovs = r.data.vacmovs || []; break; }
       after = r.data.next;
     }
     return { ok: true, bundle, count: n };
@@ -434,6 +434,12 @@
     // clientes recibidos por archivo se reenvían en el próximo sync.
     n += await mergeRemote('clients', bundle.clients || [], isAdmin, isAdmin, true);
     n += await mergeRemote('orders', bundle.orders || [], isAdmin, true, true);
+    // Kardex de vacíos del respaldo: se repone en el servidor (necesita internet)
+    if (isAdmin && Array.isArray(bundle.vacmovs) && bundle.vacmovs.length) {
+      const r = await adminCall('envases', { action: 'import', movs: bundle.vacmovs });
+      if (!r.ok) throw new Error('Se cargó el paquete, pero el kardex de vacíos necesita internet: vuelve a cargarlo con conexión');
+      n += r.data.added || 0;
+    }
     return n;
   }
 

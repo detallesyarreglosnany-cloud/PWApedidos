@@ -4,6 +4,7 @@ import { db, TX_WAIT } from '@/lib/db';
 import { isAdminReq, isSupervisorReq, syncOk } from '@/lib/keys';
 import { sendPush, type PushMsg } from '@/lib/push';
 import { RESET_LOCK, currentEpoch, epochAt } from '@/lib/epoch';
+import { syncKardexForOrders } from '@/lib/vacios';
 
 // Sincronización de la PWA de pedidos (public/pedidos).
 //
@@ -431,6 +432,13 @@ export async function POST(req: NextRequest) {
         const written = await writeRows(toWrite, epoch);
         const lost = toWrite.filter((r) => !written.has(r.id));
         for (const r of toWrite) if (written.has(r.id)) accepted[kind].push(r.id);
+        // Kardex de vacíos: la liquidación (order.delivery, solo la escribe la oficina) genera sus renglones
+        if (kind === 'orders' && isAdmin) {
+          const liq = toWrite.filter((r) => written.has(r.id) && r.data.includes('"delivery":')).map((r) => parseDoc(r.data));
+          if (liq.length) {
+            try { await syncKardexForOrders(liq); } catch (e) { console.warn('[kardex]', e); } // se completa al abrir Envases
+          }
+        }
         pending.forEach((n, id) => { if (written.has(id)) notices.push(n); });
         if (lost.length) {
           // Otro equipo escribió una versión más nueva entre la lectura y la escritura

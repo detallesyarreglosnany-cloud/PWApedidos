@@ -52,3 +52,34 @@ model DistSetting {
   name  String @id
   value String
 }
+
+// Kardex de vacíos (Fase 2 · E4): un renglón por movimiento. Solo se agregan;
+// nunca se editan ni se borran (lo impide un disparador en la base). Un error
+// se corrige con otro renglón (anulación / reverso) que apunta al original.
+//   despacho | recibido | asignado → los escribe el servidor al cerrar una liquidación
+//   devolucion | dev_asignado | apertura | apertura_asig → los registra la oficina
+//   anulacion (oficina) | reverso (liquidación reabierta) → cancelan a refId
+model DistVacMov {
+  id         String   @id
+  at         DateTime @default(now())
+  date       String   // día del movimiento (YYYY-MM-DD)
+  kind       String
+  clientId   String
+  clientName String
+  sellerId   String   @default("")
+  sellerName String   @default("")
+  type       String   // tipo de envase (350, 1,25…): el saldo se lleva por tipo
+  pid        String   @default("")
+  code       String   @default("")
+  qty        Int
+  orderId    String?
+  loadId     String?
+  refId      String?
+  motivo     String   @default("")
+  by         String   @default("")
+  data       String   @default("{}")
+
+  @@index([clientId])
+  @@index([orderId])
+  @@index([refId])
+}
