@@ -93,7 +93,13 @@
   }
 
   async function saveFile(filename, text, mime) {
-    const blob = new Blob([text], { type: mime || 'text/plain;charset=utf-8' });
+    return saveBlob(filename, new Blob([text], { type: mime || 'text/plain;charset=utf-8' }));
+  }
+  /** Archivo binario (por ejemplo un .xlsx): en el teléfono abre «Compartir», en la PC lo descarga. */
+  async function saveBinary(filename, u8, mime) {
+    return saveBlob(filename, new Blob([u8], { type: mime || 'application/octet-stream' }));
+  }
+  async function saveBlob(filename, blob) {
     try {
       const file = new File([blob], filename, { type: blob.type });
       if (matchMedia('(pointer:coarse)').matches && navigator.canShare && navigator.canShare({ files: [file] })) {
@@ -1300,7 +1306,7 @@
 
   window.PV = {
     S, $, $$, esc, nf2, nf0, usd, bs, int, dec, norm, slug, today, fmtDate, fmtStock, hasStock, productSort, productLabel, rubroIcon,
-    toast, openSheet, copyText, saveFile, pickFile, brandHeader, creditFooter,
+    toast, openSheet, copyText, saveFile, saveBinary, pickFile, brandHeader, creditFooter,
     loadAll, saveDocs, saveOrder, saveSettings, setSession, msgThreadHTML, rememberOffice, forgetOffice, PERSIST_HINT, runSync, updateSyncPill, render, refreshAfterRemote, updateBell, beep, logEvent, isSupervisor,
     notifSheet, refreshPush,
     productById, sellerById, orderById, clientById, rubros, orderLinesHTML,
