@@ -673,6 +673,7 @@
     if (U().liqId) { const l = S.loads.find((x) => x.id === U().liqId); if (l) return renderLiquidation(root, l); U().liqId = null; }
     if (U().archiveId) { const l = S.loads.find((x) => x.id === U().archiveId); if (l) return renderLoadDetail(root, l); U().archiveId = null; }
     const f = U().arch || (U().arch = { from: '', to: '', seller: '', route: '', disp: '', status: '' });
+    repairLiquidations(root);
     const dateOf = (l) => String(l.date || l.closedAt || l.approvedAt || '').slice(0, 10);
     const list = S.loads.filter((l) => Loads.isClosed(l) &&
       (!f.from || dateOf(l) >= f.from) && (!f.to || dateOf(l) <= f.to) &&
@@ -710,7 +711,7 @@
           <td><b class="mono">${esc(Loads.labelOf(l))}</b><div class="muted mono">${esc(Loads.loadCode(l))}</div></td><td data-l="Fecha">${esc(dateOf(l))}</td>
           <td data-l="Estado"><span class="status aprobada">${esc(stName(l))}</span></td>
           <td data-l="Vendedor">${esc(l.sellerName)}</td><td data-l="Ruta">${esc(l.route || '')}</td><td data-l="Despachador">${esc(l.dispatcherName || '')}</td>
-          <td class="n" data-l="Clientes">${t.clients || 0}</td><td class="n" data-l="Bultos">${nf0.format(t.bultos || 0)}</td><td class="n" data-l="Unid.">${nf0.format(t.totalUnidades || 0)}</td>
+          <td class="n" data-l="Clientes">${Liq.isDone(l) ? ent(l).clients : t.clients || 0}</td><td class="n" data-l="Bultos">${nf0.format(Liq.isDone(l) && ent(l).bultos != null ? ent(l).bultos : t.bultos || 0)}</td><td class="n" data-l="Unid.">${nf0.format(t.totalUnidades || 0)}</td>
           <td class="n" data-l="Monto">${Liq.isDone(l) ? `${usd(ent(l).monto)}<div class="muted">de ${usd(t.monto)}</div>` : `<span class="muted">${usd(t.monto)}</span>`}</td>
           <td data-l="Liquidación">${Liq.isDone(l) ? '<span class="status aprobada">✓ Liquidada</span>' : (l.liq ? '<span class="status en_espera">Borrador</span>' : '<span class="status abierto">Por liquidar</span>')}</td>
           <td style="white-space:nowrap"><button class="btn btn-sm" data-view="${esc(l.id)}">Ver</button> <button class="btn btn-sm btn-primary" data-liq="${esc(l.id)}">🧾 Liquidar</button></td></tr>`; }).join('')}</tbody></table></div>`
@@ -728,6 +729,31 @@
       list.forEach((l) => { const t = l.totals || {}; rows.push([q(Loads.labelOf(l)), Loads.loadCode(l), dateOf(l), q(stName(l)), q(l.sellerName), q(l.route), q(l.dispatcherName), t.clients || 0, t.cajas || 0, t.unidades || 0, t.bultos || 0, t.totalUnidades || 0, n(t.monto), Liq.isDone(l) ? 'SI' : 'NO', Liq.isDone(l) ? n(ent(l).monto) : ''].join(sep)); });
       saveFile('archivo_cargas_' + today() + '.csv', '\uFEFF' + rows.join('\r\n'), 'text/csv;charset=utf-8');
     };
+  }
+
+  /**
+   * Liquidaciones cerradas antes de la E5: se completan una sola vez con la foto
+   * del camión y los totales ENTREGADOS (clientes con entrega, bultos, monto),
+   * tomados de lo que guardó cada pedido al cerrar. No cambia lo liquidado.
+   */
+  async function repairLiquidations(root) {
+    if (U().liqFixing) return;
+    const todo = S.loads.filter((l) => !l.deleted && Liq.isDone(l) && (!l.liq.snapshot || !l.liq.totals || l.liq.totals.bultos == null || !l.liq.totals.v2));
+    if (!todo.length) return;
+    U().liqFixing = true;
+    const docs = [];
+    todo.forEach((l) => {
+      const os = Loads.loadOrders(l, byIdMap(S.orders));
+      if (!os.length || os.some((o) => !o.delivery || o.delivery.at !== l.liq.closedAt)) return; // falta algún pedido en este equipo
+      const t = { cajas: 0, unidades: 0, bultos: 0, totalUnidades: 0, monto: 0, clients: 0 };
+      os.forEach((o) => { const x = Matrix.orderTotals({ lines: o.delivery.lines || {} }); if (x.items) t.clients++; t.cajas += x.cajas; t.unidades += x.unidades; t.bultos += x.bultos; t.totalUnidades += x.totalUnidades; t.monto = Matrix.r2(t.monto + x.monto); });
+      const n = (r) => os.filter((o) => o.delivery.result === r).length;
+      const snap = l.liq.snapshot || { rows: liqState(l).rows.map((r) => ({ key: r.key, code: r.code, name: r.name, presentation: r.presentation, um: r.um, pedido: r.pedido, entregado: r.entregado,
+        queda: r.queda, carga: r.carga, total: r.total, debe: r.debe, dev: r.dev, dif: r.dif, motivo: r.motivo, dest: r.dest })) };
+      docs.push({ ...l, liq: { ...l.liq, snapshot: snap, totals: { ...(l.liq.totals || {}), ...t, parcial: n('parcial'), pendiente: n('pendiente'), anulada: n('anulada'), v2: true } } });
+    });
+    if (docs.length) { await saveDocs('loads', docs); if (root.isConnected) renderArchive(root); }
+    U().liqFixing = false;
   }
 
   /* ============================ LIQUIDACIÓN ============================ */
@@ -964,7 +990,7 @@
       snapshot: { rows: rows.map((r) => ({ key: r.key, code: r.code, name: r.name, presentation: r.presentation, um: r.um, pedido: r.pedido, entregado: r.entregado,
         queda: r.queda, carga: r.carga, total: r.total, debe: r.debe, dev: r.dev, dif: r.dif, motivo: r.motivo, dest: r.dest })) },
       totals: { clients: updOrders.filter((o) => Matrix.orderTotals({ lines: o.delivery.lines }).items > 0).length, monto: updOrders.reduce((a, o) => a + o.delivery.monto, 0),
-        ...(() => { const t = { cajas: 0, unidades: 0, bultos: 0, totalUnidades: 0 }; updOrders.forEach((o) => { const x = Matrix.orderTotals({ lines: o.delivery.lines }); t.cajas += x.cajas; t.unidades += x.unidades; t.bultos += x.bultos; t.totalUnidades += x.totalUnidades; }); return t; })(),
+        v2: true, ...(() => { const t = { cajas: 0, unidades: 0, bultos: 0, totalUnidades: 0 }; updOrders.forEach((o) => { const x = Matrix.orderTotals({ lines: o.delivery.lines }); t.cajas += x.cajas; t.unidades += x.unidades; t.bultos += x.bultos; t.totalUnidades += x.totalUnidades; }); return t; })(),
         parcial: os.filter((o) => Liq.entry(liq, o.id).result === 'parcial').length, pendiente: pend.length,
         anulada: os.filter((o) => Liq.entry(liq, o.id).result === 'anulada').length } };
     await saveDocs('orders', updOrders.concat(clones));
