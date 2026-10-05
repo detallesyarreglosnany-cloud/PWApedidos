@@ -252,7 +252,7 @@
       sm.rows.map((r) => `<tr><td>${esc(r.name)}</td>${disp ? n(r.hojas) : ''}${n(r.clients)}${n(r.cajas)}${m(r.monto)}${n(r.vacDesp)}${n(r.vacRecv)}${n(r.vacAsg)}${n(r.vacDebe)}${n(disp ? r.diferencias : r.novedades)}${m(r.procMonto)}</tr>`).join(''),
       `<tr class="tot"><td>TOTAL</td>${disp ? n(sm.tot.hojas) : ''}${n(sm.tot.clients)}${n(sm.tot.cajas)}${m(sm.tot.monto)}${n(sm.tot.vacDesp)}${n(sm.tot.vacRecv)}${n(sm.tot.vacAsg)}${n(sm.tot.vacDebe)}${n(disp ? sm.tot.diferencias : sm.tot.novedades)}${m(sm.tot.procMonto)}</tr>`);
     const cu = d.cuadre;
-    const catT = (title, g) => { const f = (x) => (x.monto || x.cajas ? `<b>${nf2.format(x.monto)}</b><br><span class="muted">${nf0.format(x.cajas)} cj${x.unidades ? ' + ' + nf0.format(x.unidades) + ' un' : ''}</span>` : ''); return tbl(title, ['Categoría', ...g.people.map((p) => p.name), 'TOTAL categoría'],
+    const catT = (title, g) => { const f = (x) => (x.monto || x.cajas || x.unidades ? `<b>${nf0.format(x.cajas)} cj${x.unidades ? ' + ' + nf0.format(x.unidades) + ' un' : ''}</b><br><span class="muted">${nf2.format(x.monto)} $</span>` : ''); return tbl(title, ['Categoría', ...g.people.map((p) => p.name), 'TOTAL categoría'],
       g.rows.map((r) => `<tr><td>${esc(r.category)}</td>${r.cells.map((x) => `<td class="num">${f(x)}</td>`).join('')}<td class="num">${f(r.total)}</td></tr>`).join(''),
       `<tr class="tot"><td>TOTAL</td>${g.cols.map((x) => `<td class="num">${f(x)}</td>`).join('')}<td class="num">${f(g.total)}</td></tr>`); };
     const gridT = (title, g, money) => { const f = (v) => (v ? (money ? nf2.format(v) : nf0.format(v)) : ''); return tbl(title, ['Vendedor \\ Despachador', ...g.disps.map((x) => x.name), 'Total vendedor'],

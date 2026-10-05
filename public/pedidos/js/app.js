@@ -970,7 +970,7 @@
   /* ====================== Mis pedidos (seguimiento) ====================== */
   // El vendedor sigue TODOS sus pedidos (no solo los de hoy): enviados, aprobados,
   // en espera y despachados, con lo que ajustó la oficina, y las hojas de carga
-  // donde están sus clientes. Es su agenda de ventas (base de su comisión).
+  // donde están sus clientes. Es su agenda de ventas.
   const MY_GROUPS = [['todos', 'Todos'], ['enviados', '📤 Enviados'], ['aprobados', '✅ Aprobados'], ['espera', '⏸ En espera'], ['despachados', '🚚 Despachados'], ['abiertos', '✏️ Sin enviar']];
   const MY_RANGES = [['hoy', 'Hoy'], ['7', '7 días'], ['15', '15 días'], ['mes', 'Este mes'], ['todo', 'Todo']];
   const groupOf = (o) => (o.status === 'abierto' ? 'abiertos' : o.status === 'despachado' ? 'despachados'
@@ -1020,7 +1020,7 @@
       <div class="container">
         <div class="chips" id="myRange">${MY_RANGES.map(([k, l]) => chip(k, f.r, l, 'data-r')).join('')}</div>
         <div class="kpi-row" style="margin-top:10px">
-          <div class="kpi"><small>Venta liquidada</small><b>${usd(delivered(liqd))}</b><small>${liqd.filter((o) => +o.delivery.monto > 0).length} clientes · es la base de tu comisión</small></div>
+          <div class="kpi"><small>Venta liquidada</small><b>${usd(delivered(liqd))}</b><small>${liqd.filter((o) => +o.delivery.monto > 0).length} clientes</small></div>
           <div class="kpi"><small>Venta en proceso</small><b>${usd(sum(sent))}</b><small>${sent.length} pedidos · aún no cuenta (${porLiq.length} despachados sin liquidar)</small></div>
         </div>
         <p class="muted" style="margin-top:-4px"><b>Venta liquidada</b> = lo que el cliente recibió y paga de verdad, ya sin devoluciones ni notas anuladas. <b>Venta en proceso</b> = enviados, aprobados y despachados que todavía no se liquidan: puede cambiar.</p>

@@ -157,7 +157,8 @@
       const vt = d.vacios.byCode.reduce((a, v) => ({ d: a.d + v.despachados, r: a.r + v.recibidos, a: a.a + v.asignados, q: a.q + v.debe }), { d: 0, r: 0, a: 0, q: 0 });
       const vacPeople = (arr, who) => arr.map((v) => `<tr><td>${esc(v.name)}</td><td>${esc(v.type)}</td><td class="n">${v.despachados}</td><td class="n">${v.recibidos}</td><td class="n">${v.asignados}</td><td class="n">${v.debe}</td></tr>`).join('');
       const catTbl = (title, g) => {
-        const c = (x) => (x.monto || x.cajas || x.unidades ? `<b>${usd(x.monto)}</b><div class="muted">${nf0.format(x.cajas)} cj${x.unidades ? ' + ' + nf0.format(x.unidades) + ' un' : ''}</div>` : '<span class="muted">·</span>');
+        // Lo principal: cajas y unidades sueltas (de ahí sale la comisión); debajo, el monto
+        const c = (x) => (x.monto || x.cajas || x.unidades ? `<b>${nf0.format(x.cajas)} cj${x.unidades ? ' + ' + nf0.format(x.unidades) + ' un' : ''}</b><div class="muted">${usd(x.monto)}</div>` : '<span class="muted">·</span>');
         return tbl(title, [{ t: 'Categoría' }, ...g.people.map((p) => N(p.name)), N('TOTAL categoría')],
           g.rows.map((r) => `<tr><td><b>${esc(r.category)}</b></td>${r.cells.map((x) => `<td class="n">${c(x)}</td>`).join('')}<td class="n">${c(r.total)}</td></tr>`).join(''),
           `<tr><td>TOTAL</td>${g.cols.map((x) => `<td class="n">${c(x)}</td>`).join('')}<td class="n">${c(g.total)}</td></tr>`);
@@ -229,8 +230,11 @@
         sec('RESUMEN POR DESPACHADOR', sumHead('DESPACHADOR', true), sd.rows.map((r) => sumRow(r, true)).concat([sumRow({ ...sd.tot, name: 'TOTAL' }, true)]));
         ['seller', 'dispatcher'].forEach((who) => {
           const g = catGrid(d, who, S.config.rubros), nm = who === 'seller' ? 'VENDEDOR' : 'DESPACHADOR';
-          sec(`VENTA LIQUIDADA USD POR CATEGORIA Y ${nm}`, ['CATEGORIA', ...g.people.map((p) => p.name), 'TOTAL_CATEGORIA'], g.rows.map((r) => [r.category, ...r.cells.map((x) => m(x.monto)), m(r.total.monto)]).concat([['TOTAL', ...g.cols.map((x) => m(x.monto)), m(g.total.monto)]]));
-          sec(`CAJAS POR CATEGORIA Y ${nm}`, ['CATEGORIA', ...g.people.map((p) => p.name), 'TOTAL_CATEGORIA'], g.rows.map((r) => [r.category, ...r.cells.map((x) => x.cajas), r.total.cajas]).concat([['TOTAL', ...g.cols.map((x) => x.cajas), g.total.cajas]]));
+          const rowsOf = (f) => g.rows.map((r) => [r.category, ...r.cells.map((x) => f(x)), f(r.total)]).concat([['TOTAL', ...g.cols.map((x) => f(x)), f(g.total)]]);
+          const head = ['CATEGORIA', ...g.people.map((p) => p.name), 'TOTAL_CATEGORIA'];
+          sec(`CAJAS POR CATEGORIA Y ${nm}`, head, rowsOf((x) => x.cajas));
+          sec(`UNIDADES SUELTAS POR CATEGORIA Y ${nm}`, head, rowsOf((x) => x.unidades));
+          sec(`MONTO USD POR CATEGORIA Y ${nm}`, head, rowsOf((x) => m(x.monto)));
         });
         [['CUADRE VENTA LIQUIDADA (vendedor x despachador)', 'monto', true], ['CUADRE VACIOS DESPACHADOS (vendedor x despachador)', 'vacDesp', false]].forEach(([title, fld, money]) => {
           const g = crossGrid(d, fld), f2 = (v) => (money ? m(v) : v);
