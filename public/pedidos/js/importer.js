@@ -53,6 +53,12 @@
     ],
   };
 
+  /** Libro Excel completo (todas las hojas, fechas como Date): { XLSX, wb }. Lo usa la comparación de la quincena en paralelo. */
+  async function readWorkbook(file) {
+    const XLSX = await loadXLSX();
+    return { XLSX, wb: XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true }) };
+  }
+
   /** Lee el archivo y devuelve { headers, rows } (rows = arrays de texto). */
   async function readFile(file) {
     const name = file.name.toLowerCase();
@@ -183,5 +189,5 @@
     return '';
   }
 
-  global.Importer = { FIELDS, readFile, guess, classifyRubro, categoryFromRef, splitPresentation, parseUPB, parseSellBy, parseCSV, norm };
+  global.Importer = { FIELDS, readFile, readWorkbook, guess, classifyRubro, categoryFromRef, splitPresentation, parseUPB, parseSellBy, parseCSV, norm };
 })(window);

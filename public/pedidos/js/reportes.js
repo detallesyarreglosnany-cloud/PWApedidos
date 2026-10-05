@@ -88,6 +88,76 @@
     return { people, rows, cols, total: cols.reduce(add, zero()) };
   }
 
+  /* ---------- E7 · Comparar con el libro Excel (quincena en paralelo) ---------- */
+  const ST_TXT = { ok: '✓ Coincide', cantidad: 'Cantidad distinta', precio: 'Monto/precio distinto', solo_excel: 'Solo en el Excel', solo_app: 'Solo en la app' };
+  function renderCompare(box, d, st) {
+    if (!box) return;
+    const { esc, nf0, usd, toast, fmtDate, saveFile, S } = global.PV;
+    const x = st.xc;
+    const res = x ? global.ExcelCmp.compare(x.parsed, d, d.from, d.to) : null;
+    const only = st.xcOnly !== false;
+    const head = `<div class="row" style="gap:10px;align-items:center;flex-wrap:wrap"><h3 class="grow" style="margin:0">📊 Comparar con el Excel <span class="muted">(quincena en paralelo)</span></h3>
+      <button class="btn" id="xcLoad">${x ? '↻ Cargar otro libro' : 'Cargar libro Excel'}</button></div>`;
+    if (!res) { box.innerHTML = head + '<p class="muted" style="margin:8px 0 0">Carga el libro Excel de la quincena (.xlsm / .xlsx): se leen sus hojas de liquidación <b>LIQUIDADAS</b> con fecha de esta quincena y se comparan con lo cargado en las hojas liquidadas de la app: productos, clientes, despachadores y vacíos. Toda diferencia se explica antes de dejar el Excel.</p>'; bind(); return; }
+    const t = res.totals, c = res.issues;
+    const rowsOf = (arr) => arr.filter((r) => !only || r.st !== 'ok');
+    const badge = (stt) => `<span class="status ${stt === 'ok' ? 'aprobada' : stt === 'solo_excel' || stt === 'solo_app' ? 'over' : 'en_espera'}">${esc(ST_TXT[stt])}</span>`;
+    const tbl = (title, n, headRow, rowsHtml, extra) => `<div class="card" style="overflow:auto;margin-top:10px"><h4 style="margin:10px 12px 0">${title} <span class="muted">${n ? `· ${n} con diferencia` : '· ✓ todo coincide'}</span></h4>
+      <table class="inv"><thead><tr>${headRow}</tr></thead><tbody>${rowsHtml || '<tr><td class="muted" colspan="9">Sin diferencias</td></tr>'}</tbody>${extra || ''}</table></div>`;
+    const N = (v, money) => `<td class="n">${money ? usd(v) : nf0.format(v)}</td>`;
+    const D = (v, money) => `<td class="n ${Math.abs(v) >= 0.01 ? 'warn-txt' : ''}"><b>${v ? (money ? usd(v) : nf0.format(v)) : '·'}</b></td>`;
+    box.innerHTML = `${head}
+      <p class="muted" style="margin:6px 0">Libro: <b>${esc(x.name)}</b> · ${res.used.length} hoja(s) de liquidación usadas: ${res.used.map((s) => `${esc(s.name)} (${esc(fmtDate(s.fecha))}, ${esc(s.repartidor || '—')}, ${usd(s.total)})`).join(' · ') || '<b>ninguna</b>'}.</p>
+      ${res.skipped.length ? `<div class="hint">No se usaron: ${res.skipped.map((s) => `${esc(s.name)} (${esc(s.motivo)}${s.fecha ? ', ' + esc(fmtDate(s.fecha)) : ''})`).join(' · ')}.</div>` : ''}
+      <div class="kpi-row">
+        <div class="kpi"><small>Excel · cargado</small><b>${usd(t.excel)}</b><small>${res.used.length} hojas</small></div>
+        <div class="kpi"><small>App · cargado (hojas liquidadas)</small><b>${usd(t.app)}</b><small>antes de devoluciones y anulaciones</small></div>
+        <div class="kpi"><small>Diferencia</small><b class="${Math.abs(t.dif) >= 0.01 ? 'warn-txt' : ''}">${usd(t.dif)}</b><small>Excel − app</small></div>
+        <div class="kpi"><small>App · Venta liquidada</small><b>${usd(t.entregado)}</b><small>lo entregado de verdad (referencia)</small></div>
+      </div>
+      ${res.clean ? '<div class="hint">✓ <b>Comparación limpia:</b> el Excel y la app coinciden en productos, clientes, despachadores y vacíos de esta quincena.</div>'
+        : `<div class="hint warn">⚠ <b>Hay diferencias que explicar:</b> ${c.products} producto(s) · ${c.clients} cliente(s) · ${c.dispatchers} despachador(es) · ${c.vacios} tipo(s) de vacío. El libro suma las cantidades <i>cargadas</i> (no resta devoluciones), por eso se compara contra lo cargado en la app.</div>`}
+      <div class="row" style="gap:10px;margin:6px 0"><label class="row"><input type="checkbox" id="xcOnly" ${only ? 'checked' : ''} style="width:20px;height:20px"> Mostrar solo diferencias</label><span class="grow"></span><button class="btn btn-sm" id="xcCsv">⇩ Diferencias (CSV)</button></div>
+      ${tbl('Productos', c.products, '<th>Código</th><th>Producto</th><th class="n">Excel cant.</th><th class="n">App cant.</th><th class="n">Dif.</th><th class="n">Excel $</th><th class="n">App $</th><th class="n">Dif. $</th><th>Estado</th>',
+        rowsOf(res.products).map((r) => `<tr><td class="mono">${esc(r.code)}</td><td>${esc(r.name)}</td>${N(r.excelQty)}${N(r.appQty)}${D(r.difQty)}${N(r.excelMonto, true)}${N(r.appMonto, true)}${D(r.difMonto, true)}<td>${badge(r.st)}</td></tr>`).join(''))}
+      ${tbl('Clientes (monto cargado)', c.clients, '<th>Cliente</th><th class="n">Excel $</th><th class="n">App $</th><th class="n">Dif. $</th><th class="n">App · liquidado $</th><th>Estado</th>',
+        rowsOf(res.clients).map((r) => `<tr><td><b>${esc(r.name)}</b></td>${N(r.excel, true)}${N(r.app, true)}${D(r.dif, true)}${N(r.entregado, true)}<td>${badge(r.st)}</td></tr>`).join(''))}
+      ${tbl('Despachadores (monto cargado)', c.dispatchers, '<th>Excel (repartidor)</th><th>App (despachador)</th><th class="n">Excel $</th><th class="n">App $</th><th class="n">Dif. $</th><th>Estado</th>',
+        rowsOf(res.dispatchers).map((r) => `<tr><td>${esc(r.excelName || '—')}</td><td>${esc(r.appName || '—')}</td>${N(r.excel, true)}${N(r.app, true)}${D(r.dif, true)}<td>${badge(r.st)}</td></tr>`).join(''))}
+      ${tbl('Vacíos por tipo (cajas cargadas)', c.vacios, '<th>Tipo</th><th class="n">Excel</th><th class="n">App</th><th class="n">Dif.</th><th>Estado</th>',
+        rowsOf(res.vacios).map((r) => `<tr><td><b>${esc(r.type)}</b></td>${N(r.excel)}${N(r.app)}${D(r.dif)}<td>${badge(r.st)}</td></tr>`).join(''))}`;
+    $2('#xcOnly').onchange = (e) => { st.xcOnly = e.target.checked; renderCompare(box, d, st); };
+    $2('#xcCsv').onclick = () => {
+      const sep = (S.settings && S.settings.csvSep) || ';', dec = (S.settings && S.settings.csvDecimal) || ',';
+      const q = (v) => { let s2 = String(v == null ? '' : v); if (/^[=+\-@]/.test(s2)) s2 = "'" + s2; return s2.includes(sep) || s2.includes('"') ? '"' + s2.replace(/"/g, '""') + '"' : s2; };
+      const m = (n) => String(Number(n || 0).toFixed(2)).replace('.', dec);
+      const L = [q(`COMPARACION EXCEL vs APP · ${d.from} a ${d.to} · libro ${x.name}`), ''];
+      const sec = (name, hd, rows) => { L.push(q(name)); L.push(hd.join(sep)); rows.forEach((r) => L.push(r.map(q).join(sep))); L.push(''); };
+      sec('PRODUCTOS', ['CODIGO', 'PRODUCTO', 'EXCEL_CANT', 'APP_CANT', 'DIF_CANT', 'EXCEL_USD', 'APP_USD', 'DIF_USD', 'ESTADO'], res.products.filter((r) => r.st !== 'ok').map((r) => [r.code, r.name, r.excelQty, r.appQty, r.difQty, m(r.excelMonto), m(r.appMonto), m(r.difMonto), ST_TXT[r.st]]));
+      sec('CLIENTES', ['CLIENTE', 'EXCEL_USD', 'APP_USD', 'DIF_USD', 'APP_LIQUIDADO_USD', 'ESTADO'], res.clients.filter((r) => r.st !== 'ok').map((r) => [r.name, m(r.excel), m(r.app), m(r.dif), m(r.entregado), ST_TXT[r.st]]));
+      sec('DESPACHADORES', ['EXCEL', 'APP', 'EXCEL_USD', 'APP_USD', 'DIF_USD', 'ESTADO'], res.dispatchers.filter((r) => r.st !== 'ok').map((r) => [r.excelName, r.appName, m(r.excel), m(r.app), m(r.dif), ST_TXT[r.st]]));
+      sec('VACIOS', ['TIPO', 'EXCEL', 'APP', 'DIF', 'ESTADO'], res.vacios.filter((r) => r.st !== 'ok').map((r) => [r.type, r.excel, r.app, r.dif, ST_TXT[r.st]]));
+      saveFile(`comparacion_excel_${d.from}_a_${d.to}.csv`, '\uFEFF' + L.join('\r\n'), 'text/csv;charset=utf-8');
+    };
+    bind();
+    function $2(sel) { return box.querySelector(sel); }
+    function bind() {
+      const b = box.querySelector('#xcLoad'); if (!b) return;
+      b.onclick = async () => {
+        const file = await global.PV.pickFile('.xlsm,.xlsx,.xls');
+        if (!file) return;
+        b.disabled = true; b.textContent = 'Leyendo el libro…';
+        try {
+          const { XLSX, wb } = await global.Importer.readWorkbook(file);
+          const parsed = global.ExcelCmp.parseWorkbook(XLSX, wb);
+          if (!parsed.sheets.length) throw new Error('No encontré hojas de liquidación (NN_LIQ_X) en ese libro');
+          st.xc = { name: file.name, parsed };
+          renderCompare(box, d, st);
+        } catch (e) { toast(e.message || 'No se pudo leer el libro', 'err'); renderCompare(box, d, st); }
+      };
+    }
+  }
+
   /** Pantalla del reporte. Usa PV (helpers de la app). */
   function render(root, st) {
     const { S, $, esc, nf0, usd, toast, today, fmtDate } = global.PV;
@@ -183,6 +253,7 @@
         ${d.pendingLoads.length ? `<div class="hint warn">⚠ <b>${d.pendingLoads.length} hoja${d.pendingLoads.length > 1 ? 's' : ''} del período sin liquidar</b> (${usd(d.pendingMonto)} en proceso): no se suman a la venta liquidada.
           <div class="muted" style="margin-top:4px">${d.pendingLoads.map((l) => `${esc(fmtDate(l.date))} · ${esc(l.label || l.code)} · ${esc(l.dispatcherName || 'sin despachador')} · ${usd(l.monto)} (${esc(l.liq)})`).join('<br>')}</div></div>` : '<div class="hint">✓ Todas las hojas del período están liquidadas.</div>'}
         ${d.sinFoto ? `<div class="hint">${d.sinFoto} hoja(s) se liquidaron antes de esta versión: no tienen el detalle de diferencias del camión.</div>` : ''}
+        <div class="card card-pad no-print" id="xcBox" style="margin-bottom:12px"></div>
         <div class="toolbar no-print"><button class="btn" id="qzPrint">🖨 Imprimir reporte</button><button class="btn" id="qzCsv">⇩ Excel (CSV)</button></div>
         <div class="kpi-row">
           <div class="kpi"><small>Venta liquidada</small><b>${usd(t.monto)}</b><small>${nf0.format(t.clients)} clientes · ${t.hojas} hojas · lo que paga el cliente</small></div>
@@ -213,6 +284,7 @@
         ${tbl('Vacíos por despachador (los que trajo)', [{ t: 'Despachador' }, { t: 'Tipo' }, N('Despachados'), N('Recibidos'), N('Asignados'), N('Quedan debiendo')], vacPeople(d.vacios.byDispatcher))}
         ${tbl('Vacíos por vendedor del cliente', [{ t: 'Vendedor' }, { t: 'Tipo' }, N('Despachados'), N('Recibidos'), N('Asignados'), N('Quedan debiendo')], vacPeople(d.vacios.bySeller))}
         <p class="muted">${d.detail.length} clientes entregados en el período. El detalle completo va en el Excel (CSV).</p>`;
+      renderCompare($('#xcBox'), d, st);
       $('#qzPrint').onclick = () => global.Print.printQuincena(d, { config: S.config, title: titleOf(f2), RES });
       $('#qzCsv').onclick = () => {
         const sep = (S.settings && S.settings.csvSep) || ';', dec = (S.settings && S.settings.csvDecimal) || ',';

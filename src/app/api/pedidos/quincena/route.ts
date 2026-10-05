@@ -181,6 +181,39 @@ export async function POST(req: NextRequest) {
     } catch (e) { console.warn('[quincena] kardex', e); }
 
     const money = <T extends { monto: number }>(arr: T[]) => arr.map((x) => ({ ...x, monto: r2(x.monto) }));
+    // ---- Datos para comparar con el Excel (E7): lo CARGADO en cada hoja liquidada (antes de devoluciones y anulaciones) y lo entregado ----
+    type ProdDoc = { id: string; code?: string; unitCode?: string | null; name?: string; presentation?: string; sellBy?: string; ret?: { type?: string } | false | null };
+    const prodRows = await db.distDoc.findMany({ where: { kind: 'products', deleted: false }, select: { data: true } });
+    const prodById = new Map(prodRows.map((r) => JSON.parse(r.data) as ProdDoc).map((p) => [p.id, p]));
+    const cmpProd = new Map<string, { pid: string; code: string; unitCode: string; name: string; presentation: string; cajas: number; unidades: number; monto: number }>();
+    const cmpClient = new Map<string, { clientId: string; clientName: string; sellerName: string; cargado: number; entregado: number }>();
+    const cmpDisp = new Map<string, { name: string; cargado: number; entregado: number }>();
+    const cmpVac: Record<string, number> = {};
+    for (const o of orders) {
+      const d = o.delivery!, load = liquidated.get(d.loadId!)!;
+      let carg = 0;
+      for (const [pid, l] of Object.entries(o.lines || {})) {
+        const c = num(l.cajas), u = num(l.unidades);
+        if (!c && !u) continue;
+        const m = lineMoney(l); carg += m;
+        const pd = prodById.get(pid);
+        const x = bump(cmpProd, pid, () => ({ pid, code: String(pd?.code || l.code || pid), unitCode: String(pd?.unitCode || ''), name: String(pd?.name || l.name || ''), presentation: String(pd?.presentation || l.presentation || ''), cajas: 0, unidades: 0, monto: 0 }));
+        x.cajas += c; x.unidades += u; x.monto += m;
+        const rt = pd && pd.ret && typeof pd.ret === 'object' ? String(pd.ret.type || '') : '';
+        if (rt && c) cmpVac[rt] = (cmpVac[rt] || 0) + c;
+      }
+      const cid = String(o.clientId || o.clientName || '');
+      const cc = bump(cmpClient, cid, () => ({ clientId: cid, clientName: String(o.clientName || ''), sellerName: String(o.sellerName || ''), cargado: 0, entregado: 0 }));
+      cc.cargado += carg; cc.entregado += num(d.monto);
+      const dn = load.dispatcherName || 'Sin despachador';
+      const cd = bump(cmpDisp, dn, () => ({ name: dn, cargado: 0, entregado: 0 }));
+      cd.cargado += carg; cd.entregado += num(d.monto);
+    }
+    const compare = {
+      products: money([...cmpProd.values()]), clients: [...cmpClient.values()].map((x) => ({ ...x, cargado: r2(x.cargado), entregado: r2(x.entregado) })),
+      dispatchers: [...cmpDisp.values()].map((x) => ({ ...x, cargado: r2(x.cargado), entregado: r2(x.entregado) })), vacCargado: cmpVac,
+    };
+
     // ---- VENTA EN PROCESO: pedidos del período que todavía no están liquidados ----
     // (enviados, aprobados para carga, en espera y despachados sin liquidar). No suma a nada de lo anterior.
     const STAGES: { key: string; label: string }[] = [
@@ -239,7 +272,7 @@ export async function POST(req: NextRequest) {
       byCategory: money([...byCategory.values()]).sort((a, b) => b.monto - a.monto),
       bySeller: money([...bySeller.values()]).sort((a, b) => b.monto - a.monto),
       byDispatcher: money([...byDispatcher.values()]).sort((a, b) => b.monto - a.monto),
-      cuadre, enProceso, novedades,
+      compare, cuadre, enProceso, novedades,
       byCategorySeller: money([...catSeller.values()]), byCategoryDispatcher: money([...catDisp.values()]), diferencias, siguiente, sinFoto,
       vacios: { byCode: byType([...vacByCode.values()]), byDispatcher: byType([...vacByDispatcher.values()]), bySeller: byType([...vacBySeller.values()]), devoluciones },
       detail: detail.sort((a, b) => String((a as { date: string }).date).localeCompare(String((b as { date: string }).date))),
