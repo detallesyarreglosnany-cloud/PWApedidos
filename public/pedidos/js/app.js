@@ -310,9 +310,10 @@
   const NOTIF_TITLE = {
     pedido: '🧾 Nuevo pedido', editado: '✏️ Pedido modificado', duplicado: '⚠️ Cliente duplicado', borrado: '🗑 Pedido eliminado', mensaje: '💬 Mensaje de la oficina',
     aprobado: '✅ Pedido aprobado', espera: '⏸ Pedido en espera', despachado: '🚚 Pedido despachado', ajustado: '✏️ Pedido ajustado',
+    liquidado: '✓ Pedido liquidado',
   };
   // Mismo tag que usa el servidor en el aviso push: si llegan los dos, se ve uno solo
-  const NOTIF_EV = { mensaje: 'msg', pedido: 'new', editado: 'mod', borrado: 'del', aprobado: 'apr', espera: 'esp', despachado: 'desp', ajustado: 'aj', duplicado: 'dup' };
+  const NOTIF_EV = { mensaje: 'msg', pedido: 'new', editado: 'mod', borrado: 'del', aprobado: 'apr', espera: 'esp', despachado: 'desp', ajustado: 'aj', duplicado: 'dup', liquidado: 'liq' };
   const SENT = ['enviado', 'en_carga', 'en_espera', 'despachado'];
   const isSent = (x) => !!x && !x.deleted && SENT.includes(x.status);
   /**
@@ -341,6 +342,15 @@
       if (o.sellerId !== sid || !p) return;
       const om = o.officeMsgs || [], pm = p.officeMsgs || [];
       if (om.length > pm.length) add('mensaje', o, `${o.clientName}: ${om[om.length - 1].text}`, true);
+      if (o.delivery && o.delivery.at && !(p.delivery && p.delivery.at)) {
+        const d = o.delivery, res = d.result || 'entregada';
+        const txt = res === 'anulada' ? `${o.clientName}: se anuló la nota${d.voidedNote ? ' ' + d.voidedNote : ''}`
+          : res === 'pendiente' ? `${o.clientName}: no se entregó, queda para otra carga`
+          : res === 'parcial' ? `${o.clientName}: devolución parcial · entregado ${usd(d.monto)}${d.newValery ? ' · nota nueva ' + d.newValery : ''}`
+          : `${o.clientName}: liquidado ${usd(d.monto)}`;
+        add('liquidado', o, txt, res !== 'entregada');
+        out[out.length - 1].icon = res === 'anulada' ? '✕' : res === 'pendiente' ? '⏳' : res === 'parcial' ? '↩' : '✓';
+      }
       if (o.deleted && !p.deleted) add('borrado', o, `La oficina eliminó el pedido de ${o.clientName}`, true);
       else if (o.status === 'despachado' && p.status !== 'despachado') add('despachado', o, `${o.clientName}${o.valeryNote ? ' · Nota ' + o.valeryNote : ''}`);
       else if (o.status === 'en_espera' && p.status !== 'en_espera') add('espera', o, `${o.clientName}: la oficina lo dejó para otra carga`, true);
@@ -372,7 +382,7 @@
         : '<p class="muted">Este navegador no permite avisos con la app cerrada. En iPhone: instálala con «Agregar a pantalla de inicio».</p>'}
       ${list.length ? `<div class="notif-list">${list.map((n) => `<div class="notif ${n.read ? '' : 'unread'} ${n.warn ? 'warn' : ''}"><span>${n.icon}</span><div class="grow">${esc(n.msg)}<small>${esc(new Date(n.at).toLocaleString('es-VE', { dateStyle: 'short', timeStyle: 'short' }))}</small></div></div>`).join('')}</div>
         <div class="actions"><button class="btn" id="nClear">Borrar todo</button></div>`
-        : `<p class="muted">Sin notificaciones. ${isOffice() ? 'Aquí verás pedidos nuevos, modificados o eliminados por los vendedores y clientes duplicados.' : 'Aquí verás cuando tus pedidos sean aprobados, puestos en espera, ajustados o despachados.'}</p>`}`);
+        : `<p class="muted">Sin notificaciones. ${isOffice() ? 'Aquí verás pedidos nuevos, modificados o eliminados por los vendedores y clientes duplicados.' : 'Aquí verás cuando tus pedidos sean aprobados, puestos en espera, ajustados, despachados o liquidados (con sus devoluciones).'}</p>`}`);
     beep(); // habilita el audio del navegador tras un clic
     S.notifs = list.map((n) => ({ ...n, read: true })); DB.setMeta('notifs', S.notifs); updateBell();
     // Estado real: con permiso Y suscripción en este equipo (no basta el permiso)
@@ -1024,8 +1034,8 @@
           <div class="kpi"><small>Venta en proceso</small><b>${usd(sum(sent))}</b><small>${sent.length} pedidos · aún no cuenta (${porLiq.length} despachados sin liquidar)</small></div>
         </div>
         <p class="muted" style="margin-top:-4px"><b>Venta liquidada</b> = lo que el cliente recibió y paga de verdad, ya sin devoluciones ni notas anuladas. <b>Venta en proceso</b> = enviados, aprobados y despachados que todavía no se liquidan: puede cambiar.</p>
-        <div class="chips" id="myTab">${chip('pedidos', f.tab, '🧾 Mis pedidos', 'data-t')}${chip('hojas', f.tab, '🚚 Hojas de carga', 'data-t')}</div>
-        ${f.tab === 'pedidos' ? `
+        <div class="chips" id="myTab">${chip('pedidos', f.tab, '🧾 Mis pedidos', 'data-t')}${chip('hojas', f.tab, '🚚 Hojas de carga', 'data-t')}${chip('vacios', f.tab, '♻ Vacíos', 'data-t')}</div>
+        ${f.tab === 'vacios' ? '<div id="myVac"></div>' : f.tab === 'pedidos' ? `
           <div class="chips" id="myGroup">${MY_GROUPS.map(([k, l]) => chip(k, f.g, `${l} <span class="badge">${count(k)}</span>`, 'data-g')).join('')}</div>
           ${list.length ? `<div class="card" style="overflow:auto"><table class="inv"><tbody>${list.map(orderRow).join('')}</tbody></table></div>`
             : '<div class="empty card"><strong>Sin pedidos</strong>en ese período con ese estado.</div>'}`
@@ -1048,8 +1058,58 @@
     updateSyncPill(); updateBell();
     $('#myRange').onclick = (e) => { const b = e.target.closest('[data-r]'); if (b) { f.r = b.dataset.r; renderSellerOrders(); } };
     $('#myTab').onclick = (e) => { const b = e.target.closest('[data-t]'); if (b) { f.tab = b.dataset.t; renderSellerOrders(); } };
+    if (f.tab === 'vacios') renderMyVacios($('#myVac'), sid);
     const mg = $('#myGroup'); if (mg) mg.onclick = (e) => { const b = e.target.closest('[data-g]'); if (b) { f.g = b.dataset.g; renderSellerOrders(); } };
     app.querySelectorAll('[data-myo]').forEach((tr) => { tr.onclick = () => myOrderSheet(orderById(tr.dataset.myo)); });
+  }
+
+  /* ---------- ♻ Vacíos de mis clientes (E6): saldo y movimientos, solo lectura ---------- */
+  async function renderMyVacios(box, sid) {
+    if (!box) return;
+    const st = S.ui.myVac || (S.ui.myVac = { movs: null, at: 0, err: '', loading: false });
+    if (!st.movs) { try { const c = await DB.getMeta('myVac:' + sid, null); if (c && c.movs) { st.movs = c.movs; st.at = c.at; } } catch (e) { /* noop */ } }
+    const draw = () => {
+      if (!box.isConnected) return;
+      if (!st.movs) { box.innerHTML = `<div class="empty card"><strong>♻ Vacíos de tus clientes</strong>${st.loading ? 'Cargando…' : (st.err ? esc(st.err) : 'Sin datos todavía.')}${st.loading ? '' : '<div class="row" style="justify-content:center;margin-top:10px"><button class="btn" id="mvRef">⟳ Actualizar</button></div>'}</div>`; const b = $('#mvRef'); if (b) b.onclick = load; return; }
+      const bal = Kardex.balances(st.movs), cl = Kardex.byClient(st.movs).filter((c) => c.debe || c.asignados).sort((a, b) => b.debe - a.debe || a.clientName.localeCompare(b.clientName, 'es'));
+      const types = [...new Set(bal.map((b) => b.type))].sort((a, b) => parseFloat(String(a).replace(',', '.')) - parseFloat(String(b).replace(',', '.')));
+      const tot = Kardex.totalsByType(st.movs);
+      box.innerHTML = `
+        <div class="kpi-row">${tot.map((t) => `<div class="kpi"><small>Vacíos ${esc(t.type)} · te deben</small><b class="${t.debe > 0 ? 'warn-txt' : ''}">${nf0.format(t.debe)}</b><small>${t.clientes} clientes · ${nf0.format(t.asignados)} asignados</small></div>`).join('') || '<div class="kpi"><small>Vacíos</small><b>0</b><small>Tus clientes no deben vacíos</small></div>'}</div>
+        <p class="muted">Lo que cada cliente <b>debe</b> (despachados − recibidos − asignados − devoluciones) y los <b>asignados</b> que tiene. Se actualiza cuando la oficina liquida las hojas${st.at ? ` · al ${esc(new Date(st.at).toLocaleString('es-VE', { dateStyle: 'short', timeStyle: 'short' }))}` : ''}.</p>
+        <div class="row" style="margin-bottom:8px"><button class="btn btn-sm" id="mvRef">⟳ Actualizar</button>${st.err ? `<span class="warn-txt" style="margin-left:8px">${esc(st.err)} (se muestra lo último guardado)</span>` : ''}</div>
+        ${cl.length ? `<div class="card" style="overflow:auto"><table class="inv"><thead><tr><th>Cliente</th>${types.map((t) => `<th class="n">${esc(t)}</th>`).join('')}<th></th></tr></thead><tbody>
+          ${cl.map((c) => `<tr data-mvc="${esc(c.clientId)}" style="cursor:pointer"><td><b>${esc(c.clientName)}</b><div class="muted" style="font-size:12px">${esc(fmtDate(c.last))}</div></td>${types.map((t) => { const b = c.types[t]; return !b || (!b.debe && !b.asignados) ? '<td class="n muted">·</td>' : `<td class="n"><b class="${b.debe > 0 ? 'warn-txt' : ''}">${nf0.format(b.debe)}</b>${b.asignados ? `<div class="muted" style="font-size:12px">+${nf0.format(b.asignados)} asig.</div>` : ''}</td>`; }).join('')}<td class="muted">›</td></tr>`).join('')}</tbody></table></div>`
+          : '<div class="empty card"><strong>Sin saldos</strong>ninguno de tus clientes debe vacíos.</div>'}`;
+      $('#mvRef').onclick = load;
+      box.querySelectorAll('[data-mvc]').forEach((tr) => { tr.onclick = () => myVacSheet(st.movs, tr.dataset.mvc); });
+    };
+    const load = async () => {
+      st.loading = true; st.err = ''; draw();
+      const r = await Sync.myVacios(sid);
+      st.loading = false;
+      if (r.ok) { st.movs = r.data.movs || []; st.at = Date.now(); try { await DB.setMeta('myVac:' + sid, { movs: st.movs, at: st.at }); } catch (e) { /* noop */ } }
+      else st.err = r.offline ? 'Sin internet' : (r.error || 'No se pudo actualizar');
+      draw();
+    };
+    draw();
+    if (!st.movs || Date.now() - st.at > 120000) load();
+  }
+
+  function myVacSheet(movs, clientId) {
+    const h = Kardex.history(movs, clientId), bal = Kardex.balances(movs).filter((b) => b.clientId === clientId);
+    const name = (h[h.length - 1] || {}).clientName || '';
+    const parse = (m) => { try { return JSON.parse(m.data || '{}'); } catch (e) { return {}; } };
+    const types = bal.map((b) => b.type);
+    openSheet(`
+      <div class="row"><h2 class="grow">♻ ${esc(name)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <div class="kpi-row">${bal.map((b) => `<div class="kpi"><small>Vacíos ${esc(b.type)} · debe</small><b class="${b.debe > 0 ? 'warn-txt' : ''}">${nf0.format(b.debe)}</b><small>${nf0.format(b.asignados)} asignados</small></div>`).join('')}</div>
+      ${types.map((t) => { const f = Kardex.fifo(movs, clientId, t); return f.rows.length ? `<div class="section-title" style="margin:10px 0 4px">Lo que debe de ${esc(t)}</div><table class="lines"><tbody>${f.rows.map((r) => `<tr><td>${esc(fmtDate(r.date))} · ${esc(r.label)}</td><td class="num">${r.left}${r.paid ? `<div class="muted" style="font-size:12px">de ${r.owed}</div>` : ''}</td></tr>`).join('')}</tbody></table>` : ''; }).join('')}
+      <div class="section-title" style="margin:12px 0 4px">Movimientos</div>
+      <table class="lines"><tbody>${h.slice().reverse().map((m) => { const d = parse(m); const cancel = m.kind === 'anulacion' || m.kind === 'reverso';
+        return `<tr${m.cancelled ? ' style="opacity:.5;text-decoration:line-through"' : ''}><td>${esc(fmtDate(m.date))} · ${esc(m.label)}${m.cancelled ? ' (anulado)' : ''}<div class="muted" style="font-size:12px">${esc([m.type, m.code, d.valeryNote && 'nota ' + d.valeryNote, m.motivo].filter(Boolean).join(' · '))}</div></td>
+          <td class="num">${cancel ? '' : (Kardex.EFFECT[m.kind] && Kardex.EFFECT[m.kind][0] > 0 ? '+' : '−') + m.qty}${cancel ? '' : `<div class="muted" style="font-size:12px">debe ${m.debe}</div>`}</td></tr>`; }).join('')}</tbody></table>
+      <p class="muted">Las devoluciones de vacíos las registra la oficina.</p>`, { wide: true });
   }
 
   /** Detalle de un pedido para el vendedor: lo que pidió contra lo que queda/salió, hoja, despachador y nota. */
@@ -1058,12 +1118,22 @@
     const l = loadOf(o), g = groupOf(o), t = Matrix.orderTotals(o);
     const sentL = o.sentLines || null;
     const ids = [...new Set(Object.keys(sentL || {}).concat(Object.keys(o.lines || {})))];
+    const liqd = isLiquidated(o), dl = liqd ? (o.delivery.lines || {}) : {};
+    // Lo devuelto = lo que llevaba el pedido menos lo que el cliente se quedó
+    const retOf = (pid) => { const f = (o.lines || {})[pid], x = dl[pid]; if (!f) return null;
+      const c = Math.max(0, (+f.cajas || 0) - (x ? +x.cajas || 0 : 0)), u = Math.max(0, (+f.unidades || 0) - (x ? +x.unidades || 0 : 0));
+      return c || u ? { cajas: c, unidades: u } : null; };
     const rows = ids.map((pid) => {
       const fin = (o.lines || {})[pid], was = sentL ? sentL[pid] : null, ref = fin || was;
       const changed = sentL && qty(was) !== qty(fin);
+      const ret = liqd ? retOf(pid) : null;
       return `<tr${changed ? ' class="short"' : ''}><td><b>${esc(ref.name)} ${esc(ref.presentation || '')}</b><div class="muted mono" style="font-size:12px">${esc(ref.code || '')}</div></td>
-        ${sentL ? `<td class="num">${esc(qty(was))}</td>` : ''}<td class="num">${esc(qty(fin))}${changed ? ' ✏️' : ''}</td>${isLiquidated(o) ? `<td class="num"><b>${esc(qty((o.delivery.lines || {})[pid]))}</b></td>` : ''}</tr>`;
+        ${sentL ? `<td class="num">${esc(qty(was))}</td>` : ''}<td class="num">${esc(qty(fin))}${changed ? ' ✏️' : ''}</td>${liqd ? `<td class="num"><b>${esc(qty(dl[pid]))}</b>${ret ? `<div class="muted" style="font-size:12px">↩ ${esc(qty(ret))}</div>` : ''}</td>` : ''}</tr>`;
     }).join('');
+    const vacD = liqd && o.delivery.vac ? Object.values(o.delivery.vac) : [];
+    const vacBlock = vacD.length ? `<div class="section-title" style="margin:14px 0 6px">♻ Vacíos de este pedido</div>
+      <table class="lines"><thead><tr><th style="text-align:left">Envase</th><th class="num">Enviados</th><th class="num">Recibidos</th><th class="num">Asignados</th><th class="num">Quedan</th></tr></thead>
+      <tbody>${vacD.map((v) => `<tr><td><b>${esc(v.code)}</b> <span class="muted">${esc(v.type)}${v.regime === 'prestamo' ? ' · préstamo' : ''}</span>${v.motivo ? `<div class="muted" style="font-size:12px">${esc(v.motivo)}</div>` : ''}</td><td class="num">${v.boxes}</td><td class="num">${v.recv}</td><td class="num">${v.asg == null ? '—' : v.asg}</td><td class="num"><b>${v.pending || 0}</b></td></tr>`).join('')}</tbody></table>` : '';
     const info = [
       ['Fecha del pedido', fmtDate(o.routeDate)],
       ['Enviado', o.sentAt ? new Date(o.sentAt).toLocaleString('es-VE', { dateStyle: 'short', timeStyle: 'short' }) : '—'],
@@ -1080,9 +1150,10 @@
       <div class="row"><h2 class="grow">${esc(o.clientName)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
       <div class="grid2" style="margin:8px 0 12px">${info.map(([k, v]) => `<div><small class="muted">${esc(k)}</small><div><b>${esc(v)}</b></div></div>`).join('')}</div>
       ${o.officeEdited ? `<div class="hint warn">✏️ La oficina ajustó este pedido${sentL ? ': las filas marcadas cambiaron respecto a lo que enviaste.' : '.'}</div>` : ''}
-      <table class="lines"><thead><tr><th style="text-align:left">Producto</th>${sentL ? '<th class="num">Pediste</th>' : ''}<th class="num">${g === 'despachados' ? 'Despachado' : 'Queda'}</th>${isLiquidated(o) ? '<th class="num">Entregado</th>' : ''}</tr></thead>
+      <table class="lines"><thead><tr><th style="text-align:left">Producto</th>${sentL ? '<th class="num">Pediste</th>' : ''}<th class="num">${g === 'despachados' ? 'Despachado' : 'Queda'}</th>${liqd ? '<th class="num">Entregado</th>' : ''}</tr></thead>
         <tbody>${rows || '<tr><td class="muted">Sin productos</td></tr>'}</tbody></table>
       <div class="row" style="justify-content:space-between;margin-top:10px;font-size:18px"><b>Total · ${t.cajas} cj + ${t.unidades} un</b><b>${usd(t.monto)}</b></div>
+      ${vacBlock}
       <div class="section-title" style="margin:14px 0 6px">💬 Notas y mensajes</div>
       ${msgThreadHTML(o)}`, { cls: 'sheet-order' });
   }

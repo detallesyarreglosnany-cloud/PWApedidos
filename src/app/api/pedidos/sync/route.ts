@@ -236,6 +236,15 @@ function orderNotice(cur: Record<string, unknown> | null, doc: Record<string, un
     const last = nm[nm.length - 1] as { text?: unknown } | undefined;
     return seller('💬 Mensaje de la oficina', `${client}: ${String((last && last.text) || '').slice(0, 200)}`, 'msg');
   }
+  // La oficina liquidó el pedido: resultado real (entregado, devolución parcial, anulado o se entrega después)
+  const dn = doc.delivery as { result?: string; monto?: number; newValery?: string; voidedNote?: string } | null | undefined;
+  if (dn && typeof dn === 'object' && !cur.delivery) {
+    const res = String(dn.result || 'entregada'), monto = '$' + (Math.round(Number(dn.monto) * 100) / 100).toFixed(2);
+    if (res === 'anulada') return seller('✕ Nota anulada', `${client}: se anuló la nota${dn.voidedNote ? ' ' + dn.voidedNote : ''}`, 'liq');
+    if (res === 'pendiente') return seller('⏳ Se entrega después', `${client}: no se entregó, queda para otra carga`, 'liq');
+    if (res === 'parcial') return seller('↩ Devolución parcial', `${client}: entregado ${monto}${dn.newValery ? ' · nota nueva ' + dn.newValery : ''}`, 'liq');
+    return seller('✓ Pedido liquidado', `${client}: ${monto}`, 'liq');
+  }
   if (doc.deleted && !cur.deleted) return seller('🗑 Pedido eliminado por oficina', client, 'del');
   if (doc.status === 'despachado' && cur.status !== 'despachado') {
     // Las notas oficiales son las de Valery (las internas NE no se muestran)

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { isAdminReq, requireAdmin, requireReader } from '@/lib/keys';
+import { Prisma } from '@prisma/client';
+import { isAdminReq, requireAdmin, requireReader, syncOk } from '@/lib/keys';
 import { CANCEL_KINDS, LIQ_KINDS, MANUAL_KINDS, ensureKardex, insertMovs, newMovId, reconcileAll, type VacMov } from '@/lib/vacios';
 
 // Kardex de vacíos (Fase 2 · E4).
@@ -11,6 +12,7 @@ import { CANCEL_KINDS, LIQ_KINDS, MANUAL_KINDS, ensureKardex, insertMovs, newMov
 //   { action: 'add', mov }               → { mov }    (oficina) devolución, apertura…
 //   { action: 'anular', id, motivo }     → { mov }    (oficina) cancela un renglón manual
 //   { action: 'import', movs }           → { added }  (oficina) restaurar un respaldo
+//   { action: 'mine', sellerId }         → { movs }   (teléfono del vendedor, clave de sync) kardex de SUS clientes
 //
 // Los renglones nunca se editan ni se borran (disparador en la base).
 
@@ -46,6 +48,28 @@ export async function POST(req: NextRequest) {
   let body: Record<string, unknown>;
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }); }
   const action = body.action;
+  // 'mine': el teléfono de un vendedor lee el kardex de SUS clientes (solo lectura, con la clave de sincronización)
+  if (action === 'mine') {
+    if (!syncOk(req)) return NextResponse.json({ error: 'Clave de sincronización inválida' }, { status: 401 });
+    const sellerId = str(body.sellerId, 120);
+    if (!sellerId) return NextResponse.json({ error: 'Falta el vendedor' }, { status: 400 });
+    try {
+      await ensureKardex();
+      const mine = await db.$queryRaw<{ clientId: string }[]>`SELECT DISTINCT "clientId" FROM "DistVacMov" WHERE "sellerId" = ${sellerId}`;
+      if (!mine.length) return NextResponse.json({ movs: [], sellerId });
+      const ids = mine.map((m) => m.clientId);
+      // Un cliente que cambió de vendedor lo ve solo su vendedor actual (el del último movimiento)
+      const last = await db.$queryRaw<{ clientId: string; sellerId: string }[]>`
+        SELECT DISTINCT ON ("clientId") "clientId", "sellerId" FROM "DistVacMov" WHERE "clientId" IN (${Prisma.join(ids)})
+        ORDER BY "clientId", "date" DESC, "at" DESC`;
+      const keep = last.filter((l) => l.sellerId === sellerId).map((l) => l.clientId);
+      const movs = keep.length ? await db.distVacMov.findMany({ where: { clientId: { in: keep } }, orderBy: [{ date: 'asc' }, { at: 'asc' }, { id: 'asc' }], take: MAX_LIST }) : [];
+      return NextResponse.json({ movs: movs.map(out), sellerId });
+    } catch (error) {
+      console.error('[pedidos/envases mine]', error);
+      return NextResponse.json({ error: 'Error del kardex de vacíos' }, { status: 500 });
+    }
+  }
   const denied = action === 'list' ? requireReader(req) : requireAdmin(req);
   if (denied) return denied;
   try {
