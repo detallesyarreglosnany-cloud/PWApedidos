@@ -23,7 +23,11 @@
     despacho: [1, 0], recibido: [-1, 0], asignado: [-1, 1], devolucion: [-1, 0],
     dev_asignado: [0, -1], apertura: [1, 0], apertura_asig: [0, 1],
   };
-  const sortMov = (a, b) => String(a.date).localeCompare(String(b.date)) || String(a.at || '').localeCompare(String(b.at || '')) || String(a.id).localeCompare(String(b.id));
+  // Dentro de una misma liquidación: primero lo despachado, luego lo recibido y lo asignado (así el saldo nunca baja de 0 en el historial)
+  const KRANK = { despacho: 0, recibido: 1, asignado: 2 };
+  const sortMov = (a, b) => String(a.date).localeCompare(String(b.date))
+    || (a.orderId && a.orderId === b.orderId && KRANK[a.kind] !== undefined && KRANK[b.kind] !== undefined ? KRANK[a.kind] - KRANK[b.kind] || String(a.pid).localeCompare(String(b.pid)) : 0)
+    || String(a.at || '').localeCompare(String(b.at || '')) || String(a.id).localeCompare(String(b.id));
 
   /** Renglones que cuentan (sin los cancelados ni los que cancelan) + quién canceló a quién. */
   function effective(movs) {

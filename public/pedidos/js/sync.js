@@ -358,6 +358,15 @@
     return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/llaves'), headers, { action });
   }
 
+  /** Kardex de vacíos de los clientes de un vendedor (teléfono del vendedor; solo lectura). */
+  async function myVacios(sellerId) {
+    if (!navigator.onLine) return { ok: false, offline: true };
+    const cfg = await settings();
+    const headers = { 'Content-Type': 'application/json' };
+    if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
+    return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/envases'), headers, { action: 'mine', sellerId });
+  }
+
   /** Reporte de ventas del servidor para un rango de fechas (sin límite de historial local). */
   const report = (from, to) => readerCall('report', { from, to });
 
@@ -443,5 +452,5 @@
     return n;
   }
 
-  global.Sync = { KINDS, isLocked, syncNow, pendingCount, hasCursor, reserveNumbers, adminCall, readerCall, report, pushCall, keysCall, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
+  global.Sync = { KINDS, isLocked, syncNow, pendingCount, hasCursor, reserveNumbers, adminCall, readerCall, report, pushCall, keysCall, myVacios, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
 })(window);
