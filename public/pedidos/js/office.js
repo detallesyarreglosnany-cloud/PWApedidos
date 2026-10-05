@@ -701,18 +701,18 @@
       <div class="kpi-row">
         <div class="kpi"><small>Cargas</small><b>${list.length}</b><small>${sum.n} liquidadas</small></div>
         <div class="kpi"><small>Clientes atendidos</small><b>${nf0.format(sum.c)}</b><small>en hojas liquidadas</small></div>
-        <div class="kpi"><small>Bultos entregados</small><b>${nf0.format(sum.b)}</b><small>en hojas liquidadas</small></div>
-        <div class="kpi"><small>Venta entregada</small><b>${usd(sum.m)}</b><small>en hojas liquidadas</small></div>
-        <div class="kpi"><small>Por liquidar</small><b>${sum.pn}</b><small>${usd(sum.pm)} despachado, aún sin contar</small></div>
+        <div class="kpi"><small>Bultos liquidados</small><b>${nf0.format(sum.b)}</b><small>en hojas liquidadas</small></div>
+        <div class="kpi"><small>Venta liquidada</small><b>${usd(sum.m)}</b><small>en hojas liquidadas · lo que paga el cliente</small></div>
+        <div class="kpi"><small>Venta en proceso</small><b>${usd(sum.pm)}</b><small>${sum.pn} hojas por liquidar · aún no cuenta</small></div>
       </div>
       ${list.length ? `<div class="card" style="overflow:auto"><table class="inv">
-        <thead><tr><th>Código</th><th>Fecha</th><th>Estado</th><th>Vendedor(es)</th><th>Ruta</th><th>Despachador</th><th>Clientes</th><th>Bultos</th><th>Unid.</th><th>Entregado</th><th>Liquidación</th><th></th></tr></thead>
+        <thead><tr><th>Código</th><th>Fecha</th><th>Estado</th><th>Vendedor(es)</th><th>Ruta</th><th>Despachador</th><th>Clientes</th><th>Bultos</th><th>Unid.</th><th>Venta</th><th>Liquidación</th><th></th></tr></thead>
         <tbody>${list.map((l) => { const t = l.totals || {}; return `<tr>
           <td><b class="mono">${esc(Loads.labelOf(l))}</b><div class="muted mono">${esc(Loads.loadCode(l))}</div></td><td data-l="Fecha">${esc(dateOf(l))}</td>
           <td data-l="Estado"><span class="status aprobada">${esc(stName(l))}</span></td>
           <td data-l="Vendedor">${esc(l.sellerName)}</td><td data-l="Ruta">${esc(l.route || '')}</td><td data-l="Despachador">${esc(l.dispatcherName || '')}</td>
           <td class="n" data-l="Clientes">${Liq.isDone(l) ? ent(l).clients : t.clients || 0}</td><td class="n" data-l="Bultos">${nf0.format(Liq.isDone(l) && ent(l).bultos != null ? ent(l).bultos : t.bultos || 0)}</td><td class="n" data-l="Unid.">${nf0.format(t.totalUnidades || 0)}</td>
-          <td class="n" data-l="Monto">${Liq.isDone(l) ? `${usd(ent(l).monto)}<div class="muted">de ${usd(t.monto)}</div>` : `<span class="muted">${usd(t.monto)}</span>`}</td>
+          <td class="n" data-l="Monto">${Liq.isDone(l) ? `<b>${usd(ent(l).monto)}</b><div class="muted">liquidada · de ${usd(t.monto)}</div>` : `<span class="muted">${usd(t.monto)}<div>en proceso</div></span>`}</td>
           <td data-l="Liquidación">${Liq.isDone(l) ? '<span class="status aprobada">✓ Liquidada</span>' : (l.liq ? '<span class="status en_espera">Borrador</span>' : '<span class="status abierto">Por liquidar</span>')}</td>
           <td style="white-space:nowrap"><button class="btn btn-sm" data-view="${esc(l.id)}">Ver</button> <button class="btn btn-sm btn-primary" data-liq="${esc(l.id)}">🧾 Liquidar</button></td></tr>`; }).join('')}</tbody></table></div>`
       : '<div class="empty card"><strong>Sin cargas cerradas</strong>con esos filtros.</div>'}`;
@@ -725,7 +725,7 @@
       const sep = S.settings.csvSep, d = S.settings.csvDecimal;
       const n = (v) => { const s = Number(v || 0).toFixed(2); return d === ',' ? s.replace('.', ',') : s; };
       const q = (v) => { let s = String(v == null ? '' : v); if (/^[=+\-@]/.test(s)) s = "'" + s; return s.includes(sep) || s.includes('"') ? '"' + s.replace(/"/g, '""') + '"' : s; };
-      const rows = [['CODIGO', 'CARGA', 'FECHA', 'ESTADO', 'VENDEDORES', 'RUTA', 'DESPACHADOR', 'CLIENTES', 'CAJAS', 'UNID_SUELTAS', 'BULTOS', 'TOTAL_UNIDADES', 'DESPACHADO_USD', 'LIQUIDADA', 'ENTREGADO_USD'].join(sep)];
+      const rows = [['CODIGO', 'CARGA', 'FECHA', 'ESTADO', 'VENDEDORES', 'RUTA', 'DESPACHADOR', 'CLIENTES', 'CAJAS', 'UNID_SUELTAS', 'BULTOS', 'TOTAL_UNIDADES', 'VENTA_EN_PROCESO_USD', 'LIQUIDADA', 'VENTA_LIQUIDADA_USD'].join(sep)];
       list.forEach((l) => { const t = l.totals || {}; rows.push([q(Loads.labelOf(l)), Loads.loadCode(l), dateOf(l), q(stName(l)), q(l.sellerName), q(l.route), q(l.dispatcherName), t.clients || 0, t.cajas || 0, t.unidades || 0, t.bultos || 0, t.totalUnidades || 0, n(t.monto), Liq.isDone(l) ? 'SI' : 'NO', Liq.isDone(l) ? n(ent(l).monto) : ''].join(sep)); });
       saveFile('archivo_cargas_' + today() + '.csv', '\uFEFF' + rows.join('\r\n'), 'text/csv;charset=utf-8');
     };

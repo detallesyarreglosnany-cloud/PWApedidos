@@ -51,7 +51,9 @@ export async function POST(req: NextRequest) {
   try {
     // ---- Hojas del período ----
     const loadRows = await db.distDoc.findMany({ where: { kind: 'loads', deleted: false }, select: { data: true } });
-    const loads = loadRows.map((r) => JSON.parse(r.data) as LoadDoc).filter((l) => !l.deleted && (l.closedAt || l.liq));
+    const allLoads = loadRows.map((r) => JSON.parse(r.data) as LoadDoc).filter((l) => !l.deleted);
+    const loadById = new Map(allLoads.map((l) => [l.id, l]));
+    const loads = allLoads.filter((l) => l.closedAt || l.liq);
     const inRange = loads.filter((l) => { const d = loadDay(l); return d >= from && d <= to; });
     const liquidated = new Map(inRange.filter((l) => l.liq && l.liq.status === 'cerrada' && l.liq.closedAt).map((l) => [l.id, l]));
     const pendingLoads = inRange.filter((l) => !liquidated.has(l.id)).map((l) => ({
@@ -72,14 +74,14 @@ export async function POST(req: NextRequest) {
     const totals = { hojas: liquidated.size, clients: 0, cajas: 0, unidades: 0, monto: 0, pedido: 0, parcial: 0, pendiente: 0, anulada: 0 };
     const byProduct = new Map<string, { pid: string; code: string; name: string; presentation: string; category: string; cajas: number; unidades: number; monto: number }>();
     const byCategory = new Map<string, { category: string; cajas: number; unidades: number; monto: number }>();
-    const bySeller = new Map<string, { sellerId: string; sellerName: string; clients: number; cajas: number; unidades: number; monto: number; novedades: number }>();
-    const byDispatcher = new Map<string, { dispatcherId: string; dispatcherName: string; hojas: number; clients: number; cajas: number; unidades: number; monto: number; diferencias: number }>();
+    const bySeller = new Map<string, { sellerId: string; sellerName: string; clients: number; cajas: number; unidades: number; monto: number; novedades: number; vacDesp: number; vacRecv: number; vacAsg: number; vacDebe: number }>();
+    const byDispatcher = new Map<string, { dispatcherId: string; dispatcherName: string; hojas: number; clients: number; cajas: number; unidades: number; monto: number; diferencias: number; vacDesp: number; vacRecv: number; vacAsg: number; vacDebe: number }>();
     const novedades: unknown[] = [];
     const detail: unknown[] = [];
 
     for (const l of liquidated.values()) {
       const did = l.dispatcherId || '—';
-      bump(byDispatcher, did, () => ({ dispatcherId: did, dispatcherName: l.dispatcherName || 'Sin despachador', hojas: 0, clients: 0, cajas: 0, unidades: 0, monto: 0, diferencias: 0 })).hojas++;
+      bump(byDispatcher, did, () => ({ dispatcherId: did, dispatcherName: l.dispatcherName || 'Sin despachador', hojas: 0, clients: 0, cajas: 0, unidades: 0, monto: 0, diferencias: 0, vacDesp: 0, vacRecv: 0, vacAsg: 0, vacDebe: 0 })).hojas++;
     }
 
     for (const o of orders) {
@@ -104,7 +106,7 @@ export async function POST(req: NextRequest) {
         cat.cajas += c; cat.unidades += u; cat.monto += m;
       }
       const sid = o.sellerId || '—';
-      const s = bump(bySeller, sid, () => ({ sellerId: sid, sellerName: o.sellerName || sid, clients: 0, cajas: 0, unidades: 0, monto: 0, novedades: 0 }));
+      const s = bump(bySeller, sid, () => ({ sellerId: sid, sellerName: o.sellerName || sid, clients: 0, cajas: 0, unidades: 0, monto: 0, novedades: 0, vacDesp: 0, vacRecv: 0, vacAsg: 0, vacDebe: 0 }));
       if (res !== 'entregada') s.novedades++;
       if (!cajas && !unidades) continue;
       totals.clients++; totals.cajas += cajas; totals.unidades += unidades; totals.monto += monto;
@@ -138,7 +140,12 @@ export async function POST(req: NextRequest) {
     };
     for (const o of orders) {
       const d = o.delivery!, load = liquidated.get(d.loadId!)!;
+      const sid2 = o.sellerId || '—';
+      const sEnt = bump(bySeller, sid2, () => ({ sellerId: sid2, sellerName: o.sellerName || sid2, clients: 0, cajas: 0, unidades: 0, monto: 0, novedades: 0, vacDesp: 0, vacRecv: 0, vacAsg: 0, vacDebe: 0 }));
+      const dEnt = byDispatcher.get(load.dispatcherId || '—')!;
       for (const [pid, v] of Object.entries(d.vac || {})) {
+        const debe = Math.max(0, num(v.boxes) - num(v.recv) - num(v.asg));
+        for (const e of [sEnt, dEnt]) { e.vacDesp += num(v.boxes); e.vacRecv += num(v.recv); e.vacAsg += num(v.asg); e.vacDebe += debe; }
         const type = String(v.type || v.code || pid);
         add(bump(vacByCode, pid, () => ({ pid, code: String(v.code || pid), type, despachados: 0, recibidos: 0, asignados: 0, debe: 0 })), v);
         const dn = load.dispatcherName || 'Sin despachador';
@@ -156,6 +163,45 @@ export async function POST(req: NextRequest) {
     } catch (e) { console.warn('[quincena] kardex', e); }
 
     const money = <T extends { monto: number }>(arr: T[]) => arr.map((x) => ({ ...x, monto: r2(x.monto) }));
+    // ---- VENTA EN PROCESO: pedidos del período que todavía no están liquidados ----
+    // (enviados, aprobados para carga, en espera y despachados sin liquidar). No suma a nada de lo anterior.
+    const STAGES: { key: string; label: string }[] = [
+      { key: 'enviado', label: 'Enviados (esperando aprobación)' }, { key: 'en_carga', label: 'Aprobados para carga' },
+      { key: 'en_espera', label: 'En espera' }, { key: 'despachado', label: 'Despachados sin liquidar' },
+    ];
+    const since = new Date(Date.parse(from) - 45 * 86400000).toISOString().slice(0, 10);
+    const procRows = await db.distDoc.findMany({
+      where: { kind: 'orders', deleted: false, status: { in: STAGES.map((x) => x.key) }, routeDate: { gte: since, lte: to } }, select: { data: true },
+    });
+    const stage = new Map(STAGES.map((x) => [x.key, { ...x, clients: 0, monto: 0 }]));
+    const procSeller = new Map<string, { sellerId: string; sellerName: string; clients: number; monto: number }>();
+    const procDisp = new Map<string, { dispatcherId: string; dispatcherName: string; clients: number; monto: number }>();
+    for (const r of procRows) {
+      const o = JSON.parse(r.data) as OrderDoc & { status?: string; loadId?: string | null; routeDate?: string };
+      if (o.deleted) continue;
+      const dl = o.delivery, ld = o.loadId ? loadById.get(o.loadId) : null;
+      if (dl && dl.loadId && liquidated.get(dl.loadId)?.liq?.closedAt === dl.at) continue; // ya está liquidado
+      const day = ld ? loadDay(ld) : String(o.routeDate || '');
+      if (day < from || day > to) continue;
+      const m = Object.values(o.lines || {}).reduce((a, l) => a + lineMoney(l), 0);
+      if (!m) continue;
+      const stg = stage.get(String(o.status));
+      if (!stg) continue;
+      stg.clients++; stg.monto += m;
+      const sid = o.sellerId || '—';
+      const ps = bump(procSeller, sid, () => ({ sellerId: sid, sellerName: o.sellerName || sid, clients: 0, monto: 0 }));
+      ps.clients++; ps.monto += m;
+      const did = (ld && ld.dispatcherId) || '—';
+      const pd = bump(procDisp, did, () => ({ dispatcherId: did, dispatcherName: (ld && ld.dispatcherName) || 'Sin despachador aún', clients: 0, monto: 0 }));
+      pd.clients++; pd.monto += m;
+    }
+    const enProceso = {
+      stages: [...stage.values()].map((x) => ({ ...x, monto: r2(x.monto) })),
+      clients: [...stage.values()].reduce((a, x) => a + x.clients, 0),
+      monto: r2([...stage.values()].reduce((a, x) => a + x.monto, 0)),
+      bySeller: money([...procSeller.values()]), byDispatcher: money([...procDisp.values()]),
+    };
+
     const byType = (arr: { type: string }[]) => [...arr].sort((a, b) => parseFloat(a.type.replace(',', '.')) - parseFloat(b.type.replace(',', '.')) || a.type.localeCompare(b.type));
     return NextResponse.json({
       from, to,
@@ -166,7 +212,7 @@ export async function POST(req: NextRequest) {
       byCategory: money([...byCategory.values()]).sort((a, b) => b.monto - a.monto),
       bySeller: money([...bySeller.values()]).sort((a, b) => b.monto - a.monto),
       byDispatcher: money([...byDispatcher.values()]).sort((a, b) => b.monto - a.monto),
-      novedades, diferencias, siguiente, sinFoto,
+      enProceso, novedades, diferencias, siguiente, sinFoto,
       vacios: { byCode: byType([...vacByCode.values()]), byDispatcher: byType([...vacByDispatcher.values()]), bySeller: byType([...vacBySeller.values()]), devoluciones },
       detail: detail.sort((a, b) => String((a as { date: string }).date).localeCompare(String((b as { date: string }).date))),
     });
