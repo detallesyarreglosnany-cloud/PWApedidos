@@ -58,7 +58,10 @@ const MAX_DOC_BYTES = 256 * 1024; // productos con foto comprimida
 const CHUNK = 200; // documentos por consulta
 // La bajada relee este margen hacia atrás: una escritura que empezó antes del
 // cursor pero terminó después no se pierde (fusionar dos veces no cambia nada).
-const PULL_OVERLAP_MS = 5 * 60_000;
+// Una escritura abre su transacción (syncedAt = now()) y confirma en ≤ 20 s
+// (TX_WAIT.timeout): 45 s de margen alcanzan y evitan rebajar lo mismo en cada
+// sincronización (era 5 min: cada foto o pedido se bajaba ~30 veces).
+const PULL_OVERLAP_MS = 45_000;
 const PULL_BUDGET = 3 * 1024 * 1024; // tamaño máximo de cada página de bajada
 const PULL_ORDER: readonly Kind[] = ['config', 'products', 'sellers', 'clients', 'loads', 'orders', 'events'];
 const EVENTS_DAYS = 31; // historial que baja una oficina nueva
@@ -178,22 +181,31 @@ function later(...ts: string[]) {
   return new Date(Math.max(Date.parse(max) + 1, Date.now())).toISOString();
 }
 
-/** Alertas de cliente duplicado el mismo día (mismo u otro vendedor), para los pedidos recientes del alcance. */
+/**
+ * Alertas de cliente duplicado el mismo día (mismo u otro vendedor), para los pedidos recientes del alcance.
+ * Solo lee de la base los 7 campos que necesita (no el pedido completo con sus líneas: eso
+ * era la mayor parte del tráfico de la base) y responde solo los pedidos que SÍ tienen alerta
+ * (el equipo toma como «sin alerta» los que no vienen).
+ */
 async function duplicates(sellerId: string | null) {
   const from = daysAgo(3);
-  const recent = await db.distDoc.findMany({ where: { kind: 'orders', deleted: false, routeDate: { gte: from } } });
-  const orders = recent.map((r) => parseDoc(r.data) as Record<string, unknown>).filter((o) => !o.deleted);
-  const keysOf = (o: Record<string, unknown>) => {
+  type R = { id: string; sellerId: string | null; routeDate: string | null; status: string | null; clientId: string | null; clientKey: string | null; sellerName: string | null; locked: string | null };
+  const orders = await db.$queryRaw<R[]>`
+    SELECT "id", "sellerId", "routeDate", "status",
+      ("data"::jsonb ->> 'clientId') AS "clientId", ("data"::jsonb ->> 'clientKey') AS "clientKey",
+      ("data"::jsonb ->> 'sellerName') AS "sellerName", ("data"::jsonb ->> 'locked') AS "locked"
+    FROM "DistDoc" WHERE "kind" = 'orders' AND "deleted" = false AND "routeDate" >= ${from}`;
+  const keysOf = (o: R) => {
     const k: string[] = [];
     if (o.clientId) k.push(o.routeDate + '|i|' + o.clientId);
     if (o.clientKey) k.push(o.routeDate + '|k|' + o.clientKey);
     return k;
   };
-  const groups = new Map<string, Record<string, unknown>[]>();
+  const groups = new Map<string, R[]>();
   for (const o of orders) for (const k of keysOf(o)) { const g = groups.get(k) || []; g.push(o); groups.set(k, g); }
   const dups: Record<string, { id: string; sellerName: string }[]> = {};
   // Aprobado en adelante, el vendedor ya puede tomarle otro pedido al mismo cliente
-  const approved = (o: Record<string, unknown>) => o.locked === true || o.status === 'despachado';
+  const approved = (o: R) => o.locked === 'true' || o.status === 'despachado';
   for (const o of orders) {
     if (sellerId && o.sellerId !== sellerId) continue;
     const seen = new Map<string, { id: string; sellerName: string }>();
@@ -201,7 +213,7 @@ async function duplicates(sellerId: string | null) {
       if (x.id === o.id || (x.sellerId === o.sellerId && (approved(x) || approved(o)))) continue;
       seen.set(String(x.id), { id: String(x.id), sellerName: String(x.sellerName || '') });
     }
-    dups[String(o.id)] = [...seen.values()];
+    if (seen.size) dups[String(o.id)] = [...seen.values()];
   }
   return { from, map: dups };
 }
