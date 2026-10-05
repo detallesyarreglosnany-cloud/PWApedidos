@@ -373,6 +373,11 @@
     if (!document.hidden) toast(out.length === 1 ? `${NOTIF_TITLE[out[0].kind]}: ${out[0].msg}` : `🔔 ${out.length} avisos nuevos`, 'ok');
     updateBell();
   }
+  /** Aviso propio de la app (no viene de un pedido): queda en la campana de este equipo. */
+  function localNotif(n) {
+    S.notifs = [{ icon: n.icon || '🔔', kind: n.kind || 'aviso', orderId: '', msg: n.msg, warn: !!n.warn, at: new Date().toISOString(), read: false }].concat(S.notifs || []).slice(0, 80);
+    DB.setMeta('notifs', S.notifs); updateBell();
+  }
   /** Lista de avisos (oficina y vendedor) con el botón para activar los avisos push. */
   function notifSheet() {
     const list = S.notifs || [];
@@ -1246,6 +1251,7 @@
       app.innerHTML = `<div class="empty"><strong>No se pudo abrir la base local</strong>${esc(e.message)}</div>`;
       return;
     }
+    if (window.Aviso) Aviso.start(); // cinta de suscripción (todas las pantallas)
     // Equipo que ya trabajaba con la app (cookie) y amanece sin datos: el navegador los borró
     const prevDev = DB.getCookie('pv_dev');
     if (prevDev && !(await DB.getMeta('deviceId', null)) && !S.wipeNotice) {
@@ -1298,6 +1304,6 @@
     loadAll, saveDocs, saveOrder, saveSettings, setSession, msgThreadHTML, rememberOffice, forgetOffice, PERSIST_HINT, runSync, updateSyncPill, render, refreshAfterRemote, updateBell, beep, logEvent, isSupervisor,
     notifSheet, refreshPush,
     productById, sellerById, orderById, clientById, rubros, orderLinesHTML,
-    boot,
+    boot, localNotif,
   };
 })();
