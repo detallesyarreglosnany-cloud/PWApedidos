@@ -13,7 +13,8 @@
  *     motivo: '...'
  *     vac:    { <productId>: { recv, asg } }         vacíos recibidos / asignados confirmados
  *   } },
- *   truck: { '<productId>|CJ' | '<productId>|UN': { carga, dev, motivo, dest } }
+ *   truck: { '<productId>|CJ' | '<productId>|UN': { queda, carga, dev, motivo, dest } }
+ *     queda / carga: lo que la oficina corrige a mano (si no, QUEDAN viene de la hoja anterior y CARGA de la hoja)
  *     dest: 'almacen' (volvió a almacén) | 'siguiente' (siguiente carga, mismo despachador)
  *   carryFrom: <loadId>  hoja anterior de la que viene QUEDAN
  *   carry:  { dispatcherId, rows: { <key>: qty } }   lo que pasa a la siguiente carga
@@ -91,12 +92,13 @@
     return rows.map((r) => {
       const x = t[r.key] || {};
       const entregado = delBy.get(r.key) || 0;
-      const queda = n0(carryRows[r.key]);
+      const quedaMan = x.queda !== undefined && x.queda !== '';
+      const queda = quedaMan ? n0(x.queda) : n0(carryRows[r.key]);
       const carga = x.carga !== undefined && x.carga !== '' ? n0(x.carga) : Math.max(0, r.pedido - queda);
       const total = queda + carga;
       const debe = total - entregado;
       const dev = x.dev !== undefined && x.dev !== '' ? n0(x.dev) : (debe === 0 ? 0 : null);
-      return { ...r, entregado, queda, carga, total, debe, dev, dif: dev === null ? null : debe - dev, motivo: x.motivo || '', dest: x.dest === 'siguiente' ? 'siguiente' : 'almacen' };
+      return { ...r, entregado, queda, quedaMan, cargaMan: x.carga !== undefined && x.carga !== '', carga, total, debe, dev, dif: dev === null ? null : debe - dev, motivo: x.motivo || '', dest: x.dest === 'siguiente' ? 'siguiente' : 'almacen' };
     });
   }
 

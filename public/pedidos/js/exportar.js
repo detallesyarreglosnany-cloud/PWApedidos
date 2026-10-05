@@ -8,6 +8,7 @@
  *
  *   Exporta.matrix(m, meta)            matriz productos × clientes (hoja de carga / pedidos)
  *   Exporta.flat(orders, meta)         una fila por línea de pedido, con fórmulas
+ *   Exporta.liquidation(load, sh, meta) hoja de liquidación con el cuadre del camión
  *   Exporta.table(def)                 tabla simple (una hoja)
  *   Exporta.blocks(name, blocks, opts) varias tablas apiladas en una hoja
  *   Exporta.save(filename, sheets)     arma el .xlsx y lo descarga / comparte
@@ -166,6 +167,91 @@
     return s;
   }
 
+  /* ---------------- Liquidación (como el libro: matriz + cuadre del camión) ---------------- */
+  /**
+   * sh = Liq.sheet(...). A la izquierda lo entregado a cada cliente; a la derecha
+   * ENTREGADO | QUEDAN | CARGA | TOTAL | DEBE QUEDAR | DEVOLUCIÓN | DIFERENCIA | MOTIVO.
+   * Amarillo = se escribe a mano · azul = fórmula (se recalcula al editar).
+   * meta: { info:[texto], rate, productsById }
+   */
+  function liquidation(load, sh, meta) {
+    meta = meta || {};
+    const IN = { fill: '#FFF2CC' }, CALC = { fill: '#DDEBF7' };
+    const n = sh.cols.length, first = 3, last = first + n - 1;
+    const E = first + n, Q = E + 1, C = E + 2, T = E + 3, DQ = E + 4, DV = E + 5, DF = E + 6, M = E + 7, LS = E + 8, P = E + 9, TU = E + 10;
+    const L = global.Loads, rows = [], heights = {};
+    const ttl = `LIQUIDACIÓN · ${L ? L.labelOf(load) : ''}${load.number && L ? ' · ' + L.loadCode(load) : ''}`;
+    rows.push([{ v: ttl, s: S.title }]);
+    rows.push([{ v: (meta.info || []).filter(Boolean).join('   ·   '), s: S.sub }]);
+    rows.push([{ v: 'Amarillo = lo escribes tú · Azul = se calcula solo (Total = Quedan + Carga · Debe quedar = Total − Entregado · Diferencia = Debe quedar − Devolución)', s: S.note }]);
+    const blankR = (k) => new Array(k).fill(null);
+    const lab = (t) => ({ v: t, s: { b: true, size: 9, align: 'right' } });
+    rows.push([null, lab('VENDEDOR →'), null, ...sh.cols.map((c) => ({ v: L ? L.initials(c.order.sellerName) : '', s: S.ini }))]);
+    rows.push([null, lab('NOTA VALERY →'), null, ...sh.cols.map((c) => ({ v: [c.order.valeryNote || '', c.entry.result === 'parcial' && c.entry.newValery ? '→ ' + c.entry.newValery : ''].filter(Boolean).join(' ') || null, s: S.ini }))]);
+    rows.push([null, lab('NOVEDAD →'), null, ...sh.cols.map((c) => ({ v: (global.Liq && global.Liq.shortResult(c.entry)) || null, s: { ...S.ini, color: '#B00020', wrap: true } }))]);
+    const hr = rows.length;
+    const rh = (t, st) => ({ v: t, s: st || S.hdr });
+    rows.push([rh('CÓDIGO'), rh('PRODUCTO', S.hdrL), rh('UM'), ...sh.cols.map((c, i) => ({ v: `${i + 1}. ${c.order.clientName}`, s: S.hdrV })),
+      rh('ENTREGADO'), rh('QUEDAN'), rh('CARGA'), rh('TOTAL'), rh('DEBE QUEDAR'), rh('DEVOLUCIÓN'), rh('DIFERENCIA'), rh('MOTIVO SI NO CUADRA'), rh('LO QUE SOBRA'), rh('PRECIO $'), rh('TOTAL $')]);
+    heights[hr] = 135;
+    const d0 = rows.length;
+    const priceOf = (r) => {
+      const fromLine = sh.cols.map((c) => (c.order.lines || {})[r.productId]).find(Boolean);
+      const src = fromLine || (meta.productsById && meta.productsById.get(r.productId)) || {};
+      return r.um === 'CJ' ? +src.boxPrice || 0 : +src.unitPrice || 0;
+    };
+    sh.rows.forEach((r, i) => {
+      const xr = d0 + i + 1, a = (c) => `${col(c)}${xr}`, price = priceOf(r);
+      const bad = r.dif !== null && r.dif !== 0;
+      rows.push([cell({ v: r.code }), cell({ v: `${r.name}${r.presentation ? ' ' + r.presentation : ''}` }), cell({ v: r.um, align: 'center', b: true }),
+        ...r.cells.map((c) => ({ v: blank0(c.del), s: kindStyle('int') })),
+        { v: r.entregado, f: n ? `SUM(${a(first)}:${a(last)})` : undefined, s: kindStyle('int', { b: true, ...CALC }) },
+        { v: blank0(r.queda), s: kindStyle('int', IN) },
+        { v: r.carga, s: kindStyle('int', IN) },
+        { v: r.total, f: `${a(Q)}+${a(C)}`, s: kindStyle('int', CALC) },
+        { v: r.debe, f: `${a(T)}-${a(E)}`, s: kindStyle('int', { b: true, ...CALC }) },
+        { v: r.dev, s: kindStyle('int', IN) },
+        { v: r.dif === null ? '' : r.dif, f: `IF(${a(DV)}="","",${a(DQ)}-${a(DV)})`, s: kindStyle('int', { b: true, ...CALC, ...(bad ? { color: '#B00020' } : {}) }) },
+        { v: r.motivo || null, s: cell(IN) },
+        { v: r.debe > 0 || r.dev > 0 ? (r.dest === 'siguiente' ? 'Siguiente carga' : 'Volvió a almacén') : null, s: cell({}) },
+        { v: price || null, s: kindStyle('money') },
+        { v: Math.round(r.entregado * price * 100) / 100, f: `${a(E)}*${a(P)}`, s: kindStyle('money', { b: true }) }]);
+    });
+    const dN = d0 + sh.rows.length, has = sh.rows.length > 0;
+    const rng = (c) => `${col(c)}${d0 + 1}:${col(c)}${dN}`, fix = (c) => `$${col(c)}$${d0 + 1}:$${col(c)}$${dN}`;
+    const sumv = (k) => sh.rows.reduce((x, r) => x + (+r[k] || 0), 0);
+    const totStyle = (fmt) => ({ ...S.tot, fmt, align: 'right' });
+    // TOTAL (cajas + unidades)
+    rows.push([{ v: 'TOTAL (CAJAS + UNIDADES)', s: S.tot }, { v: null, s: S.tot }, { v: null, s: S.tot },
+      ...sh.totals.bultos.map((v, i) => ({ v, f: has ? `SUM(${rng(first + i)})` : undefined, s: totStyle('int') })),
+      ...[[E, 'entregado'], [Q, 'queda'], [C, 'carga'], [T, 'total'], [DQ, 'debe'], [DV, 'dev'], [DF, 'dif']].map(([c, k]) => ({ v: sumv(k), f: has ? `SUM(${rng(c)})` : undefined, s: totStyle('int') })),
+      { v: null, s: S.tot }, { v: null, s: S.tot }, { v: null, s: S.tot }, { v: null, s: S.tot }]);
+    // TOTAL $ POR CLIENTE = SUMAPRODUCTO(cantidades del cliente; precios)
+    const usdRow = rows.length + 1;
+    const usdCli = sh.cols.map((c, i) => Math.round(sh.rows.reduce((x, r) => x + (r.cells[i].del || 0) * priceOf(r), 0) * 100) / 100);
+    rows.push([{ v: 'TOTAL $ POR CLIENTE', s: S.tot }, { v: null, s: S.tot }, { v: 'USD', s: S.tot },
+      ...usdCli.map((v, i) => ({ v, f: has ? `SUMPRODUCT(${rng(first + i)},${fix(P)})` : undefined, s: totStyle('money') })),
+      ...blankR(10).map(() => ({ v: null, s: S.tot })),
+      { v: usdCli.reduce((x, y) => x + y, 0), f: has ? `SUM(${rng(TU)})` : undefined, s: totStyle('money') }]);
+    if (meta.rate) {
+      const br = rows.length + 1;
+      rows.push([{ v: 'TOTAL Bs', s: S.tot }, { v: 'Tasa →', s: { ...S.tot, align: 'right' } }, { v: meta.rate, s: { ...S.tot, ...IN, fmt: 'money' } },
+        ...usdCli.map((v, i) => ({ v: Math.round(v * meta.rate * 100) / 100, f: `${col(first + i)}${usdRow}*$C$${br}`, s: totStyle('money') })),
+        ...blankR(10).map(() => ({ v: null, s: S.tot })),
+        { v: Math.round(usdCli.reduce((x, y) => x + y, 0) * meta.rate * 100) / 100, f: `${col(TU)}${usdRow}*$C$${br}`, s: totStyle('money') }]);
+    }
+    (sh.vac || []).forEach((x) => {
+      const r2 = rows.length + 1;
+      rows.push([{ v: x.label, s: S.vac }, { v: null, s: S.vac }, { v: null, s: S.vac },
+        ...x.cells.map((v) => ({ v: v === null || v === undefined || v === 0 ? null : v, s: { ...S.vac, fmt: 'int', align: 'right' } })),
+        { v: x.total, f: n ? `SUM(${col(first)}${r2}:${col(last)}${r2})` : undefined, s: { ...S.vac, fmt: 'int', align: 'right' } }]);
+    });
+    rows.push([]);
+    rows.push([null, { v: 'Despachador: ____________________     Almacén: ____________________     Liquidó (oficina): ____________________     Gerencia: ____________________', s: S.sub }]);
+    const widths = [9, 34, 5, ...sh.cols.map(() => 6.5), 10, 9, 9, 9, 10, 10, 10, 22, 15, 9, 11];
+    return { name: 'Liquidación', rows, widths, heights, freeze: { r: hr + 1, c: 3 }, merges: [`A1:${col(Math.max(TU, 8))}1`], landscape: true, tab: '730101' };
+  }
+
   /** Tabla simple de una hoja (con filtro y paneles fijos). */
   function table(def) {
     const b = { title: '', cols: def.cols, rows: def.rows, totalLabel: def.totalLabel };
@@ -178,5 +264,5 @@
     return global.PV.saveBinary(filename.replace(/\.csv$/i, '') + (/\.xlsx$/i.test(filename) ? '' : '.xlsx'), u8, X().MIME);
   }
 
-  global.Exporta = { matrix, flat, blocks, table, save, S };
+  global.Exporta = { matrix, flat, liquidation, blocks, table, save, S };
 })(window);

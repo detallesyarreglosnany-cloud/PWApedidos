@@ -799,6 +799,7 @@
           <div class="muted">${esc(load.sellerName)} · Despachador: <b>${esc(load.dispatcherName || '—')}</b> · Fecha de la carga ${esc(load.date || '—')} · pedidos del ${esc(Loads.orderDateRange(os) || '—')}</div></div>
         <span class="status ${done ? 'aprobada' : 'en_espera'}">${done ? '✓ Liquidada' : 'Borrador'}</span>
         <button class="btn" id="qPrint">🖨 Imprimir liquidación</button>
+        <button class="btn" id="qXlsx">⇩ Excel</button>
         ${done ? '<button class="btn" id="qReopen">↺ Reabrir</button>' : `<button class="btn btn-ok" id="qClose" ${probs.length ? 'title="Revisa la lista de pendientes"' : ''}>✓ Cerrar liquidación</button>`}
       </div>
       <div class="kpi-row">
@@ -838,9 +839,25 @@
           <td class="n ${v.pending ? 'warn-txt' : ''}">${v.pending}</td>
           <td>${v.pending ? `<select class="select sm" data-v="motivo" ${dis}><option value="">${v.regime === 'prestamo' ? 'Préstamo' : '— Motivo —'}</option>${Liq.VAC_MOTIVOS.map((m) => `<option ${m === v.motivo ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>` : ''}</td></tr>`).join('')}</tbody></table></div>` : ''}
 
-      <div class="section-title">${vac.length ? 3 : 2} · Hoja de liquidación <span class="muted">(lo entregado a cada cliente y el cuadre del camión · CARGA viene de la hoja; corrígela con el cuaderno de almacén)</span></div>
-      ${carry ? `<div class="hint">🚚 QUEDAN viene de la liquidación de <b>${esc(carrySrc ? Loads.labelOf(carrySrc) : carry.fromId)}</b> (mismo despachador, marcada «siguiente carga»).</div>` : ''}
+      <div class="section-title">${vac.length ? 3 : 2} · Cuadre del camión <span class="muted">(escribe a mano lo que quedó, lo que se cargó de verdad y lo que volvió · las celdas amarillas son tuyas)</span></div>
+      ${carry ? `<div class="hint">🚚 QUEDAN viene de la liquidación de <b>${esc(carrySrc ? Loads.labelOf(carrySrc) : carry.fromId)}</b> (mismo despachador, marcada «siguiente carga»). Puedes corregirlo.</div>` : ''}
       <div class="toolbar no-print"><button class="btn btn-sm" id="qAllStore" ${dis}>Todo lo que sobra → volvió a almacén</button><button class="btn btn-sm" id="qAllNext" ${dis}>Todo lo que sobra → siguiente carga</button></div>
+      <div class="card" style="overflow:auto"><table class="inv liq-truck">
+        <thead><tr><th>Producto</th><th>UM</th><th class="n">Según hoja</th><th class="n">Entregado</th><th class="n in">Quedan</th><th class="n in">Carga</th><th class="n">Total</th><th class="n">Debe quedar</th><th class="n in">Devolución</th><th class="n">Diferencia</th><th class="in">Motivo si no cuadra</th><th>Lo que sobra</th></tr></thead>
+        <tbody>${rows.map((r) => `<tr data-key="${esc(r.key)}" class="${r.dev === null ? 'liq-count' : r.dif !== 0 ? 'liq-bad' : ''}">
+          <td data-l="Producto"><span class="mono muted">${esc(r.code)}</span> ${esc(r.name)} <b>${esc(r.presentation)}</b></td><td><span class="um ${r.um}">${r.um}</span></td>
+          <td class="n" data-l="Según hoja">${r.pedido}</td><td class="n" data-l="Entregado"><b>${r.entregado}</b></td>
+          <td class="n in" data-l="Quedan"><input class="input qin small" inputmode="numeric" data-t="queda" value="${r.quedaMan || r.queda ? r.queda : ''}" placeholder="0" aria-label="Quedan ${esc(r.code)}" ${dis}></td>
+          <td class="n in" data-l="Carga"><input class="input qin small" inputmode="numeric" data-t="carga" value="${r.carga}" aria-label="Carga ${esc(r.code)}" ${dis}></td>
+          <td class="n" data-l="Total">${r.total}</td><td class="n" data-l="Debe quedar"><b>${r.debe}</b></td>
+          <td class="n in" data-l="Devolución"><input class="input qin small" inputmode="numeric" data-t="dev" value="${r.dev === null ? '' : r.dev}" placeholder="contar" aria-label="Devolución ${esc(r.code)}" ${dis}></td>
+          <td class="n ${r.dif ? 'warn-txt' : ''}" data-l="Diferencia"><b>${r.dif === null ? '' : r.dif}</b></td>
+          <td class="in" data-l="Motivo"><input class="input sm" data-t="motivo" maxlength="80" list="liqMot" value="${esc(r.motivo)}" placeholder="${r.dif ? 'motivo' : '—'}" aria-label="Motivo ${esc(r.code)}" ${dis}></td>
+          <td data-l="Lo que sobra">${r.debe > 0 || r.dev > 0 ? `<select class="select sm" data-t="dest" ${dis}>${opt([['almacen', 'Volvió a almacén'], ['siguiente', 'Siguiente carga']], r.dest)}</select>` : ''}</td></tr>`).join('')}</tbody>
+        <tfoot><tr><td colspan="2"><b>TOTAL</b></td>${['pedido', 'entregado', 'queda', 'carga', 'total', 'debe', 'dev', 'dif'].map((k) => `<td class="n"><b>${nf0.format(rows.reduce((a, r) => a + (+r[k] || 0), 0))}</b></td>`).join('')}<td colspan="2"></td></tr></tfoot></table></div>
+      <p class="muted">Total = Quedan + Carga · Debe quedar = Total − Entregado · Diferencia = Debe quedar − Devolución. Si la diferencia no es 0, escribe el motivo. Quedan viene solo de la hoja anterior del mismo despachador; si no, escríbelo tú.</p>
+
+      <div class="section-title">${vac.length ? 4 : 3} · Hoja de liquidación <span class="muted">(lo entregado a cada cliente; a la derecha el mismo cuadre del camión)</span></div>
       <div class="table-wrap"><table class="grid sheet-grid liq-grid">
         <thead>
           <tr class="ini-row"><th class="sticky-col">Vendedor →</th>${sh.cols.map((c) => `<th>${esc(Loads.initials(c.order.sellerName))}</th>`).join('')}<th colspan="10"></th></tr>
@@ -852,7 +869,7 @@
         <tbody>${sh.rows.map((r) => `<tr data-key="${esc(r.key)}" class="${r.dev === null ? 'liq-count' : r.dif !== 0 ? 'liq-bad' : ''}">
           <td class="sticky-col"><span class="mono muted">${esc(r.code)}</span> ${esc(r.name)} <b>${esc(r.presentation)}</b> <span class="um ${r.um}">${r.um}</span></td>
           ${r.cells.map((c) => `<td class="n ${c.del || c.ret ? '' : 'zero'}">${c.del ? nf0.format(c.del) : ''}${c.ret ? `<small class="ret" title="Devuelto">↩${c.ret}</small>` : ''}</td>`).join('')}
-          <td class="n lq-tot">${r.entregado}</td><td class="n">${r.queda || ''}</td>
+          <td class="n lq-tot">${r.entregado}</td><td class="n"><input class="cell-in" inputmode="numeric" data-t="queda" value="${r.quedaMan || r.queda ? r.queda : ''}" aria-label="Quedan ${esc(r.code)}" ${dis}></td>
           <td class="n"><input class="cell-in" inputmode="numeric" data-t="carga" value="${r.carga}" aria-label="Carga ${esc(r.code)}" ${dis}></td>
           <td class="n">${r.total}</td><td class="n"><b>${r.debe}</b></td>
           <td class="n"><input class="cell-in" inputmode="numeric" data-t="dev" value="${r.dev === null ? '' : r.dev}" placeholder="contar" aria-label="Devolución ${esc(r.code)}" ${dis}></td>
@@ -883,6 +900,9 @@
       refresh(focusSel);
     };
     $('#qBack').onclick = () => { U().liqId = null; PV.render(); };
+    $('#qXlsx').onclick = () => { const l = cur(), st = liqState(l), sh2 = Liq.sheet(st.os, st.liq, st.rows, st.vac);
+      Exporta.save(`liquidacion_${slug(Loads.labelOf(l))}_${l.date || today()}.xlsx`, [Exporta.liquidation(l, sh2, { rate: +S.config.exchangeRate || 0, productsById: byIdMap(S.products),
+        info: [`Fecha de la carga: ${l.date || '—'}`, `Pedidos del: ${Loads.orderDateRange(st.os) || '—'}`, `Ruta: ${l.route || '—'}`, `Despachador: ${l.dispatcherName || '—'}`, `Vendedor(es): ${l.sellerName || ''}`, Liq.isDone(l) ? 'LIQUIDADA' : 'BORRADOR'] })]); };
     $('#qPrint').onclick = () => { const st = liqState(cur()); Print.printLiquidation(cur(), st, { config: S.config, products: S.products, productRank: productRank() }); };
     const qc = $('#qClose'); if (qc) qc.onclick = () => closeLiquidation(cur(), root);
     const qr = $('#qReopen'); if (qr) qr.onclick = () => reopenLiquidation(cur(), root);
@@ -929,7 +949,7 @@
         const key = tr.dataset.key, f = t.dataset.t, raw = t.value.trim();
         await saveLiq((q) => {
           const x = { ...(q.truck[key] || {}) };
-          if (f === 'carga' || f === 'dev') { if (raw === '') delete x[f]; else x[f] = int(raw); } else x[f] = raw;
+          if (f === 'queda' || f === 'carga' || f === 'dev') { if (raw === '') delete x[f]; else x[f] = int(raw); } else x[f] = raw;
           q.truck[key] = x;
         }, f === 'motivo' ? null : `tr[data-key="${key}"] [data-t="${f}"]`);
       }
