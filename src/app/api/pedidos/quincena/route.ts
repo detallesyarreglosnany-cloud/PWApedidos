@@ -85,8 +85,9 @@ export async function POST(req: NextRequest) {
     for (const o of orders) {
       const d = o.delivery!, load = liquidated.get(d.loadId!)!;
       const pedido = Object.values(o.lines || {}).reduce((a, l) => a + lineMoney(l), 0);
-      totals.pedido += pedido;
       const res = d.result || 'entregada';
+      // «Se entrega después» no cuenta aquí: se cuenta cuando se entregue (su copia va en otra hoja)
+      if (res !== 'pendiente') totals.pedido += pedido;
       if (res === 'parcial' || res === 'pendiente' || res === 'anulada') {
         totals[res]++;
         novedades.push({ date: loadDay(load), load: loadCode(load), dispatcherName: load.dispatcherName || '', clientName: o.clientName, sellerName: o.sellerName,

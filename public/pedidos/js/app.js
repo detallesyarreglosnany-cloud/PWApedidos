@@ -985,6 +985,10 @@
     return day >= dayMinus(+r - 1);
   }
   const loadOf = (o) => (o.loadId ? S.loads.find((l) => l.id === o.loadId) : null);
+  // Pedido liquidado: la oficina cerró la liquidación de su hoja (delivery solo existe mientras está cerrada)
+  const isLiquidated = (o) => !!(o && o.delivery && o.delivery.at);
+  const LIQ_TEXT = { entregada: '✓ Liquidado', parcial: '↩ Devolución parcial', pendiente: '⏳ Se entrega después', anulada: '✕ Nota anulada' };
+  const liqBadge = (d) => `<span class="status ${d.result === 'entregada' ? 'aprobada' : d.result === 'anulada' ? 'over' : 'en_espera'}">${esc(LIQ_TEXT[d.result] || 'Liquidado')}</span>${d.newValery ? ` <span class="muted" style="font-size:12px">nota nueva ${esc(d.newValery)}</span>` : ''}`;
   const qty = (l) => (l ? [l.cajas ? l.cajas + ' cj' : '', l.unidades ? l.unidades + ' un' : ''].filter(Boolean).join(' + ') || '—' : '—');
 
   function renderSellerOrders() {
@@ -993,19 +997,22 @@
     const mine = S.orders.filter((o) => o.sellerId === sid && inRange(o.routeDate, f.r));
     const list = mine.filter((o) => f.g === 'todos' || groupOf(o) === f.g)
       .sort((a, b) => String(b.routeDate).localeCompare(String(a.routeDate)) || String(b.sentAt || b.createdAt).localeCompare(String(a.sentAt || a.createdAt)));
-    const sent = mine.filter((o) => o.status !== 'abierto'), desp = mine.filter((o) => o.status === 'despachado');
+    const sent = mine.filter((o) => o.status !== 'abierto' && !(isLiquidated(o) && o.delivery.result === 'pendiente')), desp = mine.filter((o) => o.status === 'despachado');
     const sum = (arr) => arr.reduce((a, o) => a + Matrix.orderTotals(o).monto, 0);
+    // Lo que cuenta es lo LIQUIDADO: lo que el cliente recibió de verdad (sin devoluciones ni notas anuladas)
+    const liqd = mine.filter(isLiquidated), porLiq = desp.filter((o) => !isLiquidated(o));
+    const delivered = (arr) => arr.reduce((a, o) => a + (+o.delivery.monto || 0), 0);
     const count = (g) => mine.filter((o) => g === 'todos' || groupOf(o) === g).length;
     const loads = S.loads.filter((l) => Loads.sellerIdsOf(l).includes(sid) || S.orders.some((o) => o.sellerId === sid && o.loadId === l.id))
       .filter((l) => inRange(l.date || l.closedAt || l.createdAt, f.r))
       .sort((a, b) => String(b.date || b.closedAt || b.createdAt).localeCompare(String(a.date || a.closedAt || a.createdAt)));
     const chip = (key, cur, label, data) => `<button class="chip ${key === cur ? 'active' : ''}" ${data}="${key}">${label}</button>`;
     const orderRow = (o) => {
-      const t = Matrix.orderTotals(o), l = loadOf(o), g = groupOf(o);
+      const t = Matrix.orderTotals(o), l = loadOf(o), g = groupOf(o), d = isLiquidated(o) ? o.delivery : null;
       return `<tr data-myo="${esc(o.id)}" style="cursor:pointer">
         <td><b>${esc(o.clientName)}</b><div class="muted" style="font-size:12px">${esc(fmtDate(o.routeDate))}${l ? ' · ' + esc(Loads.labelOf(l)) + (l.number ? ' · ' + esc(Loads.loadCode(l)) : '') : ''}${o.valeryNote ? ' · Nota ' + esc(o.valeryNote) : ''}${(o.officeMsgs || []).length ? ' · 💬 ' + o.officeMsgs.length : ''}</div>
-          <span class="status ${g === 'aprobados' ? 'en_carga' : o.status}">${esc(GROUP_TEXT[g])}</span>${o.officeEdited ? ' <span class="status en_espera">ajustado por oficina</span>' : ''}</td>
-        <td class="n" data-l="Monto">${usd(t.monto)}</td></tr>`;
+          ${d ? liqBadge(d) : `<span class="status ${g === 'aprobados' ? 'en_carga' : o.status}">${esc(GROUP_TEXT[g])}</span>`}${o.officeEdited ? ' <span class="status en_espera">ajustado por oficina</span>' : ''}</td>
+        <td class="n" data-l="Monto">${d ? `${usd(d.monto)}${Math.abs(d.monto - t.monto) > 0.004 ? `<div class="muted" style="font-size:12px;text-decoration:line-through">${usd(t.monto)}</div>` : ''}` : usd(t.monto)}</td></tr>`;
     };
     app.innerHTML = `
       ${brandHeader(seller.name, 'Mis pedidos · seguimiento',
@@ -1013,11 +1020,11 @@
       <div class="container">
         <div class="chips" id="myRange">${MY_RANGES.map(([k, l]) => chip(k, f.r, l, 'data-r')).join('')}</div>
         <div class="kpi-row" style="margin-top:10px">
-          <div class="kpi"><small>Pedidos enviados</small><b>${sent.length}</b></div>
-          <div class="kpi"><small>Monto enviado</small><b>${usd(sum(sent))}</b></div>
-          <div class="kpi"><small>Monto despachado</small><b>${usd(sum(desp))}</b></div>
+          <div class="kpi"><small>Pedidos enviados</small><b>${sent.length}</b><small>${usd(sum(sent))} pedido</small></div>
+          <div class="kpi"><small>Entregado (liquidado)</small><b>${usd(delivered(liqd))}</b><small>${liqd.filter((o) => +o.delivery.monto > 0).length} clientes</small></div>
+          <div class="kpi"><small>Despachado sin liquidar</small><b>${usd(sum(porLiq))}</b><small>${porLiq.length} pedidos · aún no cuenta</small></div>
         </div>
-        <p class="muted" style="margin-top:-4px">Lo <b>despachado</b> es lo que realmente salió al cliente (base de tu comisión).</p>
+        <p class="muted" style="margin-top:-4px">Lo <b>liquidado</b> es lo que el cliente recibió de verdad, ya descontadas devoluciones y notas anuladas: es la base de tu comisión.</p>
         <div class="chips" id="myTab">${chip('pedidos', f.tab, '🧾 Mis pedidos', 'data-t')}${chip('hojas', f.tab, '🚚 Hojas de carga', 'data-t')}</div>
         ${f.tab === 'pedidos' ? `
           <div class="chips" id="myGroup">${MY_GROUPS.map(([k, l]) => chip(k, f.g, `${l} <span class="badge">${count(k)}</span>`, 'data-g')).join('')}</div>
@@ -1031,7 +1038,7 @@
                 <span class="status ${st.locked ? 'en_carga' : 'enviado'}">${st.locked ? '🔒 ' : ''}${esc(st.name)}</span></div>
               <div class="muted" style="margin:4px 0 8px">📅 ${esc(fmtDate(l.date || String(l.closedAt || l.createdAt).slice(0, 10)))} · Ruta ${esc(l.route || '—')} · Despachador: <b>${esc(l.dispatcherName || 'sin asignar')}</b></div>
               ${os.length ? `<table class="inv"><tbody>${os.map(orderRow).join('')}</tbody></table>
-                <div class="row" style="justify-content:flex-end;margin-top:6px"><b>Tus clientes en esta hoja: ${os.length} · ${usd(sum(os))}</b></div>`
+                <div class="row" style="justify-content:flex-end;margin-top:6px"><b>Tus clientes en esta hoja: ${os.length} · ${os.some(isLiquidated) ? `entregado ${usd(delivered(os.filter(isLiquidated)))}` : usd(sum(os))}</b></div>`
                 : '<p class="muted">Tus pedidos ya no están en esta hoja (se movieron o quedaron en espera).</p>'}
             </div>`;
           }).join('') : '<div class="empty card"><strong>Sin hojas de carga</strong>en ese período.</div>')}
@@ -1056,7 +1063,7 @@
       const fin = (o.lines || {})[pid], was = sentL ? sentL[pid] : null, ref = fin || was;
       const changed = sentL && qty(was) !== qty(fin);
       return `<tr${changed ? ' class="short"' : ''}><td><b>${esc(ref.name)} ${esc(ref.presentation || '')}</b><div class="muted mono" style="font-size:12px">${esc(ref.code || '')}</div></td>
-        ${sentL ? `<td class="num">${esc(qty(was))}</td>` : ''}<td class="num">${esc(qty(fin))}${changed ? ' ✏️' : ''}</td></tr>`;
+        ${sentL ? `<td class="num">${esc(qty(was))}</td>` : ''}<td class="num">${esc(qty(fin))}${changed ? ' ✏️' : ''}</td>${isLiquidated(o) ? `<td class="num"><b>${esc(qty((o.delivery.lines || {})[pid]))}</b></td>` : ''}</tr>`;
     }).join('');
     const info = [
       ['Fecha del pedido', fmtDate(o.routeDate)],
@@ -1067,12 +1074,14 @@
       ['Despachador', (l && l.dispatcherName) || '—'],
       ['Fecha de carga', l && (l.date || l.closedAt) ? fmtDate(l.date || String(l.closedAt).slice(0, 10)) : '—'],
       ['Nota de entrega', o.valeryNote || '—'],
+      ...(isLiquidated(o) ? [['Liquidación', LIQ_TEXT[o.delivery.result] || 'Liquidado'], ['Entregado', usd(o.delivery.monto)],
+        ...(o.delivery.newValery ? [['Nota que la reemplaza', o.delivery.newValery]] : []), ...(o.delivery.motivo ? [['Motivo', o.delivery.motivo]] : [])] : []),
     ];
     openSheet(`
       <div class="row"><h2 class="grow">${esc(o.clientName)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
       <div class="grid2" style="margin:8px 0 12px">${info.map(([k, v]) => `<div><small class="muted">${esc(k)}</small><div><b>${esc(v)}</b></div></div>`).join('')}</div>
       ${o.officeEdited ? `<div class="hint warn">✏️ La oficina ajustó este pedido${sentL ? ': las filas marcadas cambiaron respecto a lo que enviaste.' : '.'}</div>` : ''}
-      <table class="lines"><thead><tr><th style="text-align:left">Producto</th>${sentL ? '<th class="num">Pediste</th>' : ''}<th class="num">${g === 'despachados' ? 'Despachado' : 'Queda'}</th></tr></thead>
+      <table class="lines"><thead><tr><th style="text-align:left">Producto</th>${sentL ? '<th class="num">Pediste</th>' : ''}<th class="num">${g === 'despachados' ? 'Despachado' : 'Queda'}</th>${isLiquidated(o) ? '<th class="num">Entregado</th>' : ''}</tr></thead>
         <tbody>${rows || '<tr><td class="muted">Sin productos</td></tr>'}</tbody></table>
       <div class="row" style="justify-content:space-between;margin-top:10px;font-size:18px"><b>Total · ${t.cajas} cj + ${t.unidades} un</b><b>${usd(t.monto)}</b></div>
       <div class="section-title" style="margin:14px 0 6px">💬 Notas y mensajes</div>
