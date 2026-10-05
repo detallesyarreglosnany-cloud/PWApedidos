@@ -229,6 +229,8 @@ function orderNotice(cur: Record<string, unknown> | null, doc: Record<string, un
     if (isSent(cur) && doc.sellerEdited && doc.sellerEdited !== cur!.sellerEdited) return office('✏️ Pedido modificado', `${who} modificó el pedido de ${client}`, 'mod');
     return null;
   }
+  // La oficina cargó un pedido a nombre del vendedor
+  if (!cur && sid && doc.createdBy === 'oficina' && isSent(doc)) return seller('🏢 Pedido cargado por la oficina', `${client}${doc.routeDate ? ' · ' + String(doc.routeDate) : ''}`, 'ofi');
   if (!cur || !sid) return null;
   // Mensaje nuevo de la oficina sobre este pedido
   const nm = Array.isArray(doc.officeMsgs) ? doc.officeMsgs : [], cm = Array.isArray(cur.officeMsgs) ? cur.officeMsgs : [];
