@@ -117,7 +117,7 @@
       </div>
       ${res.clean ? '<div class="hint">✓ <b>Comparación limpia:</b> el Excel y la app coinciden en productos, clientes, despachadores y vacíos de esta quincena.</div>'
         : `<div class="hint warn">⚠ <b>Hay diferencias que explicar:</b> ${c.products} producto(s) · ${c.clients} cliente(s) · ${c.dispatchers} despachador(es) · ${c.vacios} tipo(s) de vacío. El libro suma las cantidades <i>cargadas</i> (no resta devoluciones), por eso se compara contra lo cargado en la app.</div>`}
-      <div class="row" style="gap:10px;margin:6px 0"><label class="row"><input type="checkbox" id="xcOnly" ${only ? 'checked' : ''} style="width:20px;height:20px"> Mostrar solo diferencias</label><span class="grow"></span><button class="btn btn-sm" id="xcCsv">⇩ Diferencias (CSV)</button></div>
+      <div class="row" style="gap:10px;margin:6px 0"><label class="row"><input type="checkbox" id="xcOnly" ${only ? 'checked' : ''} style="width:20px;height:20px"> Mostrar solo diferencias</label><span class="grow"></span><button class="btn btn-sm" id="xcCsv">⇩ Comparación (Excel)</button></div>
       ${tbl('Productos', c.products, '<th>Código</th><th>Producto</th><th class="n">Excel cant.</th><th class="n">App cant.</th><th class="n">Dif.</th><th class="n">Excel $</th><th class="n">App $</th><th class="n">Dif. $</th><th>Estado</th>',
         rowsOf(res.products).map((r) => `<tr><td class="mono">${esc(r.code)}</td><td>${esc(r.name)}</td>${N(r.excelQty)}${N(r.appQty)}${D(r.difQty)}${N(r.excelMonto, true)}${N(r.appMonto, true)}${D(r.difMonto, true)}<td>${badge(r.st)}</td></tr>`).join(''))}
       ${tbl('Clientes (monto cargado)', c.clients, '<th>Cliente</th><th class="n">Excel $</th><th class="n">App $</th><th class="n">Dif. $</th><th class="n">App · liquidado $</th><th>Estado</th>',
@@ -128,16 +128,19 @@
         rowsOf(res.vacios).map((r) => `<tr><td><b>${esc(r.type)}</b></td>${N(r.excel)}${N(r.app)}${D(r.dif)}<td>${badge(r.st)}</td></tr>`).join(''))}`;
     $2('#xcOnly').onchange = (e) => { st.xcOnly = e.target.checked; renderCompare(box, d, st); };
     $2('#xcCsv').onclick = () => {
-      const sep = (S.settings && S.settings.csvSep) || ';', dec = (S.settings && S.settings.csvDecimal) || ',';
-      const q = (v) => { let s2 = String(v == null ? '' : v); if (/^[=+\-@]/.test(s2)) s2 = "'" + s2; return s2.includes(sep) || s2.includes('"') ? '"' + s2.replace(/"/g, '""') + '"' : s2; };
-      const m = (n) => String(Number(n || 0).toFixed(2)).replace('.', dec);
-      const L = [q(`COMPARACION EXCEL vs APP · ${d.from} a ${d.to} · libro ${x.name}`), ''];
-      const sec = (name, hd, rows) => { L.push(q(name)); L.push(hd.join(sep)); rows.forEach((r) => L.push(r.map(q).join(sep))); L.push(''); };
-      sec('PRODUCTOS', ['CODIGO', 'PRODUCTO', 'EXCEL_CANT', 'APP_CANT', 'DIF_CANT', 'EXCEL_USD', 'APP_USD', 'DIF_USD', 'ESTADO'], res.products.filter((r) => r.st !== 'ok').map((r) => [r.code, r.name, r.excelQty, r.appQty, r.difQty, m(r.excelMonto), m(r.appMonto), m(r.difMonto), ST_TXT[r.st]]));
-      sec('CLIENTES', ['CLIENTE', 'EXCEL_USD', 'APP_USD', 'DIF_USD', 'APP_LIQUIDADO_USD', 'ESTADO'], res.clients.filter((r) => r.st !== 'ok').map((r) => [r.name, m(r.excel), m(r.app), m(r.dif), m(r.entregado), ST_TXT[r.st]]));
-      sec('DESPACHADORES', ['EXCEL', 'APP', 'EXCEL_USD', 'APP_USD', 'DIF_USD', 'ESTADO'], res.dispatchers.filter((r) => r.st !== 'ok').map((r) => [r.excelName, r.appName, m(r.excel), m(r.app), m(r.dif), ST_TXT[r.st]]));
-      sec('VACIOS', ['TIPO', 'EXCEL', 'APP', 'DIF', 'ESTADO'], res.vacios.filter((r) => r.st !== 'ok').map((r) => [r.type, r.excel, r.app, r.dif, ST_TXT[r.st]]));
-      saveFile(`comparacion_excel_${d.from}_a_${d.to}.csv`, '\uFEFF' + L.join('\r\n'), 'text/csv;charset=utf-8');
+      const E = global.Exporta, st2 = (r) => ST_TXT[r.st];
+      const sheets = [
+        E.table({ name: 'Productos', title: `COMPARACIÓN EXCEL vs APP · ${d.from} a ${d.to}`, subtitle: `Libro ${x.name} · la diferencia es una fórmula (Excel − App); filtra la columna ESTADO para ver solo lo que no coincide`,
+          cols: [{ h: 'CÓDIGO', w: 12 }, { h: 'PRODUCTO', w: 40 }, { h: 'EXCEL CANT.', k: 'int' }, { h: 'APP CANT.', k: 'int' }, { h: 'DIF. CANT.', k: 'int', total: true }, { h: 'EXCEL $', k: 'money', total: true }, { h: 'APP $', k: 'money', total: true }, { h: 'DIF. $', k: 'money', total: true }, { h: 'ESTADO', w: 22 }],
+          rows: res.products.map((r, i) => { const xr = 5 + i; return [r.code, r.name, r.excelQty, r.appQty, { v: r.difQty, f: `C${xr}-D${xr}` }, r.excelMonto, r.appMonto, { v: r.difMonto, f: `F${xr}-G${xr}` }, st2(r)]; }) }),
+        E.table({ name: 'Clientes', title: 'CLIENTES · monto cargado', cols: [{ h: 'CLIENTE', w: 46 }, { h: 'EXCEL $', k: 'money', total: true }, { h: 'APP $', k: 'money', total: true }, { h: 'DIF. $', k: 'money', total: true }, { h: 'APP · LIQUIDADO $', k: 'money', w: 18, total: true }, { h: 'ESTADO', w: 22 }],
+          rows: res.clients.map((r, i) => { const xr = 5 + i; return [r.name, r.excel, r.app, { v: r.dif, f: `B${xr}-C${xr}` }, r.entregado, st2(r)]; }) }),
+        E.table({ name: 'Despachadores', title: 'DESPACHADORES · monto cargado', cols: [{ h: 'EXCEL (REPARTIDOR)', w: 24 }, { h: 'APP (DESPACHADOR)', w: 24 }, { h: 'EXCEL $', k: 'money', total: true }, { h: 'APP $', k: 'money', total: true }, { h: 'DIF. $', k: 'money', total: true }, { h: 'ESTADO', w: 22 }],
+          rows: res.dispatchers.map((r, i) => { const xr = 5 + i; return [r.excelName, r.appName, r.excel, r.app, { v: r.dif, f: `C${xr}-D${xr}` }, st2(r)]; }) }),
+        E.table({ name: 'Vacíos', title: 'VACÍOS POR TIPO · cajas cargadas', cols: [{ h: 'TIPO', w: 12 }, { h: 'EXCEL', k: 'int', total: true }, { h: 'APP', k: 'int', total: true }, { h: 'DIF.', k: 'int', total: true }, { h: 'ESTADO', w: 22 }],
+          rows: res.vacios.map((r, i) => { const xr = 5 + i; return [r.type, r.excel, r.app, { v: r.dif, f: `B${xr}-C${xr}` }, st2(r)]; }) }),
+      ];
+      E.save(`comparacion_excel_${d.from}_a_${d.to}.xlsx`, sheets);
     };
     bind();
     function $2(sel) { return box.querySelector(sel); }
@@ -156,6 +159,60 @@
         } catch (e) { toast(e.message || 'No se pudo leer el libro', 'err'); renderCompare(box, d, st); }
       };
     }
+  }
+
+  /** Libro de Excel del reporte quincenal: una hoja por tema, con fórmulas en los totales. */
+  function reportSheets(d, title, rubros) {
+    const E = global.Exporta, t = d.totals, sub = `${title} · del ${d.from} al ${d.to} · Venta liquidada = lo entregado de verdad (hojas con la liquidación cerrada, sin devoluciones ni notas anuladas)`;
+    const money = { border: true, fmt: 'money', align: 'right' }, int = { border: true, fmt: 'int', align: 'right' };
+    const sv = summaryRows(d, 'seller'), sd = summaryRows(d, 'dispatcher');
+    const sumCols = (who, disp) => [{ h: who, w: 26 }, ...(disp ? [{ h: 'HOJAS', k: 'int', total: true }] : []), { h: 'CLIENTES', k: 'int', total: true }, { h: 'CAJAS', k: 'int', total: true }, { h: 'VENTA LIQUIDADA $', k: 'money', w: 17, total: true },
+      { h: 'VACÍOS DESPACHADOS', k: 'int', w: 14, total: true }, { h: 'VACÍOS RECIBIDOS', k: 'int', w: 14, total: true }, { h: 'VACÍOS ASIGNADOS', k: 'int', w: 14, total: true }, { h: 'QUEDAN DEBIENDO', k: 'int', w: 14, total: true },
+      { h: disp ? 'DIFERENCIAS' : 'NOVEDADES', k: 'int', total: true }, { h: 'VENTA EN PROCESO $', k: 'money', w: 17, total: true }];
+    const sumRow = (r, disp) => [r.name, ...(disp ? [r.hojas] : []), r.clients, r.cajas, r.monto, r.vacDesp, r.vacRecv, r.vacAsg, r.vacDebe, disp ? r.diferencias : r.novedades, r.procMonto];
+    const resumen = E.blocks('Resumen', [
+      { title: 'Venta liquidada y venta en proceso', cols: [{ h: 'CONCEPTO', w: 34 }, { h: 'VALOR', w: 18 }], rows: [
+        ['VENTA LIQUIDADA $ (lo que paga el cliente)', { v: t.monto, s: { ...money, b: true } }], ['Venta en proceso $ (todavía puede cambiar)', { v: d.enProceso.monto, s: money }], ['Pedido original de lo liquidado $', { v: t.pedido, s: money }],
+        ['Hojas liquidadas', { v: t.hojas, s: int }], ['Clientes atendidos', { v: t.clients, s: int }], ['Cajas liquidadas', { v: t.cajas, s: int }], ['Unidades sueltas', { v: t.unidades, s: int }],
+        ['Hojas del período sin liquidar', { v: d.pendingLoads.length, s: int }]] },
+      { title: 'Resumen de la quincena por vendedor', cols: sumCols('VENDEDOR', false), rows: sv.rows.map((r) => sumRow(r, false)) },
+      { title: 'Resumen de la quincena por despachador', cols: sumCols('DESPACHADOR', true), rows: sd.rows.map((r) => sumRow(r, true)) },
+      { title: 'Venta en proceso por etapa (no suma a la venta liquidada)', cols: [{ h: 'ETAPA', w: 34 }, { h: 'PEDIDOS', k: 'int', total: true }, { h: 'MONTO $', k: 'money', total: true }], rows: d.enProceso.stages.map((x) => [x.label, x.clients, x.monto]) },
+    ], { title: 'REPORTE QUINCENAL', subtitle: sub });
+    // Venta por categoría (cajas, unidades y monto) para vendedores y despachadores
+    const catBlocks = [];
+    [['seller', 'VENDEDOR'], ['dispatcher', 'DESPACHADOR']].forEach(([who, nm]) => {
+      const g = catGrid(d, who, rubros), n = g.people.length;
+      [['CAJAS', 'cajas', 'int'], ['UNIDADES SUELTAS', 'unidades', 'int'], ['MONTO $', 'monto', 'money']].forEach(([lab, f, k]) => {
+        catBlocks.push({ title: `${lab} por categoría · por ${nm.toLowerCase()}`, cols: [{ h: 'CATEGORÍA', w: 26 }, ...g.people.map((p) => ({ h: p.name, k, w: 15, total: true })), { h: 'TOTAL CATEGORÍA', k, w: 16, rowSum: [1, n] }],
+          rows: g.rows.map((r) => [r.category, ...r.cells.map((x) => x[f]), 0]) });
+      });
+    });
+    const categorias = E.blocks('Por categoría', catBlocks, { title: 'VENTA LIQUIDADA POR CATEGORÍA', subtitle: 'Cada categoría se paga distinto: cajas y unidades por vendedor y por despachador (el total por categoría es una fórmula)' });
+    const gridBlock = (ttl, g, k) => ({ title: ttl, cols: [{ h: 'VENDEDOR ↓ · DESPACHADOR →', w: 28 }, ...g.disps.map((x) => ({ h: x.name, k, w: 16, total: true })), { h: 'TOTAL VENDEDOR', k, w: 16, rowSum: [1, g.disps.length] }], rows: g.rows.map((r) => [r.name, ...r.cells, 0]) });
+    const cuadre = E.blocks('Cuadre', [
+      { ...gridBlock('Venta liquidada $: qué despachador repartió lo de cada vendedor', crossGrid(d, 'monto'), 'money'),
+        note: d.cuadre.ok ? `✓ Cuadra: vendedores ${d.cuadre.sellerTotal} = despachadores ${d.cuadre.dispatcherTotal}` : `⚠ ${d.cuadre.diff ? 'No cuadra' : 'Falta asignar despachador'}: vendedores ${d.cuadre.sellerTotal} · despachadores ${d.cuadre.dispatcherTotal}` }, gridBlock('Vacíos despachados por vendedor y despachador', crossGrid(d, 'vacDesp'), 'int'),
+    ], { title: 'CUADRE VENDEDOR ↔ DESPACHADOR', subtitle: 'Lo que vendió cada vendedor es lo que repartió algún despachador: las filas y las columnas deben sumar lo mismo' });
+    const productos = E.table({ name: 'Productos', title: 'VENTAS POR PRODUCTO', subtitle: sub, cols: [{ h: 'CÓDIGO', w: 12 }, { h: 'PRODUCTO', w: 44 }, { h: 'CATEGORÍA', w: 18 }, { h: 'CAJAS', k: 'int', total: true }, { h: 'UNIDADES', k: 'int', total: true }, { h: 'MONTO $', k: 'money', total: true, w: 15 }],
+      rows: d.byProduct.map((p) => [p.code, `${p.name} ${p.presentation || ''}`.trim(), p.category, p.cajas, p.unidades, p.monto]) });
+    const camion = E.blocks('Camión', [
+      { title: 'Diferencias de camión', cols: [{ h: 'FECHA', k: 'date', w: 12 }, { h: 'HOJA', w: 12 }, { h: 'DESPACHADOR', w: 18 }, { h: 'CÓDIGO', w: 10 }, { h: 'PRODUCTO', w: 36 }, { h: 'UM', w: 6, align: 'center' }, { h: 'DEBE QUEDAR', k: 'int' }, { h: 'DEVOLUCIÓN', k: 'int' }, { h: 'DIFERENCIA', k: 'int', total: true }, { h: 'MOTIVO', w: 30 }],
+        rows: d.diferencias.map((x, i) => { const xr = 0; void xr; return [x.date, x.label || x.load, x.dispatcherName, x.code, x.name, x.um, x.debe, x.dev, x.dif, x.motivo]; }) },
+      { title: 'Pasó a la siguiente carga (mismo despachador)', cols: [{ h: 'FECHA', k: 'date', w: 12 }, { h: 'HOJA', w: 12 }, { h: 'DESPACHADOR', w: 18 }, { h: 'CÓDIGO', w: 10 }, { h: 'PRODUCTO', w: 36 }, { h: 'UM', w: 6, align: 'center' }, { h: 'CANTIDAD', k: 'int', total: true }],
+        rows: d.siguiente.map((x) => [x.date, x.label || x.load, x.dispatcherName, x.code, x.name, x.um, x.qty]) },
+    ], { title: 'DIFERENCIAS DE CAMIÓN', subtitle: sub });
+    const novedades = E.table({ name: 'Novedades', title: 'NOVEDADES DE LAS NOTAS', subtitle: sub, cols: [{ h: 'FECHA', k: 'date', w: 12 }, { h: 'CLIENTE', w: 36 }, { h: 'VENDEDOR', w: 18 }, { h: 'RESULTADO', w: 22 }, { h: 'NOTA', w: 10 }, { h: 'NOTA NUEVA', w: 12 }, { h: 'MOTIVO', w: 24 }, { h: 'PEDIDO $', k: 'money', total: true }, { h: 'ENTREGADO $', k: 'money', total: true }],
+      rows: d.novedades.map((x) => [x.date, x.clientName, x.sellerName, RES[x.result] || x.result, x.valeryNote, x.newValery, x.motivo, x.pedido, x.entregado]) });
+    const vc = [{ h: 'DESPACHADOS', k: 'int', total: true }, { h: 'RECIBIDOS', k: 'int', total: true }, { h: 'ASIGNADOS', k: 'int', total: true }, { h: 'QUEDAN DEBIENDO', k: 'int', total: true }];
+    const vacios = E.blocks('Vacíos', [
+      { title: 'Vacíos por código (devoluciones posteriores = del kardex)', cols: [{ h: 'CÓDIGO', w: 14 }, { h: 'TIPO', w: 10, align: 'center' }, ...vc], rows: d.vacios.byCode.map((v) => [v.code, v.type, v.despachados, v.recibidos, v.asignados, v.debe]) },
+      { title: 'Vacíos por despachador (los que trajo)', cols: [{ h: 'DESPACHADOR', w: 26 }, { h: 'TIPO', align: 'center' }, ...vc], rows: d.vacios.byDispatcher.map((v) => [v.name, v.type, v.despachados, v.recibidos, v.asignados, v.debe]) },
+      { title: 'Vacíos por vendedor del cliente', cols: [{ h: 'VENDEDOR', w: 26 }, { h: 'TIPO', align: 'center' }, ...vc], rows: d.vacios.bySeller.map((v) => [v.name, v.type, v.despachados, v.recibidos, v.asignados, v.debe]) },
+    ], { title: 'VACÍOS DE LO LIQUIDADO', subtitle: sub });
+    const detalle = E.table({ name: 'Detalle', title: 'DETALLE POR CLIENTE', subtitle: sub, cols: [{ h: 'FECHA', k: 'date', w: 12 }, { h: 'HOJA', w: 12 }, { h: 'CLIENTE', w: 38 }, { h: 'VENDEDOR', w: 18 }, { h: 'DESPACHADOR', w: 18 }, { h: 'NOTA', w: 10 }, { h: 'RESULTADO', w: 20 }, { h: 'CAJAS', k: 'int', total: true }, { h: 'UNIDADES', k: 'int', total: true }, { h: 'MONTO $', k: 'money', total: true }],
+      rows: d.detail.map((x) => [x.date, x.load, x.clientName, x.sellerName, x.dispatcherName, x.valeryNote, RES[x.result] || x.result, x.cajas, x.unidades, x.monto]) });
+    return [resumen, categorias, cuadre, productos, camion, novedades, vacios, detalle];
   }
 
   /** Pantalla del reporte. Usa PV (helpers de la app). */
@@ -254,7 +311,7 @@
           <div class="muted" style="margin-top:4px">${d.pendingLoads.map((l) => `${esc(fmtDate(l.date))} · ${esc(l.label || l.code)} · ${esc(l.dispatcherName || 'sin despachador')} · ${usd(l.monto)} (${esc(l.liq)})`).join('<br>')}</div></div>` : '<div class="hint">✓ Todas las hojas del período están liquidadas.</div>'}
         ${d.sinFoto ? `<div class="hint">${d.sinFoto} hoja(s) se liquidaron antes de esta versión: no tienen el detalle de diferencias del camión.</div>` : ''}
         <div class="card card-pad no-print" id="xcBox" style="margin-bottom:12px"></div>
-        <div class="toolbar no-print"><button class="btn" id="qzPrint">🖨 Imprimir reporte</button><button class="btn" id="qzCsv">⇩ Excel (CSV)</button></div>
+        <div class="toolbar no-print"><button class="btn" id="qzPrint">🖨 Imprimir reporte</button><button class="btn" id="qzCsv">⇩ Excel</button></div>
         <div class="kpi-row">
           <div class="kpi"><small>Venta liquidada</small><b>${usd(t.monto)}</b><small>${nf0.format(t.clients)} clientes · ${t.hojas} hojas · lo que paga el cliente</small></div>
           <div class="kpi"><small>Venta en proceso</small><b>${usd(d.enProceso.monto)}</b><small>${nf0.format(d.enProceso.clients)} pedidos · aún no cuenta</small></div>
@@ -283,45 +340,10 @@
           `<tr><td colspan="2">TOTAL GENERAL</td><td class="n">${vt.d}</td><td class="n">${vt.r}</td><td class="n">${vt.a}</td><td class="n">${vt.q}</td><td class="n">${Object.values(d.vacios.devoluciones || {}).reduce((a, x) => a + x, 0) || ''}</td></tr>`)}
         ${tbl('Vacíos por despachador (los que trajo)', [{ t: 'Despachador' }, { t: 'Tipo' }, N('Despachados'), N('Recibidos'), N('Asignados'), N('Quedan debiendo')], vacPeople(d.vacios.byDispatcher))}
         ${tbl('Vacíos por vendedor del cliente', [{ t: 'Vendedor' }, { t: 'Tipo' }, N('Despachados'), N('Recibidos'), N('Asignados'), N('Quedan debiendo')], vacPeople(d.vacios.bySeller))}
-        <p class="muted">${d.detail.length} clientes entregados en el período. El detalle completo va en el Excel (CSV).</p>`;
+        <p class="muted">${d.detail.length} clientes entregados en el período. El detalle completo va en el Excel.</p>`;
       renderCompare($('#xcBox'), d, st);
       $('#qzPrint').onclick = () => global.Print.printQuincena(d, { config: S.config, title: titleOf(f2), RES });
-      $('#qzCsv').onclick = () => {
-        const sep = (S.settings && S.settings.csvSep) || ';', dec = (S.settings && S.settings.csvDecimal) || ',';
-        const q = (v) => { let x = String(v == null ? '' : v); if (/^[=+\-@]/.test(x)) x = "'" + x; return x.includes(sep) || x.includes('"') ? '"' + x.replace(/"/g, '""') + '"' : x; };
-        const m = (n) => { const x = Number(n || 0).toFixed(2); return dec === ',' ? x.replace('.', ',') : x; };
-        const L = [];
-        const sec = (name, head, rows) => { L.push(q(name)); L.push(head.join(sep)); rows.forEach((r) => L.push(r.map(q).join(sep))); L.push(''); };
-        L.push(q(`REPORTE ${titleOf(f2).toUpperCase()} · ${d.from} a ${d.to} · venta liquidada`)); L.push('');
-        sec('VENTAS POR PRODUCTO', ['CODIGO', 'PRODUCTO', 'CATEGORIA', 'CAJAS', 'UNIDADES', 'MONTO_USD'], d.byProduct.map((p) => [p.code, `${p.name} ${p.presentation}`.trim(), p.category, p.cajas, p.unidades, m(p.monto)]));
-        sec('VENTAS POR CATEGORIA', ['CATEGORIA', 'CAJAS', 'UNIDADES', 'MONTO_USD'], d.byCategory.map((c) => [c.category, c.cajas, c.unidades, m(c.monto)]));
-        const sumHead = (who, disp) => [who, ...(disp ? ['HOJAS'] : []), 'CLIENTES', 'CAJAS', 'VENTA_LIQUIDADA_USD', 'VACIOS_DESPACHADOS', 'VACIOS_RECIBIDOS', 'VACIOS_ASIGNADOS', 'QUEDAN_DEBIENDO', disp ? 'DIFERENCIAS' : 'NOVEDADES', 'VENTA_EN_PROCESO_USD'];
-        const sumRow = (r, disp) => [r.name, ...(disp ? [r.hojas] : []), r.clients, r.cajas, m(r.monto), r.vacDesp, r.vacRecv, r.vacAsg, r.vacDebe, disp ? r.diferencias : r.novedades, m(r.procMonto)];
-        const sv = summaryRows(d, 'seller'), sd = summaryRows(d, 'dispatcher');
-        sec('RESUMEN POR VENDEDOR', sumHead('VENDEDOR', false), sv.rows.map((r) => sumRow(r, false)).concat([sumRow({ ...sv.tot, name: 'TOTAL' }, false)]));
-        sec('RESUMEN POR DESPACHADOR', sumHead('DESPACHADOR', true), sd.rows.map((r) => sumRow(r, true)).concat([sumRow({ ...sd.tot, name: 'TOTAL' }, true)]));
-        ['seller', 'dispatcher'].forEach((who) => {
-          const g = catGrid(d, who, S.config.rubros), nm = who === 'seller' ? 'VENDEDOR' : 'DESPACHADOR';
-          const rowsOf = (f) => g.rows.map((r) => [r.category, ...r.cells.map((x) => f(x)), f(r.total)]).concat([['TOTAL', ...g.cols.map((x) => f(x)), f(g.total)]]);
-          const head = ['CATEGORIA', ...g.people.map((p) => p.name), 'TOTAL_CATEGORIA'];
-          sec(`CAJAS POR CATEGORIA Y ${nm}`, head, rowsOf((x) => x.cajas));
-          sec(`UNIDADES SUELTAS POR CATEGORIA Y ${nm}`, head, rowsOf((x) => x.unidades));
-          sec(`MONTO USD POR CATEGORIA Y ${nm}`, head, rowsOf((x) => m(x.monto)));
-        });
-        [['CUADRE VENTA LIQUIDADA (vendedor x despachador)', 'monto', true], ['CUADRE VACIOS DESPACHADOS (vendedor x despachador)', 'vacDesp', false]].forEach(([title, fld, money]) => {
-          const g = crossGrid(d, fld), f2 = (v) => (money ? m(v) : v);
-          sec(title, ['VENDEDOR', ...g.disps.map((x) => x.name), 'TOTAL_VENDEDOR'], g.rows.map((r) => [r.name, ...r.cells.map(f2), f2(r.total)]).concat([['TOTAL_DESPACHADOR', ...g.cols.map(f2), f2(g.total)]]));
-        });
-        L.push(q(d.cuadre.ok ? 'CUADRA: vendedores = despachadores' : `NO CUADRA: vendedores ${m(d.cuadre.sellerTotal)} / despachadores ${m(d.cuadre.dispatcherTotal)}`)); L.push('');
-        sec('VENTA EN PROCESO', ['ETAPA', 'PEDIDOS', 'MONTO_USD'], d.enProceso.stages.map((x) => [x.label, x.clients, m(x.monto)]));
-        sec('DIFERENCIAS DE CAMION', ['FECHA', 'HOJA', 'DESPACHADOR', 'CODIGO', 'PRODUCTO', 'UM', 'DEBE_QUEDAR', 'DEVOLUCION', 'DIFERENCIA', 'MOTIVO'], d.diferencias.map((x) => [x.date, x.label || x.load, x.dispatcherName, x.code, x.name, x.um, x.debe, x.dev, x.dif, x.motivo]));
-        sec('NOVEDADES', ['FECHA', 'CLIENTE', 'VENDEDOR', 'RESULTADO', 'NOTA', 'NOTA_NUEVA', 'MOTIVO', 'PEDIDO_USD', 'ENTREGADO_USD'], d.novedades.map((x) => [x.date, x.clientName, x.sellerName, RES[x.result] || x.result, x.valeryNote, x.newValery, x.motivo, m(x.pedido), m(x.entregado)]));
-        sec('VACIOS POR CODIGO', ['CODIGO', 'TIPO', 'DESPACHADOS', 'RECIBIDOS', 'ASIGNADOS', 'QUEDAN_DEBIENDO'], d.vacios.byCode.map((v) => [v.code, v.type, v.despachados, v.recibidos, v.asignados, v.debe]));
-        sec('VACIOS POR DESPACHADOR', ['DESPACHADOR', 'TIPO', 'DESPACHADOS', 'RECIBIDOS', 'ASIGNADOS', 'QUEDAN_DEBIENDO'], d.vacios.byDispatcher.map((v) => [v.name, v.type, v.despachados, v.recibidos, v.asignados, v.debe]));
-        sec('VACIOS POR VENDEDOR', ['VENDEDOR', 'TIPO', 'DESPACHADOS', 'RECIBIDOS', 'ASIGNADOS', 'QUEDAN_DEBIENDO'], d.vacios.bySeller.map((v) => [v.name, v.type, v.despachados, v.recibidos, v.asignados, v.debe]));
-        sec('DETALLE POR CLIENTE', ['FECHA', 'HOJA', 'CLIENTE', 'VENDEDOR', 'DESPACHADOR', 'NOTA', 'RESULTADO', 'CAJAS', 'UNIDADES', 'MONTO_USD'], d.detail.map((x) => [x.date, x.load, x.clientName, x.sellerName, x.dispatcherName, x.valeryNote, RES[x.result] || x.result, x.cajas, x.unidades, m(x.monto)]));
-        global.PV.saveFile(`reporte_${d.from}_a_${d.to}.csv`, '﻿' + L.join('\r\n'), 'text/csv;charset=utf-8');
-      };
+      $('#qzCsv').onclick = () => global.Exporta.save(`reporte_${d.from}_a_${d.to}.xlsx`, reportSheets(d, titleOf(f2), S.config.rubros));
     }
   }
 

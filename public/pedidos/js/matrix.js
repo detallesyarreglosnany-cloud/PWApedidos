@@ -146,7 +146,7 @@
     out.push(['CODIGO', 'PRODUCTO', 'PRESENTACION', 'UM', ...m.cols.map((c) => safeText(c.client)), 'TOTAL']);
     m.rows.forEach((r) => {
       out.push([safeText(r.code), safeText(r.name), safeText(r.presentation), r.um,
-        ...r.cells.map((v) => num(v, dec, money)), num(r.total, dec, money)]);
+        ...r.cells.map((v) => (v ? num(v, dec, money) : '')), num(r.total, dec, money)]); // sin ceros: la celda sin cantidad queda vacía
     });
     m.footer.forEach((f) => {
       out.push([f.key, f.label, '', f.money ? 'USD' : '',

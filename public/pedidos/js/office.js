@@ -400,7 +400,14 @@
       load: cur(), productRank: productRank(), statusName: stName(cur()) });
     $('#dPrint').onclick = () => Print.printLoadSheet(cur(), Loads.loadOrders(cur(), byIdMap(S.orders)), ctx());
     const dl = $('#dLiq'); if (dl) dl.onclick = () => { U().liqId = load.id; renderLiquidation(root, cur()); };
-    $('#dCsv').onclick = () => saveFile(`hoja_${Loads.labelOf(cur())}_${cur().date || today()}.csv`, '\uFEFF' + Matrix.toDelimited(m, { sep: S.settings.csvSep, decimal: S.settings.csvDecimal }), 'text/csv;charset=utf-8');
+    $('#dCsv').onclick = async () => {
+      const L = cur(), os2 = Loads.loadOrders(L, byIdMap(S.orders)), pById = byIdMap(S.products);
+      const vacRows = Envases.sheetRows(m.cols.map((c) => c.order), pById);
+      const extra = vacRows.some((v) => v.total) ? vacRows.map((v) => ({ label: v.label, cells: v.cells, total: v.total })) : [];
+      const sheet = Exporta.matrix(m, { sheet: 'Hoja de carga', title: `HOJA DE CARGA · ${Loads.labelOf(L)}${L.number ? ' · ' + Loads.loadCode(L) : ''}`,
+        info: [`Fecha de la carga: ${L.date || today()}`, `Pedidos del: ${Loads.orderDateRange(os2) || '—'}`, `Ruta: ${L.route || '—'}`, `Despachador: ${L.dispatcherName || '—'}`, `Vendedor(es): ${L.sellerName || '—'}`], extra });
+      await Exporta.save(`hoja_${Loads.labelOf(L)}_${L.date || today()}.xlsx`, [sheet]);
+    };
     $('#dCopy').onclick = async () => {
       const ok = await copyText(Matrix.toDelimited(m, { sep: '\t', decimal: S.settings.csvDecimal }));
       toast(ok ? 'Hoja copiada: pégala en Excel' : 'No se pudo copiar', ok ? 'ok' : 'err');
@@ -642,8 +649,8 @@
           ${[['bultos', 'Cajas / Unid.'], ['unidades', 'Unid. totales'], ['monto', 'Monto $']].map(([k, l]) => `<button data-m="${k}" class="${mode === k ? 'active' : ''}">${l}</button>`).join('')}</div></div>
         <div class="grow"></div>
         <button class="btn" id="oCopy" ${m.cols.length ? '' : 'disabled'}>📋 Copiar para Excel</button>
-        <button class="btn" id="oCsv" ${m.cols.length ? '' : 'disabled'}>⇩ CSV</button>
-        <button class="btn" id="oFlat" ${m.cols.length ? '' : 'disabled'}>⇩ CSV plano</button>
+        <button class="btn" id="oCsv" ${m.cols.length ? '' : 'disabled'}>⇩ Excel</button>
+        <button class="btn" id="oFlat" ${m.cols.length ? '' : 'disabled'}>⇩ Excel plano</button>
       </div>
       <div class="seller-cards" id="oSellers">${card('', 'Todos')}${S.sellers.map((s) => card(s.id, s.name)).join('')}</div>
       ${m.cols.length ? `<div class="table-wrap"><table class="grid"><thead><tr><th class="sticky-col">Producto</th><th>UM</th>
@@ -664,8 +671,8 @@
     const who = sid ? slug(sellerById(sid).name) : 'todos';
     const opts = { sep: S.settings.csvSep, decimal: S.settings.csvDecimal };
     $('#oCopy').onclick = async () => { const ok = await copyText(Matrix.toDelimited(m, { sep: '\t', decimal: opts.decimal })); toast(ok ? 'Copiado: pégalo en Excel' : 'No se pudo copiar', ok ? 'ok' : 'err'); };
-    $('#oCsv').onclick = () => saveFile(`pedidos_${who}_${date}_${mode}.csv`, '\uFEFF' + Matrix.toDelimited(m, opts), 'text/csv;charset=utf-8');
-    $('#oFlat').onclick = () => saveFile(`pedidos_${who}_${date}_plano.csv`, '\uFEFF' + Matrix.toFlat(source, null, opts), 'text/csv;charset=utf-8');
+    $('#oCsv').onclick = () => Exporta.save(`pedidos_${who}_${date}_${mode}.xlsx`, [Exporta.matrix(m, { sheet: 'Pedidos', title: `PEDIDOS · ${sid ? sellerById(sid).name : 'Todos los vendedores'} · ${fmtDate(date)}`, info: [`Vista: ${mode === 'monto' ? 'Monto $' : mode === 'unidades' ? 'Unidades totales' : 'Cajas / Unidades'}`] })]);
+    $('#oFlat').onclick = () => Exporta.save(`pedidos_${who}_${date}_plano.xlsx`, [Exporta.flat(source, { title: `PEDIDOS · ${sid ? sellerById(sid).name : 'Todos'} · ${fmtDate(date)} (una fila por línea)` })]);
   }
 
   /* ============================== ARCHIVO ============================== */
@@ -696,7 +703,7 @@
         <label class="field"><span>Ruta</span><select class="select" data-f="route"><option value="">Todas</option>${opt((S.config.routes || []).map((r) => [r, r]), f.route)}</select></label>
         <label class="field"><span>Despachador</span><select class="select" data-f="disp"><option value="">Todos</option>${opt((S.config.dispatchers || []).map((d) => [d.id, d.name]), f.disp)}</select></label>
         <label class="field"><span>Estado</span><select class="select" data-f="status"><option value="">Todos</option>${opt(Loads.statuses(S.config).filter((x) => x.closing).map((x) => [x.id, x.name]), f.status)}</select></label>
-        <button class="btn" id="aCsv" ${list.length ? '' : 'disabled'}>⇩ Exportar CSV</button>
+        <button class="btn" id="aCsv" ${list.length ? '' : 'disabled'}>⇩ Exportar a Excel</button>
       </div>
       <div class="kpi-row">
         <div class="kpi"><small>Cargas</small><b>${list.length}</b><small>${sum.n} liquidadas</small></div>
@@ -721,14 +728,11 @@
       const q = e.target.closest('[data-liq]'); if (q) { U().liqId = q.dataset.liq; renderArchive(root); return; }
       const v = e.target.closest('[data-view]'); if (v) { U().archiveId = v.dataset.view; renderArchive(root); }
     };
-    $('#aCsv').onclick = () => {
-      const sep = S.settings.csvSep, d = S.settings.csvDecimal;
-      const n = (v) => { const s = Number(v || 0).toFixed(2); return d === ',' ? s.replace('.', ',') : s; };
-      const q = (v) => { let s = String(v == null ? '' : v); if (/^[=+\-@]/.test(s)) s = "'" + s; return s.includes(sep) || s.includes('"') ? '"' + s.replace(/"/g, '""') + '"' : s; };
-      const rows = [['CODIGO', 'CARGA', 'FECHA', 'ESTADO', 'VENDEDORES', 'RUTA', 'DESPACHADOR', 'CLIENTES', 'CAJAS', 'UNID_SUELTAS', 'BULTOS', 'TOTAL_UNIDADES', 'VENTA_EN_PROCESO_USD', 'LIQUIDADA', 'VENTA_LIQUIDADA_USD'].join(sep)];
-      list.forEach((l) => { const t = l.totals || {}; rows.push([q(Loads.labelOf(l)), Loads.loadCode(l), dateOf(l), q(stName(l)), q(l.sellerName), q(l.route), q(l.dispatcherName), t.clients || 0, t.cajas || 0, t.unidades || 0, t.bultos || 0, t.totalUnidades || 0, n(t.monto), Liq.isDone(l) ? 'SI' : 'NO', Liq.isDone(l) ? n(ent(l).monto) : ''].join(sep)); });
-      saveFile('archivo_cargas_' + today() + '.csv', '\uFEFF' + rows.join('\r\n'), 'text/csv;charset=utf-8');
-    };
+    $('#aCsv').onclick = () => Exporta.save('archivo_cargas_' + today() + '.xlsx', [Exporta.table({ name: 'Archivo', title: 'ARCHIVO DE CARGAS', subtitle: `Exportado el ${fmtDate(today())} · «Venta liquidada» = lo entregado de verdad (hojas liquidadas); «Venta en proceso» = hojas despachadas sin liquidar`,
+      cols: [{ h: 'CÓDIGO', w: 14 }, { h: 'CARGA', w: 12 }, { h: 'FECHA', w: 12, k: 'date' }, { h: 'ESTADO', w: 22 }, { h: 'VENDEDORES', w: 26 }, { h: 'RUTA', w: 14 }, { h: 'DESPACHADOR', w: 18 },
+        { h: 'CLIENTES', k: 'int', total: true }, { h: 'CAJAS', k: 'int', total: true }, { h: 'UNID. SUELTAS', k: 'int', total: true }, { h: 'BULTOS', k: 'int', total: true }, { h: 'TOTAL UNIDADES', k: 'int', total: true },
+        { h: 'VENTA EN PROCESO $', k: 'money', w: 16, total: true }, { h: 'LIQUIDADA', w: 11, align: 'center' }, { h: 'VENTA LIQUIDADA $', k: 'money', w: 16, total: true }],
+      rows: list.map((l) => { const t = l.totals || {}; return [Loads.labelOf(l), Loads.loadCode(l), dateOf(l), stName(l), l.sellerName, l.route || '', l.dispatcherName || '', t.clients || 0, t.cajas || 0, t.unidades || 0, t.bultos || 0, t.totalUnidades || 0, t.monto || 0, Liq.isDone(l) ? 'SÍ' : 'NO', Liq.isDone(l) ? ent(l).monto : null]; }) })]);
   }
 
   /**
@@ -1074,7 +1078,7 @@
         <button class="btn" id="kxRef">⟳ Actualizar</button>
         ${k.canWrite ? '<button class="btn" id="kxOpen">+ Saldo de apertura</button>' : ''}
         <button class="btn" id="kxPrint">🖨 Imprimir saldos</button>
-        <button class="btn" id="kxCsv">⇩ Excel (CSV)</button>
+        <button class="btn" id="kxCsv">⇩ Excel</button>
       </div>
       <div class="kpi-row">${tot.length ? tot.map((t) => `<div class="kpi"><small>Vacíos ${esc(t.type)} · deben</small><b>${nf0.format(t.debe)}</b><small>${t.clientes} clientes · ${nf0.format(t.asignados)} asignados · despachados ${nf0.format(t.despacho)}</small></div>`).join('')
         : '<div class="kpi"><small>Vacíos</small><b>0</b><small>Aún no hay liquidaciones cerradas con retornables</small></div>'}</div>
@@ -1094,11 +1098,16 @@
     $('#kxOnly').onchange = (e) => { U().kxOnly = e.target.checked ? '1' : '0'; renderEnvases(root); };
     $('#kxPrint').onclick = () => Print.printKardex(list, types, { config: S.config });
     $('#kxCsv').onclick = () => {
-      const sep = S.settings.csvSep;
-      const qv = (v) => { let s = String(v == null ? '' : v); if (/^[=+\-@]/.test(s)) s = "'" + s; return s.includes(sep) || s.includes('"') ? '"' + s.replace(/"/g, '""') + '"' : s; };
-      const rows = [['CLIENTE', 'VENDEDOR', 'TIPO', 'DESPACHADOS', 'RECIBIDOS', 'ASIGNADOS_EN_LIQ', 'DEVOLUCIONES', 'APERTURA', 'DEBE', 'ASIGNADOS', 'ULTIMO_MOV'].join(sep)];
-      Kardex.balances(k.movs).forEach((b) => rows.push([qv(b.clientName), qv(b.sellerName), qv(b.type), b.despacho, b.recibido, b.asignado, b.devolucion, b.apertura, b.debe, b.asignados, b.last].join(sep)));
-      saveFile('kardex_vacios_' + today() + '.csv', '﻿' + rows.join('\r\n'), 'text/csv;charset=utf-8');
+      const bal = Kardex.balances(k.movs).sort((a, b) => a.clientName.localeCompare(b.clientName, 'es') || String(a.type).localeCompare(String(b.type)));
+      // DEBE = apertura + despachados − recibidos − asignados − devoluciones (fórmula: al editar una cifra se recalcula)
+      const saldos = Exporta.table({ name: 'Saldos', title: 'KARDEX DE VACÍOS · SALDOS', subtitle: `Al ${fmtDate(today())} · DEBE = apertura + despachados − recibidos − asignados − devoluciones`,
+        cols: [{ h: 'CLIENTE', w: 36 }, { h: 'VENDEDOR', w: 18 }, { h: 'TIPO', w: 8, align: 'center' }, { h: 'APERTURA', k: 'int', total: true, blank0: true }, { h: 'DESPACHADOS', k: 'int', total: true, blank0: true }, { h: 'RECIBIDOS', k: 'int', total: true, blank0: true },
+          { h: 'ASIGNADOS', k: 'int', total: true, blank0: true }, { h: 'DEVOLUCIONES', k: 'int', total: true, blank0: true }, { h: 'DEBE', k: 'int', total: true }, { h: 'ASIGNADOS (EN SU PODER)', k: 'int', total: true, w: 16 }, { h: 'ÚLTIMO MOV.', k: 'date', w: 12 }],
+        rows: bal.map((b, i) => { const xr = 5 + i; return [b.clientName, b.sellerName, b.type, b.apertura, b.despacho, b.recibido, b.asignado, b.devolucion, { v: b.debe, f: `D${xr}+E${xr}-F${xr}-G${xr}-H${xr}` }, b.asignados, b.last]; }) });
+      const movs = Exporta.table({ name: 'Movimientos', title: 'KARDEX DE VACÍOS · MOVIMIENTOS', subtitle: 'Cada renglón del kardex (los anulados y revertidos aparecen marcados)',
+        cols: [{ h: 'FECHA', k: 'date', w: 12 }, { h: 'CLIENTE', w: 36 }, { h: 'VENDEDOR', w: 18 }, { h: 'MOVIMIENTO', w: 28 }, { h: 'TIPO', w: 8, align: 'center' }, { h: 'CÓDIGO', w: 10 }, { h: 'CANTIDAD', k: 'int' }, { h: 'ESTADO', w: 12 }, { h: 'MOTIVO', w: 30 }, { h: 'POR', w: 14 }],
+        rows: (() => { const { cancelledBy } = Kardex.effective(k.movs); return k.movs.slice().sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.at || '').localeCompare(String(b.at || ''))).map((m) => [m.date, m.clientName, m.sellerName, Kardex.KIND_LABEL[m.kind] || m.kind, m.type, m.code, m.qty, cancelledBy.has(m.id) ? (cancelledBy.get(m.id).kind === 'reverso' ? 'revertido' : 'anulado') : '', m.motivo || '', m.by || '']); })() });
+      Exporta.save('kardex_vacios_' + today() + '.xlsx', [saldos, movs]);
     };
     root.onclick = (e) => { const b = e.target.closest('[data-kc]'); if (b) { U().kxClient = b.dataset.kc; renderEnvases(root); } };
   }
@@ -1691,7 +1700,7 @@
         <label class="field"><span>Día</span><input type="date" class="input" data-h="day" value="${esc(f.day)}"></label>
         <label class="field"><span>Quién</span><select class="select" data-h="who">${opt(whoOpts, f.who)}</select></label>
         <label class="field"><span>Acción</span><select class="select" data-h="type"><option value="">Todas</option>${opt(Object.entries(EVENT_LABEL), f.type)}</select></label>
-        <button class="btn" id="hCsv" ${list.length ? '' : 'disabled'}>⇩ Exportar CSV</button>
+        <button class="btn" id="hCsv" ${list.length ? '' : 'disabled'}>⇩ Exportar a Excel</button>
       </div>
       <p class="muted">Lo registra cada teléfono y PC con su hora; llega al sincronizar (si un vendedor estuvo sin señal, aparece cuando la recupere). Nadie puede editarlo ni borrarlo.</p>
       ${people.size ? `<div class="card" style="overflow:auto"><table class="inv"><thead><tr><th>Quién</th><th>Primera actividad</th><th>Última</th><th>Pedidos enviados</th><th>Eliminados</th><th>Monto enviado</th></tr></thead><tbody>
@@ -1701,13 +1710,9 @@
         ${list.map((e) => `<tr><td class="mono"><b>${hhmm(e.at)}</b> · ${esc(e.sellerName)}</td><td data-l="Acción">${esc(EVENT_LABEL[e.type] || e.type)}</td><td>${esc(e.text)}</td></tr>`).join('')}
         </tbody></table></div>` : '<div class="empty card"><strong>Sin actividad</strong>ese día con esos filtros.</div>'}`;
     $('#hFilters').onchange = (e) => { const k = e.target.dataset.h; if (k) { f[k] = e.target.value; renderHistory(root); } };
-    $('#hCsv').onclick = () => {
-      const sep = S.settings.csvSep;
-      const q = (v) => { let x = String(v == null ? '' : v); if (/^[=+\-@]/.test(x)) x = "'" + x; return x.includes(sep) || x.includes('"') ? '"' + x.replace(/"/g, '""') + '"' : x; };
-      const rows = [['FECHA', 'HORA', 'QUIEN', 'ACCION', 'DETALLE', 'EQUIPO'].join(sep)]
-        .concat(list.map((e) => [e.day, hhmm(e.at), q(e.sellerName), q(EVENT_LABEL[e.type] || e.type), q(e.text), q(e.deviceId)].join(sep)));
-      saveFile('historial_' + f.day + '.csv', '\ufeff' + rows.join('\r\n'), 'text/csv;charset=utf-8');
-    };
+    $('#hCsv').onclick = () => Exporta.save('historial_' + f.day + '.xlsx', [Exporta.table({ name: 'Historial', title: 'HISTORIAL DE ACTIVIDAD', subtitle: fmtDate(f.day),
+      cols: [{ h: 'FECHA', k: 'date', w: 12 }, { h: 'HORA', w: 8, align: 'center' }, { h: 'QUIÉN', w: 20 }, { h: 'ACCIÓN', w: 26 }, { h: 'DETALLE', w: 80 }, { h: 'EQUIPO', w: 22 }],
+      rows: list.map((e) => [e.day, hhmm(e.at), e.sellerName, EVENT_LABEL[e.type] || e.type, e.text, e.deviceId || '']) })]);
   }
 
   function clientForm(c, root) {
