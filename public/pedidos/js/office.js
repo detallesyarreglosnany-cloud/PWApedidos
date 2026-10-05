@@ -769,7 +769,10 @@
     const carry = Liq.carryFor(load, S.loads);
     const rows = Liq.truckRows(os, liq, carry, liqOpts());
     const vac = Liq.vacRows(os, liq, byIdMap(S.products));
-    return { os, liq, carry, rows, vac, probs: Liq.problems(os, liq, rows, vac) };
+    const probs = Liq.problems(os, liq, rows, vac);
+    // Todo lo que se vende lo reparte un despachador: sin él no cuadra vendedor ↔ despachador
+    if (!load.dispatcherId) probs.unshift('La hoja no tiene despachador: asígnalo en la hoja de carga (todo lo vendido lo reparte un despachador)');
+    return { os, liq, carry, rows, vac, probs };
   }
 
   function renderLiquidation(root, load) {

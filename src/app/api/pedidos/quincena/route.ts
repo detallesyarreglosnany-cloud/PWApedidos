@@ -76,6 +76,13 @@ export async function POST(req: NextRequest) {
     const byCategory = new Map<string, { category: string; cajas: number; unidades: number; monto: number }>();
     const bySeller = new Map<string, { sellerId: string; sellerName: string; clients: number; cajas: number; unidades: number; monto: number; novedades: number; vacDesp: number; vacRecv: number; vacAsg: number; vacDebe: number }>();
     const byDispatcher = new Map<string, { dispatcherId: string; dispatcherName: string; hojas: number; clients: number; cajas: number; unidades: number; monto: number; diferencias: number; vacDesp: number; vacRecv: number; vacAsg: number; vacDebe: number }>();
+    // Cuadre vendedor ↔ despachador: quién repartió lo que vendió cada vendedor
+    type Cross = { sellerId: string; sellerName: string; dispatcherId: string; dispatcherName: string; clients: number; cajas: number; monto: number; vacDesp: number; vacRecv: number; vacAsg: number; vacDebe: number };
+    const cross = new Map<string, Cross>();
+    const crossOf = (o: OrderDoc, load: LoadDoc) => {
+      const sid = o.sellerId || '—', did = load.dispatcherId || '—';
+      return bump(cross, sid + '\u0001' + did, () => ({ sellerId: sid, sellerName: o.sellerName || sid, dispatcherId: did, dispatcherName: load.dispatcherName || 'SIN DESPACHADOR', clients: 0, cajas: 0, monto: 0, vacDesp: 0, vacRecv: 0, vacAsg: 0, vacDebe: 0 }));
+    };
     const novedades: unknown[] = [];
     const detail: unknown[] = [];
 
@@ -111,6 +118,7 @@ export async function POST(req: NextRequest) {
       if (!cajas && !unidades) continue;
       totals.clients++; totals.cajas += cajas; totals.unidades += unidades; totals.monto += monto;
       s.clients++; s.cajas += cajas; s.unidades += unidades; s.monto += monto;
+      const cx = crossOf(o, load); cx.clients++; cx.cajas += cajas; cx.monto += monto;
       const dd = byDispatcher.get(load.dispatcherId || '—')!;
       dd.clients++; dd.cajas += cajas; dd.unidades += unidades; dd.monto += monto;
       detail.push({ date: loadDay(load), load: loadCode(load), clientName: o.clientName, sellerName: o.sellerName, dispatcherName: load.dispatcherName || '',
@@ -145,6 +153,7 @@ export async function POST(req: NextRequest) {
       const dEnt = byDispatcher.get(load.dispatcherId || '—')!;
       for (const [pid, v] of Object.entries(d.vac || {})) {
         const debe = Math.max(0, num(v.boxes) - num(v.recv) - num(v.asg));
+        const cxv = crossOf(o, load); cxv.vacDesp += num(v.boxes); cxv.vacRecv += num(v.recv); cxv.vacAsg += num(v.asg); cxv.vacDebe += debe;
         for (const e of [sEnt, dEnt]) { e.vacDesp += num(v.boxes); e.vacRecv += num(v.recv); e.vacAsg += num(v.asg); e.vacDebe += debe; }
         const type = String(v.type || v.code || pid);
         add(bump(vacByCode, pid, () => ({ pid, code: String(v.code || pid), type, despachados: 0, recibidos: 0, asignados: 0, debe: 0 })), v);
@@ -195,6 +204,15 @@ export async function POST(req: NextRequest) {
       const pd = bump(procDisp, did, () => ({ dispatcherId: did, dispatcherName: (ld && ld.dispatcherName) || 'Sin despachador aún', clients: 0, monto: 0 }));
       pd.clients++; pd.monto += m;
     }
+    const sellerSum = r2([...bySeller.values()].reduce((a, x) => a + x.monto, 0)), dispSum = r2([...byDispatcher.values()].reduce((a, x) => a + x.monto, 0));
+    const noDisp = [...cross.values()].filter((x) => x.dispatcherId === '—');
+    const sinDespLoads = [...liquidated.values()].filter((l) => !l.dispatcherId).map((l) => ({ id: l.id, code: loadCode(l), label: l.label || '', date: loadDay(l), sellerName: l.sellerName || '' }));
+    const cuadre = {
+      sellerTotal: sellerSum, dispatcherTotal: dispSum, diff: r2(sellerSum - dispSum),
+      sinDespachador: { clients: noDisp.reduce((a, x) => a + x.clients, 0), monto: r2(noDisp.reduce((a, x) => a + x.monto, 0)), loads: sinDespLoads },
+      ok: Math.abs(sellerSum - dispSum) < 0.005 && !noDisp.length && !sinDespLoads.length,
+      matrix: money([...cross.values()]).sort((a, b) => a.sellerName.localeCompare(b.sellerName, 'es') || a.dispatcherName.localeCompare(b.dispatcherName, 'es')),
+    };
     const enProceso = {
       stages: [...stage.values()].map((x) => ({ ...x, monto: r2(x.monto) })),
       clients: [...stage.values()].reduce((a, x) => a + x.clients, 0),
@@ -212,7 +230,7 @@ export async function POST(req: NextRequest) {
       byCategory: money([...byCategory.values()]).sort((a, b) => b.monto - a.monto),
       bySeller: money([...bySeller.values()]).sort((a, b) => b.monto - a.monto),
       byDispatcher: money([...byDispatcher.values()]).sort((a, b) => b.monto - a.monto),
-      enProceso, novedades, diferencias, siguiente, sinFoto,
+      cuadre, enProceso, novedades, diferencias, siguiente, sinFoto,
       vacios: { byCode: byType([...vacByCode.values()]), byDispatcher: byType([...vacByDispatcher.values()]), bySeller: byType([...vacBySeller.values()]), devoluciones },
       detail: detail.sort((a, b) => String((a as { date: string }).date).localeCompare(String((b as { date: string }).date))),
     });

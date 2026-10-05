@@ -251,6 +251,10 @@
     const sumT = (title, who, sm, disp) => tbl(title, [who, ...(disp ? ['Hojas'] : []), 'Clientes', 'Cajas', 'Venta liquidada $', 'Vacíos despachados', 'Vacíos recibidos', 'Vacíos asignados', 'Quedan debiendo', disp ? 'Diferencias' : 'Novedades', 'Venta en proceso $'],
       sm.rows.map((r) => `<tr><td>${esc(r.name)}</td>${disp ? n(r.hojas) : ''}${n(r.clients)}${n(r.cajas)}${m(r.monto)}${n(r.vacDesp)}${n(r.vacRecv)}${n(r.vacAsg)}${n(r.vacDebe)}${n(disp ? r.diferencias : r.novedades)}${m(r.procMonto)}</tr>`).join(''),
       `<tr class="tot"><td>TOTAL</td>${disp ? n(sm.tot.hojas) : ''}${n(sm.tot.clients)}${n(sm.tot.cajas)}${m(sm.tot.monto)}${n(sm.tot.vacDesp)}${n(sm.tot.vacRecv)}${n(sm.tot.vacAsg)}${n(sm.tot.vacDebe)}${n(disp ? sm.tot.diferencias : sm.tot.novedades)}${m(sm.tot.procMonto)}</tr>`);
+    const cu = d.cuadre;
+    const gridT = (title, g, money) => { const f = (v) => (v ? (money ? nf2.format(v) : nf0.format(v)) : ''); return tbl(title, ['Vendedor \\ Despachador', ...g.disps.map((x) => x.name), 'Total vendedor'],
+      g.rows.map((r) => `<tr><td>${esc(r.name)}</td>${r.cells.map((v) => `<td class="num">${f(v)}</td>`).join('')}<td class="num"><b>${f(r.total)}</b></td></tr>`).join(''),
+      `<tr class="tot"><td>TOTAL DESPACHADOR</td>${g.cols.map((v) => `<td class="num">${f(v)}</td>`).join('')}<td class="num">${f(g.total)}</td></tr>`); };
     const body = `<section>
       ${header(ctx.config, 'REPORTE · ' + (ctx.title || ''), fdate(d.from + 'T12:00:00') + ' al ' + fdate(d.to + 'T12:00:00'))}
       <p class="muted">Venta liquidada = lo que realmente se vendió (hojas con la liquidación cerrada, sin devoluciones ni notas anuladas), por fecha de entrega. ${d.pendingLoads.length ? `<b>${d.pendingLoads.length} hoja(s) del período sin liquidar (${nf2.format(d.pendingMonto)} $ en proceso) no se suman a la venta liquidada.</b>` : 'Todas las hojas del período están liquidadas.'}</p>
@@ -262,6 +266,9 @@
       </div>
       ${sumT('Resumen de la quincena por vendedor', 'Vendedor', R.summaryRows(d, 'seller'), false)}
       ${sumT('Resumen de la quincena por despachador', 'Despachador', R.summaryRows(d, 'dispatcher'), true)}
+      ${cu.ok ? `<p class="muted"><b>✓ Cuadra:</b> vendedores ${nf2.format(cu.sellerTotal)} $ = despachadores ${nf2.format(cu.dispatcherTotal)} $.</p>` : `<p><b>⚠ ${cu.diff ? 'NO CUADRA' : 'FALTA ASIGNAR DESPACHADOR'}:</b> vendedores ${nf2.format(cu.sellerTotal)} $ · despachadores ${nf2.format(cu.dispatcherTotal)} $${cu.sinDespachador.clients ? ` · ${cu.sinDespachador.clients} cliente(s) (${nf2.format(cu.sinDespachador.monto)} $) en hojas sin despachador` : ''}.</p>`}
+      ${gridT('Cuadre · venta liquidada: qué despachador repartió lo de cada vendedor ($)', R.crossGrid(d, 'monto'), true)}
+      ${gridT('Cuadre · vacíos despachados por vendedor y despachador', R.crossGrid(d, 'vacDesp'), false)}
       ${tbl('Venta en proceso (todavía puede cambiar, no suma a la venta liquidada)', ['Etapa', 'Pedidos', 'Monto $'], d.enProceso.stages.map((x) => `<tr><td>${esc(x.label)}</td>${n(x.clients)}${m(x.monto)}</tr>`).join(''), `<tr class="tot"><td>TOTAL EN PROCESO</td>${n(d.enProceso.clients)}${m(d.enProceso.monto)}</tr>`)}
       ${tbl('Ventas por categoría', ['Categoría', 'Cajas', 'Unidades', 'Monto $'], d.byCategory.map((c) => `<tr><td>${esc(c.category)}</td>${n(c.cajas)}${n(c.unidades)}${m(c.monto)}</tr>`).join(''), `<tr class="tot"><td>TOTAL</td>${n(t.cajas)}${n(t.unidades)}${m(t.monto)}</tr>`)}
       ${tbl('Ventas por producto', ['Código', 'Producto', 'Cajas', 'Unidades', 'Monto $'], prod, `<tr class="tot"><td colspan="2">TOTAL</td>${n(t.cajas)}${n(t.unidades)}${m(t.monto)}</tr>`)}

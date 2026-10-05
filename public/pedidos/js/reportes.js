@@ -46,6 +46,25 @@
     return { rows, tot };
   }
 
+  /**
+   * Cuadre vendedor ↔ despachador: filas = vendedores, columnas = despachadores, celda = lo que
+   * ese despachador repartió de lo que vendió ese vendedor. field: 'monto' | 'vacDesp'.
+   * Las sumas por fila y por columna tienen que dar el mismo total.
+   */
+  function crossGrid(d, field) {
+    const m = d.cuadre.matrix, sellers = [], disps = [], val = new Map();
+    m.forEach((x) => {
+      if (!sellers.some((y) => y.id === x.sellerId)) sellers.push({ id: x.sellerId, name: x.sellerName });
+      if (!disps.some((y) => y.id === x.dispatcherId)) disps.push({ id: x.dispatcherId, name: x.dispatcherName });
+      val.set(x.sellerId + '|' + x.dispatcherId, (val.get(x.sellerId + '|' + x.dispatcherId) || 0) + (+x[field] || 0));
+    });
+    sellers.sort((a, b) => a.name.localeCompare(b.name, 'es')); disps.sort((a, b) => a.name.localeCompare(b.name, 'es'));
+    const cell = (s2, d2) => val.get(s2.id + '|' + d2.id) || 0;
+    const rows = sellers.map((s2) => ({ name: s2.name, cells: disps.map((d2) => cell(s2, d2)), total: disps.reduce((a, d2) => a + cell(s2, d2), 0) }));
+    const cols = disps.map((d2) => sellers.reduce((a, s2) => a + cell(s2, d2), 0));
+    return { disps, rows, cols, total: rows.reduce((a, r) => a + r.total, 0) };
+  }
+
   /** Pantalla del reporte. Usa PV (helpers de la app). */
   function render(root, st) {
     const { S, $, esc, nf0, usd, toast, today, fmtDate } = global.PV;
@@ -114,6 +133,19 @@
       vflush();
       const vt = d.vacios.byCode.reduce((a, v) => ({ d: a.d + v.despachados, r: a.r + v.recibidos, a: a.a + v.asignados, q: a.q + v.debe }), { d: 0, r: 0, a: 0, q: 0 });
       const vacPeople = (arr, who) => arr.map((v) => `<tr><td>${esc(v.name)}</td><td>${esc(v.type)}</td><td class="n">${v.despachados}</td><td class="n">${v.recibidos}</td><td class="n">${v.asignados}</td><td class="n">${v.debe}</td></tr>`).join('');
+      const gridTbl = (title, g, money) => {
+        const f = (v) => (v ? (money ? usd(v) : nf0.format(v)) : '<span class="muted">·</span>');
+        return tbl(title, [{ t: 'Vendedor ↓ · Despachador →' }, ...g.disps.map((x) => N(x.name)), N('Total vendedor')],
+          g.rows.map((r) => `<tr><td><b>${esc(r.name)}</b></td>${r.cells.map((v) => `<td class="n">${f(v)}</td>`).join('')}<td class="n"><b>${f(r.total)}</b></td></tr>`).join(''),
+          `<tr><td>TOTAL DESPACHADOR</td>${g.cols.map((v) => `<td class="n">${f(v)}</td>`).join('')}<td class="n">${f(g.total)}</td></tr>`);
+      };
+      const cuadreHTML = (dd) => {
+        const c = dd.cuadre;
+        const banner = c.ok ? `<div class="hint">✓ <b>Cuadra:</b> lo que vendieron los vendedores (${usd(c.sellerTotal)}) es igual a lo que repartieron los despachadores (${usd(c.dispatcherTotal)}).</div>`
+          : `<div class="hint warn">⚠ <b>${c.diff ? 'No cuadra' : 'Falta asignar despachador'}:</b> vendedores ${usd(c.sellerTotal)} · despachadores ${usd(c.dispatcherTotal)}${c.diff ? ` (diferencia ${usd(c.diff)})` : ' (los montos son iguales, pero una parte aparece como «Sin despachador»)'}.
+            ${c.sinDespachador.clients ? `<br><b>${c.sinDespachador.clients} cliente(s) · ${usd(c.sinDespachador.monto)} liquidados en hojas SIN despachador</b>: ${c.sinDespachador.loads.map((l) => esc((l.label || l.code) + ' (' + fmtDate(l.date) + ')')).join(', ')}. Asígnalo en la hoja de carga.` : ''}</div>`;
+        return banner + gridTbl('Cuadre · venta liquidada: qué despachador repartió lo de cada vendedor', crossGrid(dd, 'monto'), true) + gridTbl('Cuadre · vacíos despachados por vendedor y despachador', crossGrid(dd, 'vacDesp'), false);
+      };
       const sumTable = (title, who, sm, disp) => tbl(title, [{ t: who }, ...(disp ? [N('Hojas')] : []), N('Clientes'), N('Cajas'), N('Venta liquidada'), N('Vacíos despachados'), N('Vacíos recibidos'), N('Vacíos asignados'), N('Quedan debiendo'), N(disp ? 'Diferencias' : 'Novedades'), N('Venta en proceso')],
         sm.rows.map((r) => `<tr><td><b>${esc(r.name)}</b></td>${disp ? `<td class="n">${r.hojas}</td>` : ''}<td class="n">${r.clients}</td><td class="n">${nf0.format(r.cajas)}</td><td class="n"><b>${usd(r.monto)}</b></td><td class="n">${r.vacDesp}</td><td class="n">${r.vacRecv}</td><td class="n">${r.vacAsg}</td><td class="n ${r.vacDebe ? 'warn-txt' : ''}">${r.vacDebe}</td><td class="n">${(disp ? r.diferencias : r.novedades) || ''}</td><td class="n muted">${r.procMonto ? usd(r.procMonto) : ''}</td></tr>`).join(''),
         `<tr><td>TOTAL</td>${disp ? `<td class="n">${sm.tot.hojas}</td>` : ''}<td class="n">${sm.tot.clients}</td><td class="n">${nf0.format(sm.tot.cajas)}</td><td class="n">${usd(sm.tot.monto)}</td><td class="n">${sm.tot.vacDesp}</td><td class="n">${sm.tot.vacRecv}</td><td class="n">${sm.tot.vacAsg}</td><td class="n">${sm.tot.vacDebe}</td><td class="n">${(disp ? sm.tot.diferencias : sm.tot.novedades) || ''}</td><td class="n">${usd(sm.tot.procMonto)}</td></tr>`);
@@ -133,6 +165,7 @@
           `<tr><td>TOTAL EN PROCESO</td><td class="n">${d.enProceso.clients}</td><td class="n">${usd(d.enProceso.monto)}</td></tr>`)}
         ${sumTable('Resumen de la quincena por vendedor', 'Vendedor', summaryRows(d, 'seller'), false)}
         ${sumTable('Resumen de la quincena por despachador', 'Despachador', summaryRows(d, 'dispatcher'), true)}
+        ${cuadreHTML(d)}
         ${tbl('Ventas por categoría', [{ t: 'Categoría' }, N('Cajas'), N('Unidades'), N('Monto')], d.byCategory.map((c) => `<tr><td><b>${esc(c.category)}</b></td><td class="n">${nf0.format(c.cajas)}</td><td class="n">${nf0.format(c.unidades)}</td><td class="n">${usd(c.monto)}</td></tr>`).join(''),
           `<tr><td>TOTAL</td><td class="n">${nf0.format(t.cajas)}</td><td class="n">${nf0.format(t.unidades)}</td><td class="n">${usd(t.monto)}</td></tr>`)}
         ${tbl('Ventas por producto', [{ t: 'Código' }, { t: 'Producto' }, { t: 'Categoría' }, N('Cajas'), N('Unidades'), N('Monto')], prodRows,
@@ -163,6 +196,11 @@
         const sv = summaryRows(d, 'seller'), sd = summaryRows(d, 'dispatcher');
         sec('RESUMEN POR VENDEDOR', sumHead('VENDEDOR', false), sv.rows.map((r) => sumRow(r, false)).concat([sumRow({ ...sv.tot, name: 'TOTAL' }, false)]));
         sec('RESUMEN POR DESPACHADOR', sumHead('DESPACHADOR', true), sd.rows.map((r) => sumRow(r, true)).concat([sumRow({ ...sd.tot, name: 'TOTAL' }, true)]));
+        [['CUADRE VENTA LIQUIDADA (vendedor x despachador)', 'monto', true], ['CUADRE VACIOS DESPACHADOS (vendedor x despachador)', 'vacDesp', false]].forEach(([title, fld, money]) => {
+          const g = crossGrid(d, fld), f2 = (v) => (money ? m(v) : v);
+          sec(title, ['VENDEDOR', ...g.disps.map((x) => x.name), 'TOTAL_VENDEDOR'], g.rows.map((r) => [r.name, ...r.cells.map(f2), f2(r.total)]).concat([['TOTAL_DESPACHADOR', ...g.cols.map(f2), f2(g.total)]]));
+        });
+        L.push(q(d.cuadre.ok ? 'CUADRA: vendedores = despachadores' : `NO CUADRA: vendedores ${m(d.cuadre.sellerTotal)} / despachadores ${m(d.cuadre.dispatcherTotal)}`)); L.push('');
         sec('VENTA EN PROCESO', ['ETAPA', 'PEDIDOS', 'MONTO_USD'], d.enProceso.stages.map((x) => [x.label, x.clients, m(x.monto)]));
         sec('DIFERENCIAS DE CAMION', ['FECHA', 'HOJA', 'DESPACHADOR', 'CODIGO', 'PRODUCTO', 'UM', 'DEBE_QUEDAR', 'DEVOLUCION', 'DIFERENCIA', 'MOTIVO'], d.diferencias.map((x) => [x.date, x.label || x.load, x.dispatcherName, x.code, x.name, x.um, x.debe, x.dev, x.dif, x.motivo]));
         sec('NOVEDADES', ['FECHA', 'CLIENTE', 'VENDEDOR', 'RESULTADO', 'NOTA', 'NOTA_NUEVA', 'MOTIVO', 'PEDIDO_USD', 'ENTREGADO_USD'], d.novedades.map((x) => [x.date, x.clientName, x.sellerName, RES[x.result] || x.result, x.valeryNote, x.newValery, x.motivo, m(x.pedido), m(x.entregado)]));
@@ -175,5 +213,5 @@
     }
   }
 
-  global.Reportes = { lastDay, quincena, quincenaOf, prevQuincena, render, titleOf, summaryRows };
+  global.Reportes = { lastDay, quincena, quincenaOf, prevQuincena, render, titleOf, summaryRows, crossGrid };
 })(window);
