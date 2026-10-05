@@ -252,6 +252,9 @@
       sm.rows.map((r) => `<tr><td>${esc(r.name)}</td>${disp ? n(r.hojas) : ''}${n(r.clients)}${n(r.cajas)}${m(r.monto)}${n(r.vacDesp)}${n(r.vacRecv)}${n(r.vacAsg)}${n(r.vacDebe)}${n(disp ? r.diferencias : r.novedades)}${m(r.procMonto)}</tr>`).join(''),
       `<tr class="tot"><td>TOTAL</td>${disp ? n(sm.tot.hojas) : ''}${n(sm.tot.clients)}${n(sm.tot.cajas)}${m(sm.tot.monto)}${n(sm.tot.vacDesp)}${n(sm.tot.vacRecv)}${n(sm.tot.vacAsg)}${n(sm.tot.vacDebe)}${n(disp ? sm.tot.diferencias : sm.tot.novedades)}${m(sm.tot.procMonto)}</tr>`);
     const cu = d.cuadre;
+    const catT = (title, g) => { const f = (x) => (x.monto || x.cajas ? `<b>${nf2.format(x.monto)}</b><br><span class="muted">${nf0.format(x.cajas)} cj${x.unidades ? ' + ' + nf0.format(x.unidades) + ' un' : ''}</span>` : ''); return tbl(title, ['Categoría', ...g.people.map((p) => p.name), 'TOTAL categoría'],
+      g.rows.map((r) => `<tr><td>${esc(r.category)}</td>${r.cells.map((x) => `<td class="num">${f(x)}</td>`).join('')}<td class="num">${f(r.total)}</td></tr>`).join(''),
+      `<tr class="tot"><td>TOTAL</td>${g.cols.map((x) => `<td class="num">${f(x)}</td>`).join('')}<td class="num">${f(g.total)}</td></tr>`); };
     const gridT = (title, g, money) => { const f = (v) => (v ? (money ? nf2.format(v) : nf0.format(v)) : ''); return tbl(title, ['Vendedor \\ Despachador', ...g.disps.map((x) => x.name), 'Total vendedor'],
       g.rows.map((r) => `<tr><td>${esc(r.name)}</td>${r.cells.map((v) => `<td class="num">${f(v)}</td>`).join('')}<td class="num"><b>${f(r.total)}</b></td></tr>`).join(''),
       `<tr class="tot"><td>TOTAL DESPACHADOR</td>${g.cols.map((v) => `<td class="num">${f(v)}</td>`).join('')}<td class="num">${f(g.total)}</td></tr>`); };
@@ -266,6 +269,8 @@
       </div>
       ${sumT('Resumen de la quincena por vendedor', 'Vendedor', R.summaryRows(d, 'seller'), false)}
       ${sumT('Resumen de la quincena por despachador', 'Despachador', R.summaryRows(d, 'dispatcher'), true)}
+      ${catT('Venta liquidada por categoría · por vendedor', R.catGrid(d, 'seller', ctx.config.rubros))}
+      ${catT('Venta liquidada por categoría · por despachador', R.catGrid(d, 'dispatcher', ctx.config.rubros))}
       ${cu.ok ? `<p class="muted"><b>✓ Cuadra:</b> vendedores ${nf2.format(cu.sellerTotal)} $ = despachadores ${nf2.format(cu.dispatcherTotal)} $.</p>` : `<p><b>⚠ ${cu.diff ? 'NO CUADRA' : 'FALTA ASIGNAR DESPACHADOR'}:</b> vendedores ${nf2.format(cu.sellerTotal)} $ · despachadores ${nf2.format(cu.dispatcherTotal)} $${cu.sinDespachador.clients ? ` · ${cu.sinDespachador.clients} cliente(s) (${nf2.format(cu.sinDespachador.monto)} $) en hojas sin despachador` : ''}.</p>`}
       ${gridT('Cuadre · venta liquidada: qué despachador repartió lo de cada vendedor ($)', R.crossGrid(d, 'monto'), true)}
       ${gridT('Cuadre · vacíos despachados por vendedor y despachador', R.crossGrid(d, 'vacDesp'), false)}
