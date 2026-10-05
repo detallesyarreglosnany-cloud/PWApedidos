@@ -997,7 +997,7 @@
     const mine = S.orders.filter((o) => o.sellerId === sid && inRange(o.routeDate, f.r));
     const list = mine.filter((o) => f.g === 'todos' || groupOf(o) === f.g)
       .sort((a, b) => String(b.routeDate).localeCompare(String(a.routeDate)) || String(b.sentAt || b.createdAt).localeCompare(String(a.sentAt || a.createdAt)));
-    const sent = mine.filter((o) => o.status !== 'abierto' && !(isLiquidated(o) && o.delivery.result === 'pendiente')), desp = mine.filter((o) => o.status === 'despachado');
+    const sent = mine.filter((o) => o.status !== 'abierto' && !isLiquidated(o)), desp = mine.filter((o) => o.status === 'despachado');
     const sum = (arr) => arr.reduce((a, o) => a + Matrix.orderTotals(o).monto, 0);
     // Lo que cuenta es lo LIQUIDADO: lo que el cliente recibió de verdad (sin devoluciones ni notas anuladas)
     const liqd = mine.filter(isLiquidated), porLiq = desp.filter((o) => !isLiquidated(o));
@@ -1020,11 +1020,10 @@
       <div class="container">
         <div class="chips" id="myRange">${MY_RANGES.map(([k, l]) => chip(k, f.r, l, 'data-r')).join('')}</div>
         <div class="kpi-row" style="margin-top:10px">
-          <div class="kpi"><small>Pedidos enviados</small><b>${sent.length}</b><small>${usd(sum(sent))} pedido</small></div>
-          <div class="kpi"><small>Entregado (liquidado)</small><b>${usd(delivered(liqd))}</b><small>${liqd.filter((o) => +o.delivery.monto > 0).length} clientes</small></div>
-          <div class="kpi"><small>Despachado sin liquidar</small><b>${usd(sum(porLiq))}</b><small>${porLiq.length} pedidos · aún no cuenta</small></div>
+          <div class="kpi"><small>Venta liquidada</small><b>${usd(delivered(liqd))}</b><small>${liqd.filter((o) => +o.delivery.monto > 0).length} clientes · es la base de tu comisión</small></div>
+          <div class="kpi"><small>Venta en proceso</small><b>${usd(sum(sent))}</b><small>${sent.length} pedidos · aún no cuenta (${porLiq.length} despachados sin liquidar)</small></div>
         </div>
-        <p class="muted" style="margin-top:-4px">Lo <b>liquidado</b> es lo que el cliente recibió de verdad, ya descontadas devoluciones y notas anuladas: es la base de tu comisión.</p>
+        <p class="muted" style="margin-top:-4px"><b>Venta liquidada</b> = lo que el cliente recibió y paga de verdad, ya sin devoluciones ni notas anuladas. <b>Venta en proceso</b> = enviados, aprobados y despachados que todavía no se liquidan: puede cambiar.</p>
         <div class="chips" id="myTab">${chip('pedidos', f.tab, '🧾 Mis pedidos', 'data-t')}${chip('hojas', f.tab, '🚚 Hojas de carga', 'data-t')}</div>
         ${f.tab === 'pedidos' ? `
           <div class="chips" id="myGroup">${MY_GROUPS.map(([k, l]) => chip(k, f.g, `${l} <span class="badge">${count(k)}</span>`, 'data-g')).join('')}</div>

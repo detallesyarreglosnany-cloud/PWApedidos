@@ -245,21 +245,26 @@
     d.vacios.byCode.forEach((v) => { if (v.type !== ty) { vflush(); ty = v.type; vs = { d: 0, r: 0, a: 0, q: 0 }; } vs.d += v.despachados; vs.r += v.recibidos; vs.a += v.asignados; vs.q += v.debe;
       vac += `<tr><td>${esc(v.code)}</td><td>${esc(v.type)}</td>${n(v.despachados)}${n(v.recibidos)}${n(v.asignados)}${n(v.debe)}<td></td></tr>`; });
     vflush();
-    const vt = d.vacios.byCode.reduce((a, v) => ({ d: a.d + v.despachados, r: a.r + v.recibidos, a: a.a + v.asignados, q: a.q + v.debe }), { d: 0, r: 0, a: 0, q: 0 });
     const people = (arr) => arr.map((v) => `<tr><td>${esc(v.name)}</td><td>${esc(v.type)}</td>${n(v.despachados)}${n(v.recibidos)}${n(v.asignados)}${n(v.debe)}</tr>`).join('');
+    const R = global.Reportes;
+    const vt = d.vacios.byCode.reduce((a, v) => ({ d: a.d + v.despachados, r: a.r + v.recibidos, a: a.a + v.asignados, q: a.q + v.debe }), { d: 0, r: 0, a: 0, q: 0 });
+    const sumT = (title, who, sm, disp) => tbl(title, [who, ...(disp ? ['Hojas'] : []), 'Clientes', 'Cajas', 'Venta liquidada $', 'Vacíos despachados', 'Vacíos recibidos', 'Vacíos asignados', 'Quedan debiendo', disp ? 'Diferencias' : 'Novedades', 'Venta en proceso $'],
+      sm.rows.map((r) => `<tr><td>${esc(r.name)}</td>${disp ? n(r.hojas) : ''}${n(r.clients)}${n(r.cajas)}${m(r.monto)}${n(r.vacDesp)}${n(r.vacRecv)}${n(r.vacAsg)}${n(r.vacDebe)}${n(disp ? r.diferencias : r.novedades)}${m(r.procMonto)}</tr>`).join(''),
+      `<tr class="tot"><td>TOTAL</td>${disp ? n(sm.tot.hojas) : ''}${n(sm.tot.clients)}${n(sm.tot.cajas)}${m(sm.tot.monto)}${n(sm.tot.vacDesp)}${n(sm.tot.vacRecv)}${n(sm.tot.vacAsg)}${n(sm.tot.vacDebe)}${n(disp ? sm.tot.diferencias : sm.tot.novedades)}${m(sm.tot.procMonto)}</tr>`);
     const body = `<section>
       ${header(ctx.config, 'REPORTE · ' + (ctx.title || ''), fdate(d.from + 'T12:00:00') + ' al ' + fdate(d.to + 'T12:00:00'))}
-      <p class="muted">Solo lo entregado en hojas liquidadas, por fecha de entrega. ${d.pendingLoads.length ? `<b>${d.pendingLoads.length} hoja(s) del período sin liquidar (${nf2.format(d.pendingMonto)} $) no se suman.</b>` : 'Todas las hojas del período están liquidadas.'}</p>
+      <p class="muted">Venta liquidada = lo que realmente se vendió (hojas con la liquidación cerrada, sin devoluciones ni notas anuladas), por fecha de entrega. ${d.pendingLoads.length ? `<b>${d.pendingLoads.length} hoja(s) del período sin liquidar (${nf2.format(d.pendingMonto)} $ en proceso) no se suman a la venta liquidada.</b>` : 'Todas las hojas del período están liquidadas.'}</p>
       <div class="meta">
-        <div><b>Venta entregada $</b>${nf2.format(t.monto)}</div><div><b>Pedido $</b>${nf2.format(t.pedido)}</div>
+        <div><b>VENTA LIQUIDADA $</b>${nf2.format(t.monto)}</div><div><b>Venta en proceso $</b>${nf2.format(d.enProceso.monto)}</div>
         <div><b>Hojas liquidadas</b>${t.hojas}</div><div><b>Clientes atendidos</b>${t.clients}</div>
         <div><b>Cajas</b>${nf0.format(t.cajas)}</div><div><b>Unidades sueltas</b>${nf0.format(t.unidades)}</div>
-        <div><b>Devoluciones parciales</b>${t.parcial}</div><div><b>Anuladas · después</b>${t.anulada} · ${t.pendiente}</div>
+        <div><b>Vacíos despachados · recibidos</b>${nf0.format(vt.d)} · ${nf0.format(vt.r)}</div><div><b>Quedan debiendo (vacíos)</b>${nf0.format(vt.q)}</div>
       </div>
+      ${sumT('Resumen de la quincena por vendedor', 'Vendedor', R.summaryRows(d, 'seller'), false)}
+      ${sumT('Resumen de la quincena por despachador', 'Despachador', R.summaryRows(d, 'dispatcher'), true)}
+      ${tbl('Venta en proceso (todavía puede cambiar, no suma a la venta liquidada)', ['Etapa', 'Pedidos', 'Monto $'], d.enProceso.stages.map((x) => `<tr><td>${esc(x.label)}</td>${n(x.clients)}${m(x.monto)}</tr>`).join(''), `<tr class="tot"><td>TOTAL EN PROCESO</td>${n(d.enProceso.clients)}${m(d.enProceso.monto)}</tr>`)}
       ${tbl('Ventas por categoría', ['Categoría', 'Cajas', 'Unidades', 'Monto $'], d.byCategory.map((c) => `<tr><td>${esc(c.category)}</td>${n(c.cajas)}${n(c.unidades)}${m(c.monto)}</tr>`).join(''), `<tr class="tot"><td>TOTAL</td>${n(t.cajas)}${n(t.unidades)}${m(t.monto)}</tr>`)}
       ${tbl('Ventas por producto', ['Código', 'Producto', 'Cajas', 'Unidades', 'Monto $'], prod, `<tr class="tot"><td colspan="2">TOTAL</td>${n(t.cajas)}${n(t.unidades)}${m(t.monto)}</tr>`)}
-      ${tbl('Por vendedor', ['Vendedor', 'Clientes', 'Cajas', 'Unidades', 'Monto $', 'Novedades'], d.bySeller.map((s) => `<tr><td>${esc(s.sellerName)}</td>${n(s.clients)}${n(s.cajas)}${n(s.unidades)}${m(s.monto)}${n(s.novedades)}</tr>`).join(''))}
-      ${tbl('Despachos por despachador', ['Despachador', 'Hojas', 'Clientes', 'Cajas', 'Unidades', 'Monto $', 'Diferencias'], d.byDispatcher.map((x) => `<tr><td>${esc(x.dispatcherName)}</td>${n(x.hojas)}${n(x.clients)}${n(x.cajas)}${n(x.unidades)}${m(x.monto)}${n(x.diferencias)}</tr>`).join(''))}
       ${tbl('Diferencias de camión', ['Fecha', 'Hoja', 'Despachador', 'Producto', 'Debe quedar', 'Devolución', 'Diferencia', 'Motivo'], d.diferencias.map((x) => `<tr><td>${esc(fdate(x.date + 'T12:00:00'))}</td><td>${esc(x.label || x.load)}</td><td>${esc(x.dispatcherName)}</td><td>${esc(x.code)} ${esc(x.name)} ${esc(x.um)}</td>${n(x.debe)}${n(x.dev)}${n(x.dif)}<td>${esc(x.motivo)}</td></tr>`).join(''))}
       ${tbl('Novedades de las notas', ['Fecha', 'Cliente', 'Vendedor', 'Resultado', 'Nota', 'Nota nueva', 'Motivo', 'Pedido $', 'Entregado $'], d.novedades.map((x) => `<tr><td>${esc(fdate(x.date + 'T12:00:00'))}</td><td>${esc(x.clientName)}</td><td>${esc(x.sellerName)}</td><td>${esc(RES[x.result] || x.result)}</td><td>${esc(x.valeryNote)}</td><td>${esc(x.newValery)}</td><td>${esc(x.motivo)}</td>${m(x.pedido)}${m(x.entregado)}</tr>`).join(''))}
       ${tbl('Vacíos por código', ['Código', 'Tipo', 'Despachados', 'Recibidos', 'Asignados', 'Quedan debiendo', 'Devoluciones posteriores'], vac, `<tr class="tot"><td colspan="2">TOTAL GENERAL</td>${n(vt.d)}${n(vt.r)}${n(vt.a)}${n(vt.q)}<td class="num">${Object.values(d.vacios.devoluciones || {}).reduce((a, x) => a + x, 0) || ''}</td></tr>`)}

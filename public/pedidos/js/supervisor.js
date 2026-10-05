@@ -80,11 +80,11 @@
     if (!r.ok) { root.innerHTML = `<div class="empty card"><strong>No se pudo cargar</strong>${esc(r.error || '')}</div>`; return; }
     const d = r.data;
     root.innerHTML = `
-      <p class="muted">Pedidos tomados hoy, ${esc(fmtDate(today()))} (aún no entregados). Lo entregado de cada quincena está en <b>📈 Reportes</b>.</p>
+      <p class="muted">Venta en proceso de hoy, ${esc(fmtDate(today()))} (pedidos tomados, aún sin liquidar). La <b>Venta liquidada</b> de cada quincena, por vendedor y despachador, está en <b>📈 Reportes</b>.</p>
       <div class="kpi-row">
         <div class="kpi"><small>Clientes atendidos</small><b>${nf0.format(d.totals.clients)}</b></div>
         <div class="kpi"><small>Bultos</small><b>${nf0.format(d.totals.cajas + d.totals.unidades)}</b></div>
-        <div class="kpi"><small>Pedido del día</small><b>${usd(d.totals.monto)}</b></div>
+        <div class="kpi"><small>Venta en proceso del día</small><b>${usd(d.totals.monto)}</b></div>
       </div>
       <div class="card" style="overflow:auto"><h3 style="padding:12px 12px 0">Por vendedor</h3><table class="inv">
         <thead><tr><th>Vendedor</th><th>Clientes</th><th>Cajas</th><th>Unidades</th><th>Monto</th></tr></thead>
