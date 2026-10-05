@@ -238,6 +238,10 @@
   let syncTimer, lastSyncResult = null;
   const isOffice = () => location.hash.startsWith('#/oficina');
   function scheduleSync(ms) { clearTimeout(syncTimer); syncTimer = setTimeout(runSync, ms); }
+  // Cada cuánto se revisa el servidor. Con la app en segundo plano casi no se
+  // consulta: al volver a la pantalla, al recuperar señal o al llegar un aviso
+  // push se sincroniza en el acto (así se ahorra tráfico de servidor y base de datos).
+  const syncEvery = () => (document.hidden ? (isOffice() ? 120000 : 300000) : (isOffice() ? 20000 : 45000));
 
   const isSupervisor = () => location.hash.startsWith('#/supervisor');
   const syncScope = () => (isOffice() || isSupervisor() ? {} : (S.session && S.session.sellerId ? { sellerId: S.session.sellerId } : {}));
@@ -280,7 +284,7 @@
       refreshAfterRemote();
     }
     updateSyncPill();
-    scheduleSync(isOffice() ? 10000 : 30000);
+    scheduleSync(syncEvery());
     return r;
   }
 
