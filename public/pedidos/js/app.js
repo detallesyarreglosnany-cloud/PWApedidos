@@ -316,10 +316,10 @@
   const NOTIF_TITLE = {
     pedido: '🧾 Nuevo pedido', editado: '✏️ Pedido modificado', duplicado: '⚠️ Cliente duplicado', borrado: '🗑 Pedido eliminado', mensaje: '💬 Mensaje de la oficina',
     aprobado: '✅ Pedido aprobado', espera: '⏸ Pedido en espera', despachado: '🚚 Pedido despachado', ajustado: '✏️ Pedido ajustado',
-    liquidado: '✓ Pedido liquidado',
+    liquidado: '✓ Pedido liquidado', oficina: '🏢 Pedido cargado por la oficina',
   };
   // Mismo tag que usa el servidor en el aviso push: si llegan los dos, se ve uno solo
-  const NOTIF_EV = { mensaje: 'msg', pedido: 'new', editado: 'mod', borrado: 'del', aprobado: 'apr', espera: 'esp', despachado: 'desp', ajustado: 'aj', duplicado: 'dup', liquidado: 'liq' };
+  const NOTIF_EV = { mensaje: 'msg', pedido: 'new', editado: 'mod', borrado: 'del', aprobado: 'apr', espera: 'esp', despachado: 'desp', ajustado: 'aj', duplicado: 'dup', liquidado: 'liq', oficina: 'ofi' };
   const SENT = ['enviado', 'en_carga', 'en_espera', 'despachado'];
   const isSent = (x) => !!x && !x.deleted && SENT.includes(x.status);
   /**
@@ -339,12 +339,14 @@
       const p = before.get(o.id);
       if (office) {
         const who = o.sellerName;
-        if (isSent(o) && !isSent(p)) add('pedido', o, `Nuevo pedido de ${who}: ${o.clientName}`);
+        if (isSent(o) && !isSent(p)) add('pedido', o, o.createdBy === 'oficina' ? `Oficina cargó un pedido para ${who}: ${o.clientName}` : `Nuevo pedido de ${who}: ${o.clientName}`);
         else if (o.deleted && isSent(p)) add('borrado', o, `${o.deletedBy === 'oficina' ? 'La oficina' : who} eliminó el pedido de ${o.clientName}`);
         else if (!o.deleted && o.sellerEdited && p && p.sellerEdited !== o.sellerEdited) add('editado', o, `${who} modificó el pedido de ${o.clientName}`);
         if (!o.deleted && (o.dupWith || []).length && !(p && (p.dupWith || []).length)) add('duplicado', o, `Cliente duplicado: ${o.clientName} (${who} y ${o.dupWith.map((d) => d.sellerName).join(', ')})`, true);
         return;
       }
+      // Pedido que la oficina cargó a su nombre (solo los de hoy en adelante: un equipo nuevo no se llena de avisos)
+      if (o.sellerId === sid && !p && o.createdBy === 'oficina' && isSent(o) && String(o.routeDate) >= today()) { add('oficina', o, `${o.clientName} · ${usd(Matrix.orderTotals(o).monto)}`); return; }
       if (o.sellerId !== sid || !p) return;
       const om = o.officeMsgs || [], pm = p.officeMsgs || [];
       if (om.length > pm.length) add('mensaje', o, `${o.clientName}: ${om[om.length - 1].text}`, true);
@@ -740,7 +742,7 @@
           ${orders.length ? orders.map((x) => {
             const t = Matrix.orderTotals(x);
             return `<button class="chip ${o && o.id === x.id ? 'active' : ''} st-${x.status}" data-oid="${esc(x.id)}" role="tab">
-              ${markOf(x)}${esc(x.clientName)} <span class="badge">${usd(t.monto)}</span></button>`;
+              ${markOf(x)}${x.createdBy === 'oficina' ? '🏢 ' : ''}${esc(x.clientName)} <span class="badge">${usd(t.monto)}</span></button>`;
           }).join('') : '<span class="muted" style="padding:10px 2px">Escribe el primer cliente de tu ruta de hoy.</span>'}
         </div>
       </section>
@@ -1032,7 +1034,7 @@
       const t = Matrix.orderTotals(o), l = loadOf(o), g = groupOf(o), d = isLiquidated(o) ? o.delivery : null;
       return `<tr data-myo="${esc(o.id)}" style="cursor:pointer">
         <td><b>${esc(o.clientName)}</b><div class="muted" style="font-size:12px">${esc(fmtDate(o.routeDate))}${l ? ' · ' + esc(Loads.labelOf(l)) + (l.number ? ' · ' + esc(Loads.loadCode(l)) : '') : ''}${o.valeryNote ? ' · Nota ' + esc(o.valeryNote) : ''}${(o.officeMsgs || []).length ? ' · 💬 ' + o.officeMsgs.length : ''}</div>
-          ${d ? liqBadge(d) : `<span class="status ${g === 'aprobados' ? 'en_carga' : o.status}">${esc(GROUP_TEXT[g])}</span>`}${o.officeEdited ? ' <span class="status en_espera">ajustado por oficina</span>' : ''}</td>
+          ${d ? liqBadge(d) : `<span class="status ${g === 'aprobados' ? 'en_carga' : o.status}">${esc(GROUP_TEXT[g])}</span>`}${o.createdBy === 'oficina' ? ' <span class="status aprobada">🏢 cargado por oficina</span>' : ''}${o.officeEdited ? ' <span class="status en_espera">ajustado por oficina</span>' : ''}</td>
         <td class="n" data-l="Monto">${d ? `${usd(d.monto)}${Math.abs(d.monto - t.monto) > 0.004 ? `<div class="muted" style="font-size:12px;text-decoration:line-through">${usd(t.monto)}</div>` : ''}` : usd(t.monto)}</td></tr>`;
     };
     app.innerHTML = `
@@ -1160,6 +1162,7 @@
     openSheet(`
       <div class="row"><h2 class="grow">${esc(o.clientName)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
       <div class="grid2" style="margin:8px 0 12px">${info.map(([k, v]) => `<div><small class="muted">${esc(k)}</small><div><b>${esc(v)}</b></div></div>`).join('')}</div>
+      ${o.createdBy === 'oficina' ? '<div class="hint">🏢 Este pedido lo cargó la oficina a tu nombre.</div>' : ''}
       ${o.officeEdited ? `<div class="hint warn">✏️ La oficina ajustó este pedido${sentL ? ': las filas marcadas cambiaron respecto a lo que enviaste.' : '.'}</div>` : ''}
       <table class="lines"><thead><tr><th style="text-align:left">Producto</th>${sentL ? '<th class="num">Pediste</th>' : ''}<th class="num">${g === 'despachados' ? 'Despachado' : 'Queda'}</th>${liqd ? '<th class="num">Entregado</th>' : ''}</tr></thead>
         <tbody>${rows || '<tr><td class="muted">Sin productos</td></tr>'}</tbody></table>

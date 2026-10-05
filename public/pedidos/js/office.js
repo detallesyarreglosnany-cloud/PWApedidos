@@ -201,6 +201,7 @@
           <span><b>${held.length}</b> clientes en espera</span>
           <span><b>${open.length}</b> pedidos abiertos (vendedores en ruta)</span>
         </div>
+        <button class="btn btn-primary" id="lOrder">➕ Nuevo pedido</button>
         <button class="btn" id="lNew">＋ Nueva hoja</button>
         <button class="btn" id="lSync">⟳ Actualizar</button>
       </div>
@@ -221,6 +222,7 @@
     $('#lSeller').onchange = (e) => { U().loadSeller = e.target.value; renderLoads(root); };
     $('#lSync').onclick = () => PV.runSync(true);
     $('#lNew').onclick = () => newLoadDialog(root);
+    $('#lOrder').onclick = () => officeOrderDialog(() => renderLoads(root));
     root.onclick = async (e) => {
       const c = e.target.closest('[data-lid]');
       if (c) { U().loadId = c.dataset.lid; renderLoads(root); return; }
@@ -627,6 +629,131 @@
     });
   }
 
+  /* ------------------ Pedido cargado por la oficina ------------------ */
+  // La oficina carga un pedido de CUALQUIER cliente, vendedor y ruta. Sale como
+  // «enviado» a nombre del vendedor: entra solo a su hoja de carga y sigue el flujo
+  // normal (aprobación, despacho, liquidación, reportes) y el vendedor lo ve en
+  // sus pedidos con la marca 🏢.
+  function officeOrderDialog(onDone) {
+    const d = { client: null, newName: '', sellerId: '', route: '', date: today(), lines: {}, notes: '' };
+    const sellers = S.sellers.filter((x) => x.active !== false);
+    const routes = [...new Set([...(S.config.routes || []), ...S.clients.map((c) => c.route).filter(Boolean)])].sort((a, b) => a.localeCompare(b, 'es'));
+    const sh = openSheet(`
+      <div class="row"><h2 class="grow">➕ Nuevo pedido (oficina)</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <p class="muted" style="margin-top:0">Cualquier cliente, vendedor y ruta. Sale como enviado a nombre del vendedor: entra a su hoja de carga y sigue el flujo normal (carga, despacho, liquidación). El vendedor lo ve en sus pedidos.</p>
+      <label class="field"><span>Cliente (de todos los vendedores)</span><input id="noCli" class="input" placeholder="Buscar por nombre o RIF…" autocomplete="off" maxlength="80"></label>
+      <div id="noCliRes" class="results"></div><div id="noCliSel"></div>
+      <div class="grid2" style="margin-top:8px">
+        <label class="field"><span>Vendedor (a su nombre)</span><select id="noSeller" class="select"><option value="">— Elige —</option>${sellers.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('')}</select></label>
+        <label class="field"><span>Ruta</span><select id="noRoute" class="select"><option value="">— Elige —</option>${routes.map((r) => `<option>${esc(r)}</option>`).join('')}</select></label>
+      </div>
+      <label class="field"><span>Fecha del pedido</span><input type="date" id="noDate" class="input" value="${esc(d.date)}"></label>
+      <label class="field" style="margin-top:8px"><span>Agregar producto</span><input id="noSearch" class="input" placeholder="Buscar por nombre o código…" autocomplete="off"></label>
+      <div id="noResults" class="results"></div>
+      <div id="noLines"></div>
+      <label class="field" style="margin-top:12px"><span>Nota para despacho</span><input id="noNotes" class="input" maxlength="300"></label>
+      <div class="actions"><button class="btn" data-close>Cancelar</button><button class="btn btn-ok" id="noSend" disabled>✓ Enviar pedido</button></div>`, { wide: true });
+    const el = sh.el, q = (sel) => $(sel, el);
+    const clientName = () => (d.client ? d.client.name : d.newName);
+    const ready = () => !!(clientName() && d.sellerId && d.route && d.date && Object.keys(d.lines).length);
+    const drawClient = () => {
+      const c = d.client;
+      q('#noCliSel').innerHTML = clientName() ? `<div class="hint">Cliente: <b>${esc(clientName())}</b>${c ? ` <span class="muted">${esc([c.rif, c.address].filter(Boolean).join(' · '))}${c.sellerId ? ' · cartera de ' + esc((sellerById(c.sellerId) || {}).name || '—') : ''}</span>` : ' <span class="tag">cliente nuevo</span>'}
+        <button class="btn btn-sm" type="button" data-clear style="margin-left:8px">Cambiar</button></div>` : '';
+      q('#noCli').style.display = clientName() ? 'none' : '';
+    };
+    const drawLines = () => {
+      const lines = Object.entries(d.lines).map(([pid, l]) => ({ pid, l, t: Matrix.lineTotals(l), p: productById(pid) }))
+        .sort((a, b) => a.l.category.localeCompare(b.l.category, 'es') || a.l.name.localeCompare(b.l.name, 'es'));
+      const tot = Matrix.orderTotals({ lines: d.lines });
+      q('#noLines').innerHTML = lines.length ? `<table class="lines">${lines.map(({ pid, l, t, p }) => {
+        const sb = p ? p.sellBy : 'ambos';
+        return `<tr><td><b>${esc(l.name)} ${esc(l.presentation)}</b><div class="muted mono" style="font-size:12px">${esc(l.code)}</div></td>
+          <td style="white-space:nowrap">${sb !== 'unidad' ? `<label class="mini">CJ <input class="input mini-in" inputmode="numeric" data-pid="${esc(pid)}" data-kind="cajas" value="${t.cajas || ''}"></label>` : ''}
+            ${sb !== 'caja' ? `<label class="mini">UN <input class="input mini-in" inputmode="numeric" data-pid="${esc(pid)}" data-kind="unidades" value="${t.unidades || ''}"></label>` : ''}</td>
+          <td class="num">${usd(t.monto)}</td></tr>`; }).join('')}
+        <tr class="total-row"><td><b>TOTAL</b> · ${tot.cajas} cj + ${tot.unidades} un · ${tot.bultos} bultos</td><td></td><td class="num">${usd(tot.monto)}</td></tr></table>`
+        : '<div class="empty"><strong>Pedido vacío</strong>Busca y agrega productos.</div>';
+      q('#noSend').disabled = !ready();
+    };
+    const setLine = (pid, kind, value) => {
+      const p = productById(pid); if (!p) return;
+      const line = d.lines[pid] || { code: p.code, name: p.name, presentation: p.presentation, category: p.category,
+        unitsPerBox: p.unitsPerBox, unitPrice: p.unitPrice, boxPrice: p.boxPrice, cajas: 0, unidades: 0 };
+      d.lines[pid] = { ...line, [kind]: Math.max(0, Math.min(99999, value)) };
+      if (!d.lines[pid].cajas && !d.lines[pid].unidades) delete d.lines[pid];
+    };
+    const pickClient = (c, newName) => {
+      d.client = c || null; d.newName = c ? '' : newName;
+      if (c && c.sellerId && sellers.some((x) => x.id === c.sellerId)) { d.sellerId = c.sellerId; q('#noSeller').value = c.sellerId; }
+      if (c && c.route) { if (![...q('#noRoute').options].some((o) => o.value === c.route)) q('#noRoute').insertAdjacentHTML('beforeend', `<option>${esc(c.route)}</option>`); d.route = c.route; q('#noRoute').value = c.route; }
+      q('#noCli').value = ''; q('#noCliRes').innerHTML = '';
+      drawClient(); drawLines();
+      if (!d.sellerId) q('#noSeller').focus(); else q('#noSearch').focus();
+    };
+    q('#noCli').oninput = () => {
+      const raw = q('#noCli').value.replace(/\s+/g, ' ').trim(), tokens = norm(raw).split(' ').filter(Boolean);
+      const res = tokens.length ? S.clients.filter((c) => c.active !== false && tokens.every((t) => norm(c.name + ' ' + (c.rif || '')).includes(t))).slice(0, 10) : [];
+      const exact = res.some((c) => norm(c.name) === norm(raw));
+      q('#noCliRes').innerHTML = res.map((c) => `<button class="result" type="button" data-cid="${esc(c.id)}"><b>${esc(c.name)}</b> <span class="muted">${esc([c.rif, (sellerById(c.sellerId) || {}).name, c.route].filter(Boolean).join(' · '))}</span></button>`).join('')
+        + (raw && !exact ? `<button class="result" type="button" data-newc="1">➕ Cliente nuevo: <b>${esc(raw)}</b></button>` : '');
+    };
+    q('#noSeller').onchange = (e) => { d.sellerId = e.target.value; drawLines(); };
+    q('#noRoute').onchange = (e) => { d.route = e.target.value; drawLines(); };
+    q('#noDate').onchange = (e) => { d.date = e.target.value || today(); drawLines(); };
+    q('#noNotes').onchange = (e) => { d.notes = e.target.value.slice(0, 300); };
+    q('#noSearch').oninput = () => {
+      const tokens = norm(q('#noSearch').value).split(' ').filter(Boolean);
+      const res = tokens.length ? S.products.filter((p) => p.active && tokens.every((t) => norm(p.code + ' ' + p.name + ' ' + p.presentation + ' ' + (p.brand || '')).includes(t))).slice(0, 8) : [];
+      q('#noResults').innerHTML = res.map((p) => `<button class="result" type="button" data-add="${esc(p.id)}"><b>${esc(p.name)}</b> ${esc(p.presentation)} <span class="muted mono">${esc(p.code)}</span></button>`).join('');
+    };
+    el.addEventListener('click', (e) => {
+      const c = e.target.closest('[data-cid]'); if (c) { pickClient(S.clients.find((x) => x.id === c.dataset.cid)); return; }
+      if (e.target.closest('[data-newc]')) { const nm = q('#noCli').value.replace(/\s+/g, ' ').trim().slice(0, 80); if (nm) pickClient(null, nm); return; }
+      if (e.target.closest('[data-clear]')) { d.client = null; d.newName = ''; drawClient(); drawLines(); q('#noCli').focus(); return; }
+      const a = e.target.closest('[data-add]');
+      if (a) {
+        const p = productById(a.dataset.add), kind = p.sellBy === 'unidad' ? 'unidades' : 'cajas';
+        if (!d.lines[p.id]) setLine(p.id, kind, 1);
+        q('#noSearch').value = ''; q('#noResults').innerHTML = ''; drawLines();
+        const inp = el.querySelector(`.mini-in[data-pid="${CSS.escape(p.id)}"][data-kind="${kind}"]`); if (inp) { inp.focus(); inp.select(); }
+      }
+    });
+    el.addEventListener('change', (e) => { const i = e.target.closest('.mini-in'); if (i) { setLine(i.dataset.pid, i.dataset.kind, int(i.value)); drawLines(); } });
+    q('#noSend').onclick = async () => {
+      if (!ready()) return;
+      const btn = q('#noSend'); btn.disabled = true;
+      const seller = sellerById(d.sellerId);
+      let client = d.client;
+      const key = norm(clientName());
+      const tot = Matrix.orderTotals({ lines: d.lines });
+      const dup = S.orders.find((o) => !o.deleted && o.clientKey === key && o.routeDate === d.date && o.sellerId === seller.id && Loads.editable(o));
+      if (dup && !confirm(`${clientName()} ya tiene un pedido de ${seller.name} para el ${fmtDate(d.date)} (${usd(Matrix.orderTotals(dup).monto)}).\n\n¿Crear otro pedido aparte?`)) { btn.disabled = false; return; }
+      if (!client) {
+        client = { id: DB.uid('c'), rif: '', name: clientName(), phone: '', address: '', group: '', creditDays: 0,
+          sellerId: seller.id, route: d.route, active: true, source: 'oficina', deleted: false };
+        await saveDocs('clients', client);
+        await log('cliente_nuevo', `Oficina creó el cliente ${client.name} (${seller.name})`, { clientId: client.id, clientName: client.name });
+      }
+      const at = DB.now();
+      const o = { id: DB.uid('o'), sellerId: seller.id, sellerName: seller.name,
+        clientId: client.id, clientRif: client.rif || '', clientName: client.name, clientKey: norm(client.name),
+        route: d.route, routeDate: d.date, status: 'enviado', lines: d.lines, sentLines: JSON.parse(JSON.stringify(d.lines)),
+        notes: d.notes, loadId: null, createdAt: at, sentAt: at, createdBy: 'oficina', createdByName: (S.config && S.config.adminName) || 'Oficina',
+        deviceId: await Sync.deviceId(), deleted: false };
+      await saveOrder(o);
+      await log('pedido_oficina', `Oficina cargó el pedido de ${o.clientName} a nombre de ${seller.name} · ${tot.cajas} cj + ${tot.unidades} un · ${usd(tot.monto)}`, { orderId: o.id, clientName: o.clientName, amount: tot.monto });
+      sh.close();
+      await autoPack();
+      const placed = orderById(o.id), load = placed && placed.loadId ? S.loads.find((l) => l.id === placed.loadId) : null;
+      toast(`Pedido de ${o.clientName} enviado a nombre de ${seller.name}${load ? ' · hoja ' + Loads.labelOf(load) : ''}`, 'ok');
+      PV.runSync(false);
+      if (onDone) onDone();
+    };
+    drawClient(); drawLines();
+    setTimeout(() => q('#noCli').focus(), 50);
+  }
+
   /* ============================== PEDIDOS ============================== */
   function renderOrders(root) {
     const date = U().date, mode = U().mode, sid = U().ordSeller || '';
@@ -648,6 +775,7 @@
         <div class="field"><span>Mostrar</span><div class="seg" id="oMode">
           ${[['bultos', 'Cajas / Unid.'], ['unidades', 'Unid. totales'], ['monto', 'Monto $']].map(([k, l]) => `<button data-m="${k}" class="${mode === k ? 'active' : ''}">${l}</button>`).join('')}</div></div>
         <div class="grow"></div>
+        <button class="btn btn-primary" id="oNew">➕ Nuevo pedido</button>
         <button class="btn" id="oCopy" ${m.cols.length ? '' : 'disabled'}>📋 Copiar para Excel</button>
         <button class="btn" id="oCsv" ${m.cols.length ? '' : 'disabled'}>⇩ Excel</button>
         <button class="btn" id="oFlat" ${m.cols.length ? '' : 'disabled'}>⇩ Excel plano</button>
@@ -659,10 +787,11 @@
           ${r.cells.map((v) => `<td class="n ${v ? '' : 'zero'}">${v ? (money ? nf2.format(v) : nf0.format(v)) : '·'}</td>`).join('')}<td class="n tot">${money ? nf2.format(r.total) : nf0.format(r.total)}</td></tr>`).join('')}</tbody>
         <tfoot>${m.footer.map((f) => `<tr><td class="sticky-col">${esc(f.label)}</td><td></td>${f.cells.map((v) => `<td class="n">${f.money ? nf2.format(v) : nf0.format(v)}</td>`).join('')}<td class="n tot">${f.money ? nf2.format(f.total) : nf0.format(f.total)}</td></tr>`).join('')}</tfoot></table></div>
         <div class="section-title">Detalle por cliente</div>
-        <div class="card"><table class="inv">${source.map((o) => `<tr><td><b>${esc(o.clientName)}</b>${dupBadge(o, dupIdx)}<div class="muted">${esc(o.sellerName)} · ${esc(o.route || '')}</div></td>
+        <div class="card"><table class="inv">${source.map((o) => `<tr><td><b>${esc(o.clientName)}</b>${dupBadge(o, dupIdx)}${o.createdBy === 'oficina' ? ' <span class="tag" title="Cargado por la oficina">🏢 oficina</span>' : ''}<div class="muted">${esc(o.sellerName)} · ${esc(o.route || '')}</div></td>
           <td><span class="status ${o.status}">${esc(Loads.orderLabel(o))}</span></td><td class="n">${usd(Matrix.orderTotals(o).monto)}</td>
           <td><button class="btn btn-sm" data-edit="${esc(o.id)}">Ver / editar</button></td></tr>`).join('')}</table></div>`
       : `<div class="empty card"><strong>Sin pedidos</strong>No hay pedidos para ${esc(fmtDate(date))}.</div>`}`;
+    $('#oNew').onclick = () => officeOrderDialog(() => renderOrders(root));
     $('#oDate').onchange = (e) => { U().date = e.target.value || today(); renderOrders(root); };
     $('#oMode').onclick = (e) => { const b = e.target.closest('[data-m]'); if (b) { U().mode = b.dataset.m; renderOrders(root); } };
     $('#oSellers').onclick = (e) => { const b = e.target.closest('[data-sid]'); if (b) { U().ordSeller = b.dataset.sid; renderOrders(root); } };
