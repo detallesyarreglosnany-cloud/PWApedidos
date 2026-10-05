@@ -5,6 +5,8 @@
  *                      por producto y por cliente, despachador y firmas.
  *   Nota de entrega  → vertical, CON precios, una por cliente, en ORIGINAL
  *                      (cliente) y COPIA (empresa).
+ *   Nota de despacho → ticket de 80 mm (impresora térmica POS-80), una por
+ *                      cliente, con corte automático entre cada una.
  * ========================================================================= */
 (function (global) {
   'use strict';
@@ -335,5 +337,72 @@
     printHTML('Notas de entrega', NOTE_CSS, body);
   }
 
-  global.Print = { printLoadSheet, printNotes, printLiquidation, printKardex, printQuincena };
+  /* ------------------- Notas de despacho en ticket (80 / 58 mm) ------------------- */
+  // Impresora térmica (POS-80, ESC/POS). Un ticket por cliente: cada uno es una
+  // «página», y el controlador corta el papel al final de cada página. Sin fondos
+  // grises (la térmica los imprime como puntos): solo negro, letra grande.
+  const ticketOpts = (o) => ({ width: o && +o.width === 58 ? 58 : 80, prices: !(o && o.prices === false), copies: o && +o.copies === 2 ? 2 : 1 });
+  function ticketHTML(order, ctx, opts, copy) {
+    const cfg = ctx.config || {}, co = cfg.company || {}, client = (ctx.clientsById && ctx.clientsById.get(order.clientId)) || {};
+    const load = ctx.load || null, rate = +cfg.exchangeRate || 0, t = Matrix.orderTotals(order);
+    const lines = Object.values(order.lines || {}).map((l) => ({ l, x: Matrix.lineTotals(l) })).filter(({ x }) => x.cajas || x.unidades)
+      .sort((a, b) => String(a.l.category).localeCompare(String(b.l.category), 'es') || String(a.l.code).localeCompare(String(b.l.code), 'es', { numeric: true }));
+    const vac = global.Envases && ctx.productsById ? global.Envases.orderVac(order, ctx.productsById) : null;
+    const qty = (x) => [x.cajas ? `${x.cajas} CJ` : '', x.unidades ? `${x.unidades} UN` : ''].filter(Boolean).join(' + ');
+    const row = (k, v) => (v ? `<div class="kv"><b>${esc(k)}</b> ${esc(v)}</div>` : '');
+    return `<section class="t">
+      ${copy ? `<div class="cp">${esc(copy)}</div>` : ''}
+      <div class="c big">${esc(co.name || 'Distribuidora')}</div>
+      <div class="c">${esc([co.rif && 'RIF ' + co.rif, co.phone && 'Tel. ' + co.phone].filter(Boolean).join(' · '))}</div>
+      ${co.address ? `<div class="c sm">${esc(co.address)}</div>` : ''}
+      <div class="title">NOTA DE DESPACHO</div>
+      ${row('Hoja:', load ? [Loads.labelOf(load), load.number ? Loads.loadCode(load) : ''].filter(Boolean).join(' · ') : '')}
+      ${row('Nota Valery:', order.valeryNote || '')}
+      ${row('Fecha:', fdate((load && load.date ? load.date + 'T12:00:00' : '') || order.dispatchedAt || new Date().toISOString()))}
+      <hr>
+      <div class="cli">${esc(order.clientName)}</div>
+      ${row('RIF/C.I.:', client.rif || order.clientRif || '')}
+      ${row('Dir.:', client.address || '')}
+      ${row('Tel.:', client.phone || '')}
+      ${row('Vendedor:', order.sellerName)}
+      ${row('Ruta:', order.route || '')}
+      ${row('Despachador:', load ? load.dispatcherName || '' : '')}
+      <hr>
+      ${lines.map(({ l, x }) => `<div class="ln"><div class="q">${esc(qty(x))}</div><div class="d">${esc(l.code)} ${esc(l.name)} ${esc(l.presentation || '')}</div></div>
+        ${opts.prices ? `<div class="pr">${[x.cajas ? `${x.cajas} × ${nf2.format(+l.boxPrice || 0)}` : '', x.unidades ? `${x.unidades} × ${nf2.format(+l.unitPrice || 0)}` : ''].filter(Boolean).join(' + ')} = <b>$ ${nf2.format(x.monto)}</b></div>` : ''}`).join('')}
+      <hr>
+      <div class="tot">${t.cajas} CJ + ${t.unidades} UN · ${t.bultos} bultos · ${t.items} renglones</div>
+      ${opts.prices ? `<div class="tot big">TOTAL $ ${nf2.format(t.monto)}</div>${rate ? `<div class="tot">Bs ${nf2.format(t.monto * rate)} <span class="sm">(tasa ${nf2.format(rate)})</span></div>` : ''}` : ''}
+      ${vac && vac.contra && vac.toReceive ? `<div class="kv"><b>♻ Vacíos a recibir:</b> ${nf0.format(vac.toReceive)}</div>` : ''}
+      ${order.notes ? `<div class="kv"><b>Obs.:</b> ${esc(order.notes)}</div>` : ''}
+      <div class="sig">Recibido conforme</div><div class="sig">C.I.</div>
+      <div class="c sm" style="margin-top:6px">${esc(fdate(new Date().toISOString()))} ${esc(ftime(new Date().toISOString()))}</div>
+    </section>`;
+  }
+  const ticketCSS = (w) => `@page{margin:0}
+    html,body{margin:0;padding:0;background:#fff} body{width:${w === 58 ? 48 : 72}mm;font:${w === 58 ? 11 : 12.5}px/1.25 Arial,Helvetica,sans-serif;color:#000}
+    .t{padding:1mm 1.5mm 2mm;page-break-after:always;break-after:page}
+    .c{text-align:center} .big{font-size:1.3em;font-weight:900} .sm{font-size:.85em}
+    .title{text-align:center;font-weight:900;font-size:1.25em;border:2px solid #000;margin:4px 0;padding:2px 0;letter-spacing:.04em}
+    .cp{text-align:center;font-weight:900;font-size:.85em;letter-spacing:.08em}
+    .cli{font-weight:900;font-size:1.2em;margin:2px 0} .kv{margin:1px 0} hr{border:0;border-top:1px dashed #000;margin:4px 0}
+    .ln{display:flex;gap:4px;margin-top:3px} .ln .q{font-weight:900;white-space:nowrap;min-width:16mm} .ln .d{flex:1;overflow-wrap:anywhere}
+    .pr{text-align:right;font-size:.95em} .tot{text-align:right;font-weight:900;margin:2px 0;background:none}
+    .sig{border-top:1px solid #000;margin-top:9mm;padding-top:1px;text-align:center;font-size:.9em}`;
+  /** Notas de despacho en ticket: una por cliente (y su copia si se pide). */
+  function printTickets(orders, ctx, o) {
+    const opts = ticketOpts(o);
+    const body = orders.map((x) => opts.copies === 2 ? ticketHTML(x, ctx, opts, 'ORIGINAL · CLIENTE') + ticketHTML(x, ctx, opts, 'COPIA · EMPRESA') : ticketHTML(x, ctx, opts, '')).join('');
+    printHTML('Notas de despacho', ticketCSS(opts.width), body);
+  }
+  /** Ticket de prueba para revisar ancho, margen y corte. */
+  function printTestTicket(ctx, o) {
+    const opts = ticketOpts(o);
+    const demo = { clientName: 'CLIENTE DE PRUEBA', sellerName: 'Vendedor', route: 'RUTA', valeryNote: '0000', notes: 'Si este texto sale completo y centrado, la impresora está lista.',
+      lines: { a: { code: '102', name: 'REFRESCO 1,25 L', presentation: '', category: 'PRUEBA', unitsPerBox: 6, boxPrice: 10, unitPrice: 2, cajas: 3, unidades: 2 },
+        b: { code: '669', name: 'PRODUCTO CON UN NOMBRE MUY LARGO PARA VER CÓMO SE PARTE', presentation: '350 ML', category: 'PRUEBA', unitsPerBox: 24, boxPrice: 8.5, unitPrice: 0, cajas: 12, unidades: 0 } } };
+    printHTML('Ticket de prueba', ticketCSS(opts.width), ticketHTML(demo, { ...ctx, load: null }, opts, `PRUEBA · ${opts.width} mm`));
+  }
+
+  global.Print = { printLoadSheet, printNotes, printLiquidation, printKardex, printQuincena, printTickets, printTestTicket };
 })(window);

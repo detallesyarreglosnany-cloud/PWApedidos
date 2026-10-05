@@ -367,6 +367,7 @@
           <button class="btn" id="dMerge">⇄ Fusionar con otra hoja</button>` : ''}
         ${closed ? `<button class="btn btn-primary" id="dLiq">🧾 ${Liq.isDone(load) ? 'Ver liquidación' : 'Liquidar'}</button>` : ''}
         <button class="btn" id="dPrint" title="En la ventana de impresión elige tu impresora o «Guardar como PDF»">🖨 Imprimir / PDF hoja</button>
+        <button class="btn" id="dTicket" ${os.length ? '' : 'disabled'} title="Un ticket por cliente en la impresora térmica (POS-80)">🧾 Notas de despacho (ticket)</button>
         <button class="btn" id="dCsv">⇩ Descargar Excel</button>
         <button class="btn" id="dCopy">📋 Copiar para Excel</button>
         ${editableLoad && !os.length ? '<button class="btn btn-danger" id="dDel">Eliminar hoja vacía</button>' : ''}
@@ -387,7 +388,7 @@
           <td><span class="tag">${esc(Loads.initials(o.sellerName))}</span></td>
           <td class="n" data-l="Bultos">${t.bultos}</td><td class="n" data-l="Unid.">${t.totalUnidades}</td><td class="n" data-l="Monto">${usd(t.monto)}</td>
           <td data-l="Nota Valery"><input class="input sm mono valery-in" inputmode="numeric" maxlength="20" data-oid="${esc(o.id)}" value="${esc(o.valeryNote || '')}" placeholder="N°" aria-label="Nota Valery de ${esc(o.clientName)}"></td>
-          <td style="white-space:nowrap"><button class="btn btn-sm" data-edit="${esc(o.id)}">${editableLoad ? 'Editar' : 'Ver'}</button>
+          <td style="white-space:nowrap"><button class="btn btn-sm" data-ticket="${esc(o.id)}" title="Nota de despacho (ticket)" aria-label="Ticket de ${esc(o.clientName)}">🧾</button> <button class="btn btn-sm" data-edit="${esc(o.id)}">${editableLoad ? 'Editar' : 'Ver'}</button>
             ${editableLoad ? `<button class="btn btn-sm" data-move="${esc(o.id)}">⇄ Mover</button>
             <button class="btn btn-sm" data-hold="${esc(o.id)}" title="Dejar para otra carga">⏸ Espera</button>` : ''}</td></tr>`; }).join('')}</tbody></table></div>`;
 
@@ -401,6 +402,8 @@
     const ctx = () => ({ config: S.config, products: S.products, usage: Loads.usage(cur(), byIdMap(S.orders), S.config), draft: !cur().number, clientsById: byIdMap(S.clients),
       load: cur(), productRank: productRank(), statusName: stName(cur()) });
     $('#dPrint').onclick = () => Print.printLoadSheet(cur(), Loads.loadOrders(cur(), byIdMap(S.orders)), ctx());
+    const tctx = () => ({ config: S.config, clientsById: byIdMap(S.clients), productsById: byIdMap(S.products), load: cur() });
+    $('#dTicket').onclick = () => Print.printTickets(Loads.loadOrders(cur(), byIdMap(S.orders)), tctx(), S.settings.ticket);
     const dl = $('#dLiq'); if (dl) dl.onclick = () => { U().liqId = load.id; renderLiquidation(root, cur()); };
     $('#dCsv').onclick = async () => {
       const L = cur(), os2 = Loads.loadOrders(L, byIdMap(S.orders)), pById = byIdMap(S.products);
@@ -426,6 +429,7 @@
     const dm = $('#dMerge'); if (dm) dm.onclick = () => mergeDialog(cur(), refresh);
     const dd = $('#dDel'); if (dd) dd.onclick = async () => { await saveDocs('loads', { ...cur(), deleted: true }); U().loadId = null; PV.render(); };
     root.onclick = async (e) => {
+      const tk = e.target.closest('[data-ticket]'); if (tk) { Print.printTickets([orderById(tk.dataset.ticket)].filter(Boolean), tctx(), S.settings.ticket); return; }
       const ed = e.target.closest('[data-edit]'); if (ed) { orderEditor(orderById(ed.dataset.edit), refresh); return; }
       const mv = e.target.closest('[data-move]'); if (mv) { moveDialog(orderById(mv.dataset.move), cur(), () => { if (!S.loads.find((x) => x.id === load.id)) { U().loadId = null; PV.render(); } else refresh(); }); return; }
       const lr = e.target.closest('[data-left],[data-right]');
@@ -2023,6 +2027,20 @@
           </div>
           <div class="row" style="margin-top:12px"><button class="btn btn-primary" id="coSave">Guardar</button></div></section>
 
+        <section class="card card-pad"><h3>🧾 Impresora de tickets · notas de despacho</h3>
+          <p class="muted">Impresora térmica de 80 mm (POS-80 / Roccia RC-8002). Sale un ticket por cliente y la impresora corta entre uno y otro. Esta configuración es de este equipo.</p>
+          <div class="grid2">
+            <label class="field"><span>Ancho del papel</span><select id="tWidth" class="select"><option value="80" ${(st.ticket || {}).width !== 58 ? 'selected' : ''}>80 mm (área de impresión 72 mm)</option><option value="58" ${(st.ticket || {}).width === 58 ? 'selected' : ''}>58 mm</option></select></label>
+            <label class="field"><span>Precios en la nota</span><select id="tPrices" class="select"><option value="1" ${(st.ticket || {}).prices !== false ? 'selected' : ''}>Con precios y total $ / Bs</option><option value="0" ${(st.ticket || {}).prices === false ? 'selected' : ''}>Sin precios (solo cantidades)</option></select></label>
+            <label class="field"><span>Copias por cliente</span><select id="tCopies" class="select"><option value="1" ${(st.ticket || {}).copies !== 2 ? 'selected' : ''}>1 (cliente)</option><option value="2" ${(st.ticket || {}).copies === 2 ? 'selected' : ''}>2 (original cliente + copia empresa)</option></select></label>
+          </div>
+          <div class="row wrap" style="margin-top:12px"><button class="btn" id="tTest">🖨 Imprimir ticket de prueba</button></div>
+          <details style="margin-top:10px"><summary><b>Cómo dejarla lista (una sola vez)</b></summary>
+            <ol class="muted" style="margin:8px 0 0;padding-left:18px">
+              <li>En la ventana de impresión de Chrome elige <b>POS-80</b>, papel <b>80(72) x 3276 mm</b>, márgenes <b>Ninguno</b>, escala <b>100</b> o <b>Predeterminada</b> y desmarca <b>Encabezados y pies de página</b>. Chrome lo recuerda.</li>
+              <li>En Windows → Impresoras → POS-80 → Propiedades → <b>Configuración del dispositivo</b>: <b>Cash Drawer</b> = no abrir, <b>Paper Cutting</b> = After one page (corta entre clientes), <b>Blank space at page's end</b> = Do not print, <b>Feed distance after print</b> = feed 5–10 mm para ahorrar papel.</li>
+              <li>Para imprimir <b>sin la ventana de impresión</b> en la PC de despacho: pon POS-80 como impresora predeterminada y abre la app con un acceso directo de Chrome que tenga <code>--kiosk-printing</code> (la hoja de carga en carta imprímela desde el Chrome normal).</li>
+            </ol></details></section>
         <section class="card card-pad"><h3>Sincronización</h3>
           <p class="muted">La clave admin permite a este equipo publicar catálogo, clientes, precios, rutas y cargas hacia los teléfonos.</p>
           <div class="grid2">
@@ -2039,6 +2057,9 @@
       </div>`;
 
     const saveCfg = async (patch) => { await saveDocs('config', { ...S.config, ...patch }); renderSettings(root); toast('Guardado', 'ok'); };
+    const tSave = async () => { await PV.saveSettings({ ticket: { width: +$('#tWidth').value === 58 ? 58 : 80, prices: $('#tPrices').value === '1', copies: +$('#tCopies').value === 2 ? 2 : 1 } }); toast('Impresora de tickets guardada', 'ok'); };
+    ['#tWidth', '#tPrices', '#tCopies'].forEach((x) => { $(x).onchange = tSave; });
+    $('#tTest').onclick = () => Print.printTestTicket({ config: S.config, clientsById: byIdMap(S.clients), productsById: byIdMap(S.products) }, S.settings.ticket);
     const lSave = () => saveCfg({ load: { limit: Math.max(1, int($('#lLimit').value)), maxClients: Math.max(1, int($('#lMax').value)), measure: $('#lMeasure').value } });
     ['#lLimit', '#lMax', '#lMeasure'].forEach((s) => { $(s).onchange = lSave; });
     $('#lExtra').onchange = (e) => saveCfg({ sheetExtraCols: e.target.value.split(',').map((x) => x.trim().toUpperCase()).filter(Boolean).slice(0, 6) });
