@@ -429,6 +429,12 @@ tr.liq-count td { background: var(--brand-soft); }
 tr.liq-bad td { background: rgba(255, 77, 90, .14); }
 .warn-txt { color: var(--warn); font-weight: 800; }
 table.liq-vac input.qin { width: 64px; }
+/* Cuadre del camión: amarillo = se escribe a mano */
+table.liq-truck input.qin { width: 72px; }
+table.liq-truck th.in { color: var(--accent); }
+table.liq-truck td.in input { background: rgba(255, 214, 102, .14); border-color: rgba(255, 214, 102, .55); }
+table.liq-truck td.in input.sm { min-width: 150px; }
+table.liq-truck tfoot td { border-top: 2px solid var(--line); }
 table.liq-notes .select.sm { min-width: 150px; }
 table.liq-grid th.lq { background: #3a2f0e; color: var(--accent); vertical-align: bottom; }
 table.liq-grid th.lq.usd, table.liq-grid td.lq-usd { position: sticky; right: 0; z-index: 2; background: #3a2f0e; font-weight: 900; box-shadow: -6px 0 10px rgba(0,0,0,.35); }
