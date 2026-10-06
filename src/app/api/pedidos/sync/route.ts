@@ -52,6 +52,8 @@ type Kind = (typeof KINDS)[number];
 // (aunque su copia local esté atrasada y no sepa que el pedido ya está en una hoja).
 const OFFICE_ORDER_FIELDS = ['loadId', 'locked', 'loadStatusName', 'noteNumber', 'loadNumber', 'dispatchedAt', 'officeEdited', 'heldAt', 'valeryNote', 'officeMsgs', 'delivery', 'pendingFrom'];
 const OFFICE_ORDER_STATUS: readonly string[] = ['en_carga', 'en_espera', 'despachado'];
+// Datos del cliente que solo cambia la oficina (el vendedor actualiza el resto de la ficha)
+const CLIENT_OFFICE_FIELDS = ['creditDays', 'creditLimit', 'active', 'group', 'formerSellerIds'];
 // Solo se guardan en el equipo: el servidor calcula dupWith en cada bajada
 const LOCAL_ONLY_FIELDS = ['dirty', 'dupWith'];
 const MAX_BODY_BYTES = 4 * 1024 * 1024; // Vercel corta en 4,5 MB; el cliente envía tandas de ~2,5 MB
@@ -210,16 +212,45 @@ function later(...ts: string[]) {
  * (el equipo toma como «sin alerta» los que no vienen). from = desde qué día rige.
  */
 async function duplicates(sellerId: string | null) {
-  const from = daysAgo(DUP_WINDOW_DAYS), read = daysAgo(DUP_WINDOW_DAYS * 2);
-  const orders = await db.$queryRaw<DupOrder[]>`
+  const from = daysAgo(DUP_WINDOW_DAYS);
+  const orders = await dupOrders();
+  const pairs = dupPairs(orders, (o) => String(o.routeDate || '') >= from && (!sellerId || o.sellerId === sellerId));
+  return { from, map: Object.fromEntries(pairs) };
+}
+
+/** Lo mínimo de cada pedido reciente para comparar (no el pedido completo). */
+async function dupOrders() {
+  const read = daysAgo(DUP_WINDOW_DAYS * 2);
+  return db.$queryRaw<DupOrder[]>`
     SELECT "id", "sellerId", "routeDate", "status", ("data"::jsonb ->> 'loadId') AS "loadId",
       ("data"::jsonb ->> 'sellerName') AS "sellerName", ("data"::jsonb ->> 'clientId') AS "clientId",
       ("data"::jsonb ->> 'clientKey') AS "clientKey", ("data"::jsonb ->> 'clientName') AS "clientName",
       ("data"::jsonb ->> 'pendingFrom') AS "pendingFrom", ("data"::jsonb ->> 'extraOk') AS "extraOk",
       ("data"::jsonb -> 'delivery' ->> 'result') AS "result"
     FROM "DistDoc" WHERE "kind" = 'orders' AND "deleted" = false AND "routeDate" >= ${read}`;
-  const pairs = dupPairs(orders, (o) => String(o.routeDate || '') >= from && (!sellerId || o.sellerId === sellerId));
-  return { from, map: Object.fromEntries(pairs) };
+}
+
+/**
+ * Pedidos recién enviados que coinciden con otro (mismo cliente o nombre parecido
+ * en 4 días): aviso push al vendedor del pedido, al vendedor del otro pedido y a la oficina.
+ */
+async function dupNotices(ids: string[]): Promise<Notice[]> {
+  const orders = await dupOrders();
+  const want = new Set(ids), byId = new Map(orders.map((o) => [o.id, o]));
+  const out: Notice[] = [];
+  const title = '⚠ Posible pedido duplicado';
+  for (const [id, hits] of dupPairs(orders, (o) => want.has(o.id))) {
+    const o = byId.get(id); const real = hits.filter((h) => !h.extra);
+    if (!o || !real.length) continue;
+    const txt = real.map((h) => `${h.kind === 'similar' ? '«' + h.clientName + '» ' : ''}${h.sellerName} ${h.routeDate}`).join('; ');
+    if (o.sellerId) out.push({ to: 'seller', sellerId: o.sellerId, msg: { title, body: `${o.clientName}: también tiene pedido (${txt}). Verifica que no sea el mismo.`, tag: `o-${id}-dup` } });
+    for (const h of real) {
+      const x = byId.get(h.id);
+      if (x && x.sellerId && x.sellerId !== o.sellerId) out.push({ to: 'seller', sellerId: x.sellerId, msg: { title, body: `${x.clientName}: ${o.sellerName} también le tomó pedido (${o.routeDate}). Verifica con la oficina.`, tag: `o-${h.id}-dup` } });
+    }
+    out.push({ to: 'office', sellerId: o.sellerId || '', msg: { title, body: `${o.clientName} (${o.sellerName}): ${txt}`, tag: `o-${id}-dup` } });
+  }
+  return out;
 }
 
 // Lo que ve un vendedor de una hoja de carga: estado, número, fecha, ruta y
@@ -340,6 +371,7 @@ export async function POST(req: NextRequest) {
   const accepted = Object.fromEntries(KINDS.map((k) => [k, [] as string[]])) as Record<Kind, string[]>;
   const rejected: { kind: Kind; id: string; reason: string; doc?: Doc }[] = [];
   const notices: Notice[] = [];
+  const sentNow: string[] = [];
   const maxTs = new Date(serverTime.getTime() + 60_000).toISOString();
 
   try {
@@ -374,6 +406,7 @@ export async function POST(req: NextRequest) {
         const existingById = new Map(existingRows.map((r) => [r.id, r]));
         const toWrite: Row[] = [];
         const pending = new Map<string, Notice>();
+        const newlySent = new Set<string>();
 
         for (const raw of part) {
           let doc: Doc = { ...raw };
@@ -408,6 +441,19 @@ export async function POST(req: NextRequest) {
             if (existing) { accepted[kind].push(doc.id); continue; }
             toWrite.push(toRow(kind, doc));
             continue;
+          }
+          // Un teléfono no cambia lo que decide la oficina sobre un cliente (crédito, estado…)
+          if (!isAdmin && kind === 'clients') {
+            const d = doc as Record<string, unknown>;
+            for (const f of CLIENT_OFFICE_FIELDS) { if (cur && f in cur) d[f] = cur[f]; else delete d[f]; }
+            if (!cur || !('active' in cur)) d.active = true;
+            // Verificación: solo la oficina verifica. Cliente nuevo del vendedor, o cambio
+            // de nombre / RIF de uno verificado → «por verificar»
+            const digitsOf = (v: unknown) => String(v || '').replace(/\D/g, '');
+            const curVerified = !!cur && (cur.verified === true || (cur.verified !== false && cur.source !== 'campo'));
+            if (!cur) { d.verified = false; d.verifyReason = 'cliente nuevo'; delete d.verifiedAt; delete d.verifiedBy; }
+            else if (curVerified && (String(d.name || '') !== String(cur.name || '') || digitsOf(d.rif) !== digitsOf(cur.rif))) { d.verified = false; d.verifyReason = 'el vendedor cambió nombre o RIF'; }
+            else { for (const f of ['verified', 'verifiedAt', 'verifiedBy', 'verifyReason']) { if (f in cur) d[f] = cur[f]; else delete d[f]; } }
           }
           if (!isAdmin && (kind === 'orders' || kind === 'clients')) {
             // Nunca se escribe ni se reasigna un pedido o cliente de otro vendedor
@@ -465,6 +511,7 @@ export async function POST(req: NextRequest) {
           if (kind === 'orders') {
             const n = orderNotice(cur as Record<string, unknown> | null, doc as Record<string, unknown>, isAdmin);
             if (n) pending.set(doc.id, n);
+            if (isSent(doc as Record<string, unknown>) && !isSent(cur as Record<string, unknown> | null)) newlySent.add(doc.id);
           }
           toWrite.push(toRow(kind, doc));
         }
@@ -488,6 +535,7 @@ export async function POST(req: NextRequest) {
           }
         }
         pending.forEach((n, id) => { if (written.has(id)) notices.push(n); });
+        newlySent.forEach((id) => { if (written.has(id)) sentNow.push(id); });
         if (lost.length) {
           // Otro equipo escribió una versión más nueva entre la lectura y la escritura
           const now = await db.distDoc.findMany({ where: { kind, id: { in: lost.map((r) => r.id) } } });
@@ -496,6 +544,8 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Pedido nuevo que coincide con otro: también avisa a los vendedores
+    if (sentNow.length) { try { notices.push(...(await dupNotices(sentNow))); } catch (e) { console.warn('[dup]', e); } }
     // Avisos push: se envían después de responder (no hacen esperar al teléfono)
     if (notices.length) {
       after(async () => {

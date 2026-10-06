@@ -50,7 +50,7 @@
   function similar(name, clients, min) {
     const digits = String(name || '').replace(/\D/g, '');
     return clients.map((c) => {
-      let s = score(name, c.name);
+      let s = Math.max(score(name, c.name), c.tradeName ? score(name, c.tradeName) : 0);
       if (digits.length >= 6 && (String(c.rif || '').replace(/\D/g, '').includes(digits) || String(c.phone || '').replace(/\D/g, '').includes(digits))) s = 1;
       return { c, s };
     }).filter((x) => x.s >= (min || 0.5)).sort((a, b) => b.s - a.s || a.c.name.localeCompare(b.c.name, 'es')).slice(0, 6).map((x) => x.c);

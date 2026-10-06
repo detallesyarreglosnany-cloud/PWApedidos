@@ -301,9 +301,9 @@
     // También se recarga si el servidor devolvió su versión de algo rechazado:
     // si no, la pantalla seguiría mostrando (y volvería a guardar) la copia vieja.
     if (r.ok && (r.pulled || r.reverted)) {
-      const before = new Map(S.orders.map((o) => [o.id, o]));
+      const before = new Map(S.orders.map((o) => [o.id, o])), beforeCli = new Set(S.clients.map((c) => c.id));
       await loadAll();
-      if (!firstSync) await detectNotifs(before);
+      if (!firstSync) await detectNotifs(before, beforeCli);
       refreshAfterRemote();
     }
     updateSyncPill();
@@ -357,10 +357,10 @@
   const NOTIF_TITLE = {
     pedido: '🧾 Nuevo pedido', editado: '✏️ Pedido modificado', duplicado: '⚠️ Cliente duplicado', borrado: '🗑 Pedido eliminado', mensaje: '💬 Mensaje de la oficina',
     aprobado: '✅ Pedido aprobado', espera: '⏸ Pedido en espera', despachado: '🚚 Pedido despachado', ajustado: '✏️ Pedido ajustado',
-    liquidado: '✓ Pedido liquidado', oficina: '🏢 Pedido cargado por la oficina',
+    liquidado: '✓ Pedido liquidado', oficina: '🏢 Pedido cargado por la oficina', cliente: '🕓 Cliente por verificar',
   };
   // Mismo tag que usa el servidor en el aviso push: si llegan los dos, se ve uno solo
-  const NOTIF_EV = { mensaje: 'msg', pedido: 'new', editado: 'mod', borrado: 'del', aprobado: 'apr', espera: 'esp', despachado: 'desp', ajustado: 'aj', duplicado: 'dup', liquidado: 'liq', oficina: 'ofi' };
+  const NOTIF_EV = { mensaje: 'msg', pedido: 'new', editado: 'mod', borrado: 'del', aprobado: 'apr', espera: 'esp', despachado: 'desp', ajustado: 'aj', duplicado: 'dup', liquidado: 'liq', oficina: 'ofi', cliente: 'cli' };
   const SENT = ['enviado', 'en_carga', 'en_espera', 'despachado'];
   const isSent = (x) => !!x && !x.deleted && SENT.includes(x.status);
   /**
@@ -369,12 +369,19 @@
    * modificado o eliminado por el vendedor, cliente duplicado.
    * Vendedor: su pedido fue aprobado, puesto en espera, despachado, ajustado o eliminado por la oficina.
    */
-  async function detectNotifs(before) {
+  async function detectNotifs(before, beforeCli) {
     const office = isOffice();
     const sid = S.session && S.session.sellerId;
     if (!office && (!sid || isSupervisor())) return;
     const out = [];
     const add = (kind, o, msg, warn) => out.push({ icon: NOTIF_TITLE[kind].split(' ')[0], kind, orderId: o.id, msg, warn: !!warn });
+    if (office) {
+      // Cliente nuevo registrado por un vendedor: la oficina lo verifica
+      const prevCli = beforeCli || new Set(S.clients.map((c) => c.id));
+      (await DB.getAll('clients')).forEach((c) => {
+        if (!c.deleted && !prevCli.has(c.id) && c.verified === false && c.source === 'campo') out.push({ icon: '🕓', kind: 'cliente', orderId: c.id, msg: `${c.name} · registrado por ${c.createdByName || 'un vendedor'}: revisa sus datos y verifícalo`, warn: true });
+      });
+    }
     const all = await DB.getAll('orders');
     all.forEach((o) => {
       const p = before.get(o.id);
@@ -389,6 +396,10 @@
       // Pedido que la oficina cargó a su nombre (solo los de hoy en adelante: un equipo nuevo no se llena de avisos)
       if (o.sellerId === sid && !p && o.createdBy === 'oficina' && isSent(o) && String(o.routeDate) >= today()) { add('oficina', o, `${o.clientName} · ${usd(Matrix.orderTotals(o).monto)}`); return; }
       if (o.sellerId !== sid || !p) return;
+      // Posible pedido duplicado (mismo cliente o nombre parecido en 4 días, de él o de otro vendedor)
+      const realD = (x) => (x.dupWith || []).filter((d) => !d.extra);
+      const newD = realD(o).filter((d) => !realD(p).some((q) => q.id === d.id));
+      if (!o.deleted && newD.length) add('duplicado', o, `${o.clientName}: ${newD.map((d) => `${d.kind === 'similar' ? 'nombre parecido «' + d.clientName + '» ' : ''}${d.sellerName === o.sellerName ? 'tienes otro pedido' : 'pedido de ' + d.sellerName} del ${fmtDate(d.routeDate)}`).join('; ')} — verifica que no sea el mismo`, true);
       const om = o.officeMsgs || [], pm = p.officeMsgs || [];
       if (om.length > pm.length) add('mensaje', o, `${o.clientName}: ${om[om.length - 1].text}`, true);
       if (o.delivery && o.delivery.at && !(p.delivery && p.delivery.at)) {
@@ -539,6 +550,7 @@
     if (h.startsWith('#/oficina')) return PV.renderOffice(h.split('/')[2] || 'cargas');
     if (h.startsWith('#/supervisor')) return PV.renderSupervisor(h.split('/')[2] || 'resumen');
     if (h === '#/ruta/pedidos' && S.session && sellerById(S.session.sellerId)) return renderSellerOrders();
+    if (h === '#/ruta/clientes' && S.session && sellerById(S.session.sellerId)) return renderMyClients();
     if (h === '#/ruta' && S.session && sellerById(S.session.sellerId)) return renderSeller();
     return renderLogin();
   }
@@ -699,6 +711,11 @@
     let client = opts.client || myClients().find((c) => norm(c.name) === norm(name));
     // 1) Escrito a mano y no está tal cual: primero se ofrecen los parecidos
     if (!client && !opts.isNew) { pickClientSheet(name, Dedup.similar(name, myClients())); return; }
+    // 1b) Cliente nuevo: se registra con su ficha completa (nombre, RIF, teléfono, dirección…)
+    if (!client && opts.isNew && !opts.quick) {
+      Clientes.formSheet(null, { mode: 'seller', prefillName: name, defaults: { route: S.session.route || '' }, onSaved: (c) => openClient(c.name, { client: c, extra: opts.extra }) });
+      return;
+    }
     if (client) name = client.name;
     const key = norm(name);
     // 2) Pedido de hoy aún editable: se abre ese (no se crea otro)
@@ -713,8 +730,8 @@
     if (!o) {
       if (!client) {
         // Cliente nuevo captado en la calle: la oficina lo verá en Clientes
-        client = { id: DB.uid('c'), rif: '', name, phone: '', address: '', group: '', creditDays: 0,
-          sellerId: seller.id, route: S.session.route || '', active: true, source: 'campo', deleted: false };
+        client = { id: DB.uid('c'), rif: '', name: name.toUpperCase(), phone: '', address: '', group: '', creditDays: 0,
+          sellerId: seller.id, route: S.session.route || '', active: true, source: 'campo', verified: false, verifyReason: 'cliente nuevo', createdAt: DB.now(), createdByName: seller.name, deleted: false };
         await saveDocs('clients', client);
         await logEvent('cliente_nuevo', `Creó el cliente nuevo ${client.name}`, { clientId: client.id, clientName: client.name });
       }
@@ -817,6 +834,9 @@
     app.innerHTML = `
       ${brandHeader(seller.name, 'Ruta ' + (S.session.route || '—') + ' · ' + fmtDate(today()),
         `<button id="bell" class="bell" type="button" aria-label="Notificaciones">🔔</button><button id="syncPill" class="pill" type="button"></button><button class="icon-btn ghost" id="menuBtn" aria-label="Menú">☰</button>`)}
+      <nav class="quick-nav" id="quickNav" aria-label="Accesos">
+        <button type="button" data-go="pedidos">🧾 Mis pedidos</button><button type="button" data-go="hojas">🚚 Mis hojas</button>
+        <button type="button" data-go="clientes">👥 Mis clientes</button><button type="button" data-go="vacios">♻ Vacíos</button></nav>
       <section class="client-bar">
         <div class="row wrap client-row">
           ${routes.length > 1 ? `<select id="routeSel" class="select route-sel" aria-label="Ruta del día">
@@ -832,7 +852,7 @@
           ${orders.length ? orders.map((x) => {
             const t = Matrix.orderTotals(x);
             return `<button class="chip ${o && o.id === x.id ? 'active' : ''} st-${x.status}" data-oid="${esc(x.id)}" role="tab">
-              ${markOf(x)}${x.createdBy === 'oficina' ? '🏢 ' : ''}${esc(x.clientName)} <span class="badge">${usd(t.monto)}</span></button>`;
+              ${markOf(x)}${x.createdBy === 'oficina' ? '🏢 ' : ''}${(x.dupWith || []).some((d) => !d.extra) ? '⚠ ' : ''}${esc(x.clientName)} <span class="badge">${usd(t.monto)}</span></button>`;
           }).join('') : '<span class="muted" style="padding:10px 2px">Escribe el primer cliente de tu ruta de hoy.</span>'}
         </div>
       </section>
@@ -853,6 +873,12 @@
 
     const rs = $('#routeSel');
     if (rs) rs.onchange = async () => { await setSession({ ...S.session, route: rs.value }); renderSeller(); };
+    $('#quickNav').onclick = (e) => {
+      const b = e.target.closest('[data-go]'); if (!b) return;
+      if (b.dataset.go === 'clientes') { location.hash = '#/ruta/clientes'; return; }
+      S.ui.myo = { ...(S.ui.myo || { g: 'todos', r: '15' }), tab: b.dataset.go };
+      location.hash = '#/ruta/pedidos';
+    };
     $('#clientForm').onsubmit = (e) => { e.preventDefault(); $('#clientSug').innerHTML = ''; openClient($('#clientInput').value); };
     // Buscador: desde 2 letras muestra coincidencias de la cartera (nombre, RIF,
     // dirección o teléfono); si no aparece, se escribe y se crea como nuevo.
@@ -863,9 +889,9 @@
       const tokens = q.split(' ').filter(Boolean);
       const clean = (x) => norm(x).replace(/^[^a-z0-9]+/, '');
       const rank = (c) => (clean(c.name).startsWith(q) ? 0 : clean(c.name).split(' ').some((w) => w.startsWith(tokens[0])) ? 1 : 2);
-      const hits = clients.filter((c) => { const h = norm(c.name + ' ' + c.rif + ' ' + c.address + ' ' + c.phone); return tokens.every((t) => h.includes(t)); })
+      const hits = clients.filter((c) => { const h = norm(c.name + ' ' + (c.tradeName || '') + ' ' + c.rif + ' ' + c.address + ' ' + c.phone); return tokens.every((t) => h.includes(t)); })
         .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name, 'es')).slice(0, 8);
-      sug.innerHTML = hits.map((c) => `<button type="button" class="sug-item" data-name="${esc(c.name)}"><b>${esc(c.name)}</b><small>${esc([c.rif, c.address].filter(Boolean).join(' · '))}</small></button>`).join('') +
+      sug.innerHTML = hits.map((c) => `<button type="button" class="sug-item" data-name="${esc(c.name)}"><b>${esc(c.name)}</b><small>${esc([c.tradeName, c.rif, c.address].filter(Boolean).join(' · '))}</small></button>`).join('') +
         `<button type="button" class="sug-item new" data-name="${esc(e.target.value.trim())}">＋ Usar «${esc(e.target.value.trim())}» como cliente nuevo</button>`;
     });
     sug.onclick = (e) => { const b = e.target.closest('[data-name]'); if (b) { sug.innerHTML = ''; openClient(b.dataset.name); } };
@@ -1116,7 +1142,7 @@
         <div id="cfList" class="pick-list" style="margin-top:8px">${list('')}</div>`
         : `<div class="hint warn">${liquidated(o) ? 'Este pedido ya está liquidado: no cambia de cliente (sus vacíos ya están en el kardex).' : 'Este pedido ya está aprobado: el cambio de cliente lo hace la oficina.'} Sí puedes corregir el nombre.</div>`}
       ${canRename ? `<div class="section-title" style="margin:16px 0 6px">${canMove ? '2 · ' : ''}Corregir el nombre de este cliente <span class="muted">(se corrige en todos sus pedidos)</span></div>
-        <div class="row" style="gap:6px"><input id="cfName" class="input grow" maxlength="80" value="${esc(o.clientName)}"><button type="button" class="btn btn-sm" id="cfUp" title="Pasar a MAYÚSCULAS">AA</button></div>
+        <div class="row" style="gap:6px"><input id="cfName" class="input grow" maxlength="80" value="${esc(o.clientName.toUpperCase())}" style="text-transform:uppercase"><button type="button" class="btn btn-sm" id="cfUp" title="Pasar a MAYÚSCULAS">AA</button></div>
         <div class="actions"><button class="btn btn-primary" id="cfSave">Guardar nombre</button></div>` : ''}`, { wide: true });
     const done = () => { sh.close(); if (opts.onDone) opts.onDone(); runSync(false); };
     const q = $('#cfQ', sh.el);
@@ -1148,14 +1174,14 @@
     });
     const save = $('#cfSave', sh.el);
     if (save) save.onclick = async () => {
-      const name = $('#cfName', sh.el).value.replace(/\s+/g, ' ').trim().slice(0, 80);
+      const name = $('#cfName', sh.el).value.replace(/\s+/g, ' ').trim().slice(0, 80).toUpperCase();
       if (!name) return;
       const cur2 = orderById(o.id) || o;
       if (name === cur2.clientName) { sh.close(); return; }
       const clash = pool.find((c) => norm(c.name) === norm(name));
       if (clash && canMove) { toast(`Ya existe «${clash.name}»: elígelo en la lista (así se unen y queda uno solo)`, 'err'); $('#cfQ', sh.el).value = clash.name; $('#cfList', sh.el).innerHTML = list(clash.name); return; }
       if (cur) {
-        await saveDocs('clients', { ...cur, name });
+        await saveDocs('clients', { ...cur, name, ...(!office && Clientes.isVerified(cur) ? { verified: false, verifyReason: 'el vendedor cambió el nombre' } : {}) });
         const mine = S.orders.filter((x) => !x.deleted && x.clientId === cur.id && (office || editable(x)));
         await saveDocs('orders', mine.map((x) => ({ ...x, clientName: name, clientKey: norm(name), clientFixedAt: DB.now() })));
       } else {
@@ -1229,6 +1255,53 @@
   }
   document.addEventListener('click', (e) => { if (e.target.closest('[data-search]')) searchSheet(); });
 
+  /* ============================ Mis clientes ============================ */
+  // El vendedor ve completa su cartera, registra clientes nuevos con todos sus
+  // datos y actualiza los que tiene (no cambia crédito, vendedor ni estado).
+  function renderMyClients() {
+    const seller = sellerById(S.session.sellerId), sid = seller.id;
+    const f = S.ui.myc || (S.ui.myc = { q: '', faltan: false });
+    const all = myClients();
+    const tokens = norm(f.q).split(' ').filter(Boolean);
+    const list = all.filter((c) => (!f.faltan || Clientes.missing(c).length) &&
+      (!tokens.length || tokens.every((t) => norm([c.name, c.tradeName, c.rif, c.phone, c.address, c.reference, c.route].join(' ')).includes(t))));
+    const incompletos = all.filter((c) => Clientes.missing(c).length).length;
+    const lastOrder = (c) => S.orders.filter((o) => !o.deleted && o.clientId === c.id).sort((a, b) => String(b.routeDate).localeCompare(String(a.routeDate)))[0];
+    app.innerHTML = `
+      ${brandHeader(seller.name, 'Mis clientes · ' + all.length + ' en mi cartera',
+        `<button id="bell" class="bell" type="button" aria-label="Notificaciones">🔔</button><button id="syncPill" class="pill" type="button"></button><a class="btn btn-sm" href="#/ruta">← Pedir</a>`)}
+      <div class="container">
+        <div class="row wrap" style="gap:8px"><input id="mcQ" class="input grow" type="search" placeholder="Buscar por nombre, negocio, RIF, teléfono o dirección…" value="${esc(f.q)}">
+          <button class="btn btn-primary" id="mcNew">＋ Cliente nuevo</button></div>
+        <div class="chips" style="margin-top:8px"><button class="chip ${f.faltan ? '' : 'active'}" data-f="0">Todos (${all.length})</button><button class="chip ${f.faltan ? 'active' : ''}" data-f="1">⚠ Les faltan datos (${incompletos})</button></div>
+        ${list.length ? `<div class="card" style="overflow:auto;margin-top:8px"><table class="inv"><tbody>${list.map((c) => { const miss = Clientes.missing(c), lo = lastOrder(c); return `<tr data-cli="${esc(c.id)}" style="cursor:pointer">
+          <td><b>${esc(c.name)}</b>${c.tradeName ? ` <span class="muted">· ${esc(c.tradeName)}</span>` : ''}<div class="muted" style="font-size:12px">${esc([c.rif, c.phone, c.address].filter(Boolean).join(' · ') || 'Sin datos')}</div>
+            ${Clientes.isVerified(c) ? '' : '<span class="status abierto">🕓 por verificar</span> '}${miss.length ? `<span class="status en_espera">⚠ falta: ${esc(miss.join(', '))}</span>` : ''}</td>
+          <td class="n" data-l="Último pedido">${lo ? esc(fmtDate(lo.routeDate)) : '<span class="muted">—</span>'}</td></tr>`; }).join('')}</tbody></table></div>`
+          : '<div class="empty card" style="margin-top:8px"><strong>Sin clientes</strong>con esa búsqueda.</div>'}
+      </div>${creditFooter()}`;
+    $('#bell').onclick = notifSheet; updateBell();
+    $('#syncPill').onclick = () => runSync(true); updateSyncPill();
+    let qt; $('#mcQ').oninput = (e) => { clearTimeout(qt); qt = setTimeout(() => { f.q = e.target.value; renderMyClients(); const i = $('#mcQ'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 250); };
+    app.querySelector('.chips').onclick = (e) => { const b = e.target.closest('[data-f]'); if (b) { f.faltan = b.dataset.f === '1'; renderMyClients(); } };
+    $('#mcNew').onclick = () => Clientes.formSheet(null, { mode: 'seller', defaults: { route: S.session.route || '' }, onSaved: () => renderMyClients() });
+    app.onclick = (e) => { const r = e.target.closest('[data-cli]'); if (r) myClientSheet(clientById(r.dataset.cli)); };
+  }
+  function myClientSheet(c) {
+    if (!c) return;
+    const orders = S.orders.filter((o) => !o.deleted && o.clientId === c.id).sort((a, b) => String(b.routeDate).localeCompare(String(a.routeDate)));
+    const miss = Clientes.missing(c);
+    const sh = openSheet(`
+      <div class="row"><h2 class="grow">${esc(c.name)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      ${miss.length ? `<div class="hint warn">⚠ Le falta: ${esc(miss.join(', '))}. Complétalo con «Editar datos».</div>` : ''}
+      ${Clientes.infoHTML(c)}
+      <div class="section-title" style="margin:14px 0 6px">Últimos pedidos (${orders.length})</div>
+      ${orders.length ? `<table class="inv">${orders.slice(0, 5).map((o) => `<tr><td>${esc(fmtDate(o.routeDate))}<div class="muted" style="font-size:12px">${esc(Loads.orderLabel(o))}${o.valeryNote ? ' · Nota ' + esc(o.valeryNote) : ''}</div></td><td class="n">${usd(o.delivery && o.delivery.at ? o.delivery.monto : Matrix.orderTotals(o).monto)}</td></tr>`).join('')}</table>` : '<p class="muted">Todavía no tiene pedidos.</p>'}
+      <div class="actions"><button class="btn" id="mcEdit">✎ Editar datos</button><button class="btn btn-primary" id="mcOrder">🧾 Tomar pedido</button></div>`, { wide: true });
+    $('#mcEdit', sh.el).onclick = () => { sh.close(); Clientes.formSheet(c, { mode: 'seller', onSaved: (n) => { renderMyClients(); myClientSheet(clientById(n.id) || n); } }); };
+    $('#mcOrder', sh.el).onclick = () => { sh.close(); location.hash = '#/ruta'; setTimeout(() => openClient(c.name, { client: c }), 50); };
+  }
+
   /* ====================== Mis pedidos (seguimiento) ====================== */
   // El vendedor sigue TODOS sus pedidos (no solo los de hoy): enviados, aprobados,
   // en espera y despachados, con lo que ajustó la oficina, y las hojas de carga
@@ -1273,7 +1346,7 @@
       const t = Matrix.orderTotals(o), l = loadOf(o), g = groupOf(o), d = isLiquidated(o) ? o.delivery : null;
       return `<tr data-myo="${esc(o.id)}" style="cursor:pointer">
         <td><b>${esc(o.clientName)}</b><div class="muted" style="font-size:12px">${esc(fmtDate(o.routeDate))}${l ? ' · ' + esc(Loads.labelOf(l)) + (l.number ? ' · ' + esc(Loads.loadCode(l)) : '') : ''}${o.valeryNote ? ' · Nota ' + esc(o.valeryNote) : ''}${(o.officeMsgs || []).length ? ' · 💬 ' + o.officeMsgs.length : ''}</div>
-          ${d ? liqBadge(d) : `<span class="status ${g === 'aprobados' ? 'en_carga' : o.status}">${esc(GROUP_TEXT[g])}</span>`}${o.createdBy === 'oficina' ? ' <span class="status aprobada">🏢 cargado por oficina</span>' : ''}${o.officeEdited ? ' <span class="status en_espera">ajustado por oficina</span>' : ''}</td>
+          ${d ? liqBadge(d) : `<span class="status ${g === 'aprobados' ? 'en_carga' : o.status}">${esc(GROUP_TEXT[g])}</span>`}${o.createdBy === 'oficina' ? ' <span class="status aprobada">🏢 cargado por oficina</span>' : ''}${o.officeEdited ? ' <span class="status en_espera">ajustado por oficina</span>' : ''}${(o.dupWith || []).some((d) => !d.extra) ? ' <span class="status over">⚠ posible duplicado</span>' : ''}</td>
         <td class="n" data-l="Monto">${d ? `${usd(d.monto)}${Math.abs(d.monto - t.monto) > 0.004 ? `<div class="muted" style="font-size:12px;text-decoration:line-through">${usd(t.monto)}</div>` : ''}` : usd(t.monto)}</td></tr>`;
     };
     app.innerHTML = `
@@ -1286,7 +1359,7 @@
           <div class="kpi"><small>Venta en proceso</small><b>${usd(sum(sent))}</b><small>${sent.length} pedidos · aún no cuenta (${porLiq.length} despachados sin liquidar)</small></div>
         </div>
         <p class="muted" style="margin-top:-4px"><b>Venta liquidada</b> = lo que el cliente recibió y paga de verdad, ya sin devoluciones ni notas anuladas. <b>Venta en proceso</b> = enviados, aprobados y despachados que todavía no se liquidan: puede cambiar.</p>
-        <div class="chips" id="myTab">${chip('pedidos', f.tab, '🧾 Mis pedidos', 'data-t')}${chip('hojas', f.tab, '🚚 Hojas de carga', 'data-t')}${chip('vacios', f.tab, '♻ Vacíos', 'data-t')}</div>
+        <div class="chips" id="myTab">${chip('pedidos', f.tab, '🧾 Mis pedidos', 'data-t')}${chip('hojas', f.tab, '🚚 Hojas de carga', 'data-t')}${chip('vacios', f.tab, '♻ Vacíos', 'data-t')}<a class="chip" href="#/ruta/clientes">👥 Mis clientes</a></div>
         ${f.tab === 'vacios' ? '<div id="myVac"></div>' : f.tab === 'pedidos' ? `
           <div class="chips" id="myGroup">${MY_GROUPS.map(([k, l]) => chip(k, f.g, `${l} <span class="badge">${count(k)}</span>`, 'data-g')).join('')}</div>
           ${list.length ? `<div class="card" style="overflow:auto"><table class="inv"><tbody>${list.map(orderRow).join('')}</tbody></table></div>`
@@ -1402,6 +1475,7 @@
       <div class="row"><h2 class="grow">${esc(o.clientName)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
       <div class="grid2" style="margin:8px 0 12px">${info.map(([k, v]) => `<div><small class="muted">${esc(k)}</small><div><b>${esc(v)}</b></div></div>`).join('')}</div>
       ${o.createdBy === 'oficina' ? '<div class="hint">🏢 Este pedido lo cargó la oficina a tu nombre.</div>' : ''}
+      ${o.dupWith && o.dupWith.length ? dupHint(o) : ''}
       ${o.officeEdited ? `<div class="hint warn">✏️ La oficina ajustó este pedido${sentL ? ': las filas marcadas cambiaron respecto a lo que enviaste.' : '.'}</div>` : ''}
       <table class="lines"><thead><tr><th style="text-align:left">Producto</th>${sentL ? '<th class="num">Pediste</th>' : ''}<th class="num">${g === 'despachados' ? 'Despachado' : 'Queda'}</th>${liqd ? '<th class="num">Entregado</th>' : ''}</tr></thead>
         <tbody>${rows || '<tr><td class="muted">Sin productos</td></tr>'}</tbody></table>

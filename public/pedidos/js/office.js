@@ -64,12 +64,14 @@
     Object.assign(S.ui.office, { date: U().date || today(), mode: U().mode || 'bultos' });
     autoPack();
     applyReturnableTemplate();
+    upperClients();
     const app = document.getElementById('app');
     const waiting = S.loads.filter((l) => !l.deleted && !Loads.isClosed(l)).length;
+    const toVerify = S.clients.filter((c) => !c.deleted && !Clientes.isVerified(c)).length;
     app.innerHTML = `
       ${PV.brandHeader('Hola, ' + (S.config.adminName || 'administrador'), 'Oficina · Puerto Venado',
         `<button id="bell" class="bell" type="button" aria-label="Notificaciones">🔔</button><button id="syncPill" class="pill" type="button"></button><a class="btn btn-sm" href="#/" id="offOut">Salir</a>`)}
-      <nav class="tabs">${TABS.map(([k, l]) => `<a class="tab ${k === tab ? 'active' : ''}" href="#/oficina/${k}">${l}${k === 'cargas' && waiting ? ` <span class="count">${waiting}</span>` : ''}</a>`).join('')}</nav>
+      <nav class="tabs">${TABS.map(([k, l]) => `<a class="tab ${k === tab ? 'active' : ''}" href="#/oficina/${k}">${l}${k === 'cargas' && waiting ? ` <span class="count">${waiting}</span>` : ''}${k === 'clientes' && toVerify ? ` <span class="count" title="Clientes por verificar">${toVerify}</span>` : ''}</a>`).join('')}</nav>
       <div class="container" id="officeBody"></div>
       ${PV.creditFooter()}`;
     $('#syncPill').onclick = () => PV.runSync(true);
@@ -89,6 +91,22 @@
    * productos de la lista que nunca se configuraron. Después todo se edita en
    * Inventario → producto → «Envase retornable».
    */
+  // Nombres de clientes en MAYÚSCULAS (obligatorio): los que vinieron en minúsculas
+  // se corrigen una vez, junto con sus pedidos que aún se pueden editar.
+  let upping = false;
+  async function upperClients() {
+    if (upping || !S.settings.adminKey) return;
+    const bad = S.clients.filter((c) => !c.deleted && c.name && c.name !== c.name.toUpperCase());
+    if (!bad.length) return;
+    upping = true;
+    try {
+      const fixed = bad.map((c) => ({ ...c, name: c.name.replace(/\s+/g, ' ').trim().toUpperCase() }));
+      await saveDocs('clients', fixed);
+      const byId = new Map(fixed.map((c) => [c.id, c]));
+      const os = S.orders.filter((o) => !o.deleted && byId.has(o.clientId) && Loads.editable(o) && o.clientName !== byId.get(o.clientId).name);
+      if (os.length) await saveDocs('orders', os.map((o) => ({ ...o, clientName: byId.get(o.clientId).name, clientKey: norm(byId.get(o.clientId).name) })));
+    } finally { upping = false; }
+  }
   let retApplying = false;
   async function applyReturnableTemplate() {
     if (retApplying || !S.config || S.config.retTemplate || !S.products.length) return;
@@ -560,6 +578,10 @@
       const txt = (o) => `• ${o.clientName} (${o.sellerName})\n${idx.get(o.id).filter((x) => !x.extra).map((x) => `   ${x.kind === 'same' ? '⚠ mismo cliente' : '≈ nombre parecido «' + x.clientName + '»'} en ${dupWhere(x)}`).join('\n')}`;
       if (dl.length && !confirm(`⚠ Posibles pedidos DUPLICADOS en esta hoja:\n\n${dl.slice(0, 10).map(txt).join('\n')}${dl.length > 10 ? `\n… y ${dl.length - 10} más` : ''}\n\nPregunta al vendedor antes de despachar (se entregaría dos veces). ¿${st.name} igual?`)) return back();
     }
+    if ((st.locked && !cur.locked) || closing) {
+      const nv = [...new Set(os.map((o) => clientById(o.clientId)).filter((c) => c && !Clientes.isVerified(c)))];
+      if (nv.length && !confirm(`🕓 ${nv.length} cliente(s) de esta hoja aún NO están verificados por la oficina:\n\n${nv.slice(0, 10).map((c) => `• ${c.name}${c.rif ? ' (' + c.rif + ')' : ' (sin RIF)'} · registró ${c.createdByName || 'vendedor'}`).join('\n')}\n\nPuedes verificarlos en Clientes. ¿${st.name} igual?`)) return back();
+    }
     if (st.locked && !cur.locked && !closing && !Loads.isClosed(load)) {
       if (!confirm(`${st.name}: vendedores y oficina ya no podrán modificar estos ${os.length} pedidos. ¿Continuar?`)) return back();
     }
@@ -790,8 +812,8 @@
       const dup = S.orders.find((o) => !o.deleted && o.clientKey === key && o.routeDate === d.date && o.sellerId === seller.id && Loads.editable(o));
       if (dup && !confirm(`${clientName()} ya tiene un pedido de ${seller.name} para el ${fmtDate(d.date)} (${usd(Matrix.orderTotals(dup).monto)}).\n\n¿Crear otro pedido aparte?`)) { btn.disabled = false; return; }
       if (!client) {
-        client = { id: DB.uid('c'), rif: '', name: clientName(), phone: '', address: '', group: '', creditDays: 0,
-          sellerId: seller.id, route: d.route, active: true, source: 'oficina', deleted: false };
+        client = { id: DB.uid('c'), rif: '', name: clientName().toUpperCase(), phone: '', address: '', group: '', creditDays: 0,
+          sellerId: seller.id, route: d.route, active: true, source: 'oficina', verified: false, verifyReason: 'creado rápido desde un pedido: completa su ficha', createdAt: DB.now(), createdByName: (S.config && S.config.adminName) || 'Oficina', deleted: false };
         await saveDocs('clients', client);
         await log('cliente_nuevo', `Oficina creó el cliente ${client.name} (${seller.name})`, { clientId: client.id, clientName: client.name });
       }
@@ -1810,7 +1832,7 @@
       const group = get(r, 'group');
       const doc = {
         ...(prev || { id: 'c_' + (slug(rif) || slug(name)) + (byKey.has(key) ? '' : ''), active: true, deleted: false, source: 'import' }),
-        rif, name: name.replace(/\s+/g, ' '), phone: get(r, 'phone'), address: get(r, 'address'),
+        rif, name: name.replace(/\s+/g, ' ').trim().toUpperCase(), phone: get(r, 'phone'), address: get(r, 'address'),
         group: /^error$/i.test(group) ? '' : group, creditDays: int(get(r, 'creditDays')),
         sellerId, route: get(r, 'route') || (prev && prev.route) || (seller && seller.routes && seller.routes.length === 1 ? seller.routes[0] : ''),
       };
@@ -1826,7 +1848,8 @@
   function renderClients(root) {
     const q = U().cliQ || '', sid = U().cliSeller || '';
     const tokens = norm(q).split(' ').filter(Boolean);
-    const all = S.clients.filter((c) => (!sid || (sid === '__none' ? !sellerById(c.sellerId) : c.sellerId === sid)) && tokens.every((t) => norm(c.name + ' ' + c.rif + ' ' + c.address + ' ' + c.phone).includes(t)))
+    const pend = !!U().cliPend, toVerify = S.clients.filter((c) => !Clientes.isVerified(c)).length;
+    const all = S.clients.filter((c) => (!pend || !Clientes.isVerified(c)) && (!sid || (sid === '__none' ? !sellerById(c.sellerId) : c.sellerId === sid)) && tokens.every((t) => norm(c.name + ' ' + (c.tradeName || '') + ' ' + c.rif + ' ' + c.address + ' ' + c.phone).includes(t)))
       .sort((a, b) => a.name.localeCompare(b.name, 'es'));
     const list = all.slice(0, 300);
     const count = (id) => S.clients.filter((c) => c.sellerId === id).length;
@@ -1839,18 +1862,20 @@
         <button class="btn btn-primary" id="cNew">＋ Nuevo</button>
         <button class="btn" id="cImp">⇧ Importar Excel</button>
       </div>
-      <p class="muted">${all.length} clientes${all.length > list.length ? ' · mostrando 300, usa la búsqueda' : ''}. Los marcados <span class="status abierto">campo</span> los creó un vendedor en la calle.</p>
+      <div class="chips" id="cPend"><button class="chip ${pend ? '' : 'active'}" data-p="0">Todos</button><button class="chip ${pend ? 'active' : ''}" data-p="1">🕓 Por verificar (${toVerify})</button></div>
+      <p class="muted">${all.length} clientes${all.length > list.length ? ' · mostrando 300, usa la búsqueda' : ''}. Los <span class="status abierto">🕓 por verificar</span> los registró un vendedor: ábrelos, revisa los datos y pulsa «Guardar y verificar».</p>
       <div class="card" style="overflow:auto"><table class="inv">
         <thead><tr><th>Cliente</th><th>RIF / C.I.</th><th>Teléfono</th><th>Vendedor</th><th>Ruta</th><th></th></tr></thead>
         <tbody>${list.map((c) => `<tr data-cid="${esc(c.id)}" class="${c.active === false ? 'inactive' : ''}">
-          <td><b>${esc(c.name)}</b>${c.source === 'campo' ? ' <span class="status abierto">campo</span>' : ''}<div class="muted">${esc(c.address || '')}</div></td>
+          <td><b>${esc(c.name)}</b>${c.tradeName ? ` <span class="muted">· ${esc(c.tradeName)}</span>` : ''}${Clientes.isVerified(c) ? '' : ` <span class="status abierto" title="${esc(c.verifyReason || '')}">🕓 por verificar</span>`}<div class="muted">${esc(c.address || '')}${c.createdByName && !Clientes.isVerified(c) ? ' · registró ' + esc(c.createdByName) : ''}</div></td>
           <td class="mono" data-l="RIF">${esc(c.rif || '')}</td><td data-l="Tel.">${esc(c.phone || '')}</td>
           <td data-l="Vendedor"><select class="select sm" data-cf="sellerId">${sellerOptions(c.sellerId)}</select></td>
           <td data-l="Ruta"><select class="select sm" data-cf="route"><option value="">—</option>${(S.config.routes || []).map((r) => `<option ${r === c.route ? 'selected' : ''}>${esc(r)}</option>`).join('')}</select></td>
-          <td><button class="btn btn-sm" data-cedit="${esc(c.id)}">Editar</button></td></tr>`).join('')}</tbody></table></div>`;
+          <td><button class="btn btn-sm ${Clientes.isVerified(c) ? '' : 'btn-primary'}" data-cedit="${esc(c.id)}">${Clientes.isVerified(c) ? 'Editar' : 'Revisar'}</button></td></tr>`).join('')}</tbody></table></div>`;
     let t;
     $('#cq').oninput = (e) => { clearTimeout(t); t = setTimeout(() => { U().cliQ = e.target.value; renderClients(root); const i = $('#cq'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 250); };
     $('#cs').onchange = (e) => { U().cliSeller = e.target.value; renderClients(root); };
+    $('#cPend').onclick = (e) => { const b = e.target.closest('[data-p]'); if (b) { U().cliPend = b.dataset.p === '1'; renderClients(root); } };
     $('#cNew').onclick = () => clientForm(null, root);
     $('#cImp').onclick = () => importDialog('clients', root);
     root.onchange = async (e) => {
@@ -1887,7 +1912,7 @@
   const EVENT_LABEL = {
     apertura: 'Abrió la app', regreso: 'Volvió', entrada: 'Entró a su ruta', salida: 'Salió', cliente_nuevo: 'Cliente nuevo',
     pedido_nuevo: 'Abrió pedido', pedido_enviado: 'Envió pedido', pedido_reabierto: 'Reabrió pedido', pedido_modificado: 'Modificó pedido',
-    pedido_eliminado: 'Eliminó pedido', espera: 'Puso en espera', reincorporado: 'Reincorporó', movido: 'Movió de hoja',
+    pedido_eliminado: 'Eliminó pedido', cliente_editado: 'Actualizó cliente', cliente_corregido: 'Corrigió cliente', espera: 'Puso en espera', reincorporado: 'Reincorporó', movido: 'Movió de hoja',
     pedido_editado_oficina: 'Ajuste de oficina', carga_estado: 'Estado de hoja', cliente_reasignado: 'Reasignó cliente', respaldo: 'Respaldo',
     datos_borrados: 'Datos borrados por el navegador', nota_valery: 'Nota Valery', retornables: 'Retornables', mensaje: 'Mensaje a vendedor', liquidacion: 'Liquidación', vacios: 'Kardex de vacíos',
   };
@@ -1927,30 +1952,11 @@
       rows: list.map((e) => [e.day, hhmm(e.at), e.sellerName, EVENT_LABEL[e.type] || e.type, e.text, e.deviceId || '']) })]);
   }
 
+  // Ficha completa (la misma del vendedor, con vendedor, crédito y estado): clientes.js
   function clientForm(c, root) {
-    const isNew = !c;
-    const prev = c;
-    c = c || { name: '', rif: '', phone: '', address: '', group: '', creditDays: 0, sellerId: U().cliSeller && U().cliSeller !== '__none' ? U().cliSeller : '', route: '', active: true };
-    const sh = openSheet(`
-      <div class="row"><h2 class="grow">${isNew ? 'Nuevo cliente' : esc(c.name)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
-      <form id="cf" class="form-grid" autocomplete="off">
-        <label class="field"><span>Nombre / razón social *</span><input name="name" class="input" required maxlength="80" value="${esc(c.name)}"></label>
-        <div class="grid2"><label class="field"><span>RIF / C.I.</span><input name="rif" class="input mono" maxlength="20" value="${esc(c.rif)}"></label>
-          <label class="field"><span>Teléfono</span><input name="phone" class="input" maxlength="40" value="${esc(c.phone)}"></label></div>
-        <label class="field"><span>Dirección</span><input name="address" class="input" maxlength="120" value="${esc(c.address)}"></label>
-        <div class="grid3"><label class="field"><span>Vendedor</span><select name="sellerId" class="select">${sellerOptions(c.sellerId)}</select></label>
-          <label class="field"><span>Ruta</span><select name="route" class="select"><option value="">—</option>${(S.config.routes || []).map((r) => `<option ${r === c.route ? 'selected' : ''}>${esc(r)}</option>`).join('')}</select></label>
-          <label class="field"><span>Días de crédito</span><input name="creditDays" class="input" inputmode="numeric" value="${c.creditDays || 0}"></label></div>
-        <label class="row"><input type="checkbox" name="active" ${c.active !== false ? 'checked' : ''} style="width:22px;height:22px"> Activo</label>
-        <div class="actions"><button class="btn btn-primary" type="submit">Guardar</button></div>
-      </form>`, { wide: true });
-    $('#cf', sh.el).onsubmit = async (e) => {
-      e.preventDefault(); const f = e.target;
-      await saveClient(prev, { ...c, id: c.id || DB.uid('c'), name: f.name.value.trim(), rif: f.rif.value.trim(), phone: f.phone.value.trim(),
-        address: f.address.value.trim(), sellerId: f.sellerId.value, route: f.route.value, creditDays: int(f.creditDays.value),
-        active: f.active.checked, source: c.source === 'campo' ? 'campo-revisado' : (c.source || 'oficina'), deleted: false });
-      sh.close(); renderClients(root); toast('Cliente guardado', 'ok');
-    };
+    Clientes.formSheet(c || null, { mode: 'office', defaults: { sellerId: U().cliSeller && U().cliSeller !== '__none' ? U().cliSeller : '' },
+      onSave: async (prev, next) => { await saveClient(prev, next); if (!prev) await log('cliente_nuevo', `Registró el cliente ${next.name}${next.rif ? ' (' + next.rif + ')' : ''}`, { clientId: next.id, clientName: next.name }); },
+      onSaved: () => renderClients(root) });
   }
 
   /* ============================= VENDEDORES ============================= */
