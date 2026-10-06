@@ -487,3 +487,4 @@ table.inv tr.kx-sub td { background: var(--bg-2); border-top: 1px solid var(--li
   .aviso-urgent .aviso-badge { animation: none; }
 }
 @media print { .aviso { display: none; } }
+.pick-list { display: grid; gap: 8px; }

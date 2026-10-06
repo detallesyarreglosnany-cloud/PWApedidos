@@ -5,6 +5,7 @@ import { isAdminReq, isSupervisorReq, syncOk } from '@/lib/keys';
 import { sendPush, type PushMsg } from '@/lib/push';
 import { RESET_LOCK, currentEpoch, epochAt } from '@/lib/epoch';
 import { ordersOfLoads, syncKardexForOrders } from '@/lib/vacios';
+import { dupPairs, type DupOrder } from '@/lib/dedup';
 
 // Sincronización de la PWA de pedidos (public/pedidos).
 //
@@ -182,40 +183,23 @@ function later(...ts: string[]) {
 }
 
 /**
- * Alertas de cliente duplicado el mismo día (mismo u otro vendedor), para los pedidos recientes del alcance.
- * Solo lee de la base los 7 campos que necesita (no el pedido completo con sus líneas: eso
- * era la mayor parte del tráfico de la base) y responde solo los pedidos que SÍ tienen alerta
- * (el equipo toma como «sin alerta» los que no vienen).
+ * Alertas de pedido duplicado: mismo cliente (id de cartera, mismo nombre o nombre
+ * equivalente, p. ej. «Bodega Sofía» = «VARIEDADES SOFIA») con 1 día o menos de
+ * diferencia, del mismo u otro vendedor (src/lib/dedup.ts). Solo lee de la base los
+ * campos que necesita (no el pedido completo) y responde solo los pedidos CON alerta
+ * (el equipo toma como «sin alerta» los que no vienen). from = desde qué día rige.
  */
 async function duplicates(sellerId: string | null) {
-  const from = daysAgo(3);
-  type R = { id: string; sellerId: string | null; routeDate: string | null; status: string | null; clientId: string | null; clientKey: string | null; sellerName: string | null; locked: string | null };
-  const orders = await db.$queryRaw<R[]>`
-    SELECT "id", "sellerId", "routeDate", "status",
-      ("data"::jsonb ->> 'clientId') AS "clientId", ("data"::jsonb ->> 'clientKey') AS "clientKey",
-      ("data"::jsonb ->> 'sellerName') AS "sellerName", ("data"::jsonb ->> 'locked') AS "locked"
-    FROM "DistDoc" WHERE "kind" = 'orders' AND "deleted" = false AND "routeDate" >= ${from}`;
-  const keysOf = (o: R) => {
-    const k: string[] = [];
-    if (o.clientId) k.push(o.routeDate + '|i|' + o.clientId);
-    if (o.clientKey) k.push(o.routeDate + '|k|' + o.clientKey);
-    return k;
-  };
-  const groups = new Map<string, R[]>();
-  for (const o of orders) for (const k of keysOf(o)) { const g = groups.get(k) || []; g.push(o); groups.set(k, g); }
-  const dups: Record<string, { id: string; sellerName: string }[]> = {};
-  // Aprobado en adelante, el vendedor ya puede tomarle otro pedido al mismo cliente
-  const approved = (o: R) => o.locked === 'true' || o.status === 'despachado';
-  for (const o of orders) {
-    if (sellerId && o.sellerId !== sellerId) continue;
-    const seen = new Map<string, { id: string; sellerName: string }>();
-    for (const k of keysOf(o)) for (const x of groups.get(k) || []) {
-      if (x.id === o.id || (x.sellerId === o.sellerId && (approved(x) || approved(o)))) continue;
-      seen.set(String(x.id), { id: String(x.id), sellerName: String(x.sellerName || '') });
-    }
-    if (seen.size) dups[String(o.id)] = [...seen.values()];
-  }
-  return { from, map: dups };
+  const from = daysAgo(3), read = daysAgo(4);
+  const orders = await db.$queryRaw<DupOrder[]>`
+    SELECT "id", "sellerId", "routeDate",
+      ("data"::jsonb ->> 'sellerName') AS "sellerName", ("data"::jsonb ->> 'clientId') AS "clientId",
+      ("data"::jsonb ->> 'clientKey') AS "clientKey", ("data"::jsonb ->> 'clientName') AS "clientName",
+      ("data"::jsonb ->> 'pendingFrom') AS "pendingFrom", ("data"::jsonb ->> 'extraOk') AS "extraOk",
+      ("data"::jsonb -> 'delivery' ->> 'result') AS "result"
+    FROM "DistDoc" WHERE "kind" = 'orders' AND "deleted" = false AND "routeDate" >= ${read}`;
+  const pairs = dupPairs(orders, (o) => String(o.routeDate || '') >= from && (!sellerId || o.sellerId === sellerId));
+  return { from, map: Object.fromEntries(pairs) };
 }
 
 // Lo que ve un vendedor de una hoja de carga: estado, número, fecha, ruta y
