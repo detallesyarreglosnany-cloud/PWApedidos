@@ -613,7 +613,7 @@
         <tr class="total-row"><td><b>TOTAL</b> · ${tot.cajas} cj + ${tot.unidades} un · ${tot.bultos} bultos</td><td></td><td class="num">${usd(tot.monto)}</td></tr></table>`;
     };
     const sh = openSheet(`
-      <div class="row"><div class="grow"><h2>${esc(o.clientName)}</h2><div class="muted">${esc(o.sellerName)} · Ruta ${esc(o.route || '—')} · ${esc(fmtDate(o.routeDate))} · ${esc(Loads.orderLabel(o))}</div></div>
+      <div class="row"><div class="grow"><h2>${esc(o.clientName)} <button type="button" class="btn btn-sm" id="oeClient" title="Elegir el cliente correcto, unir un cliente repetido o corregir el nombre">✎ Cliente</button></h2><div class="muted">${esc(o.sellerName)} · Ruta ${esc(o.route || '—')} · ${esc(fmtDate(o.routeDate))} · ${esc(Loads.orderLabel(o))}</div></div>
         <button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
       ${locked ? '<div class="hint warn">🔒 La carga de este pedido ya fue aprobada: no se puede modificar.</div>' : ''}
       <div id="oeBody"></div>
@@ -627,6 +627,7 @@
         <label class="field" style="margin-top:12px"><span>Nota para despacho</span><input id="oeNotes" class="input" maxlength="300" value="${esc(o.notes || '')}"></label>`}
       <div class="actions">${o.status !== 'despachado' ? '<button class="btn btn-danger" id="oeDel">🗑 Eliminar pedido</button>' : ''}<button class="btn btn-primary" data-close>Listo</button></div>`, { wide: true });
     draw(sh);
+    $('#oeClient', sh.el).onclick = () => { sh.close(); PV.clientFixSheet(orderById(o.id) || o, { office: true, onDone: () => { if (onDone) onDone(); orderEditor(orderById(o.id), onDone); } }); };
     const drawMsgs = () => { $('#oeMsgs', sh.el).innerHTML = PV.msgThreadHTML(orderById(o.id) || o); };
     drawMsgs();
     $('#oeSend', sh.el).onclick = async () => {
