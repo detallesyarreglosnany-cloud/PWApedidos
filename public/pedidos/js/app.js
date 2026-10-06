@@ -630,18 +630,67 @@
   // Candado: elegir de la lista dispara "change" y "submit" a la vez; sin esto
   // se creaban dos pedidos (y dos clientes nuevos) para el mismo cliente.
   let opening = Promise.resolve();
-  function openClient(name) {
-    opening = opening.then(() => openClientNow(name)).catch((e) => toast(e.message || 'Error', 'err'));
+  function openClient(name, opts) {
+    opening = opening.then(() => openClientNow(name, opts)).catch((e) => toast(e.message || 'Error', 'err'));
     return opening;
   }
-  async function openClientNow(name) {
+  // Pedidos recientes (hoy y ayer) del mismo cliente: por id de cartera, por
+  // nombre o por nombre equivalente («Bodega Sofía» = «VARIEDADES SOFIA»).
+  function recentOrdersOf(client, name) {
+    const sid = S.session.sellerId, from = dayMinus(1), fk = Dedup.key(client ? client.name : name), key = norm(client ? client.name : name);
+    return S.orders.filter((o) => o.sellerId === sid && Dedup.live(o) && String(o.routeDate) >= from && Matrix.orderTotals(o).items &&
+      ((client && o.clientId === client.id) || o.clientKey === key || Dedup.key(o.clientName || o.clientKey) === fk))
+      .sort((a, b) => String(b.sentAt || b.createdAt).localeCompare(String(a.sentAt || a.createdAt)));
+  }
+  const hhmm = (iso) => (iso ? new Date(iso).toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit' }) : '');
+  /** El nombre escrito no está tal cual en la cartera: ¿es uno de estos? (evita clientes repetidos). */
+  function pickClientSheet(name, like) {
+    const busy = (c) => recentOrdersOf(c, c.name).length;
+    const sh = openSheet(`
+      <div class="row"><h2 class="grow">¿Quién es «${esc(name)}»?</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      ${like.length ? `<p>Se parece a ${like.length === 1 ? 'este cliente' : 'estos clientes'} de tu cartera. <b>Elige el correcto</b> para no repetir el cliente ni el pedido:</p>
+        <div class="pick-list">${like.map((c) => `<button type="button" class="sug-item" data-pick="${esc(c.id)}"><b>${esc(c.name)}</b>
+          <small>${esc([c.rif, c.address, c.phone].filter(Boolean).join(' · '))}${busy(c) ? ' · <span class="warn-txt">ya tiene pedido</span>' : ''}</small></button>`).join('')}</div>`
+        : '<p>No está en tu cartera.</p>'}
+      <div class="hint warn" style="margin-top:12px">Crea un cliente nuevo <b>solo si de verdad no está en tu cartera</b>. Un cliente repetido hace que se despache dos veces.</div>
+      <div class="actions"><button class="btn" data-close>Cancelar</button><button class="btn btn-danger" id="pcNew">＋ Sí, es un cliente nuevo</button></div>`);
+    sh.el.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-pick]'); if (!b) return;
+      const c = clientById(b.dataset.pick); sh.close(); if (c) openClient(c.name, { client: c });
+    });
+    $('#pcNew', sh.el).onclick = () => { sh.close(); openClient(name, { isNew: true }); };
+  }
+  /** Ya le tomó pedido hoy o ayer: ¿de verdad es un pedido ADICIONAL? */
+  function extraOrderSheet(client, name, prev) {
+    const sh = openSheet(`
+      <div class="row"><h2 class="grow">⚠ Ya le tomaste pedido a ${esc(client ? client.name : name)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <table class="inv">${prev.slice(0, 4).map((o) => `<tr><td><b>${esc(fmtDate(o.routeDate))}</b> ${esc(hhmm(o.sentAt || o.createdAt))}<div class="muted">${esc(Loads.orderLabel(o))}${o.createdBy === 'oficina' ? ' · 🏢 cargado por oficina' : ''}</div></td>
+        <td class="n">${usd(Matrix.orderTotals(o).monto)}</td><td><button class="btn btn-sm" type="button" data-see="${esc(o.id)}">Ver</button></td></tr>`).join('')}</table>
+      <div class="hint warn" style="margin-top:12px">Si es el <b>mismo pedido</b>, no lo cargues otra vez: se despacharía dos veces y habría devolución.<br>Solo si el cliente pidió <b>más mercancía aparte</b>, cárgalo como adicional.</div>
+      <div class="actions"><button class="btn btn-primary" data-close>No, cancelar</button><button class="btn" id="eoExtra">＋ Es un pedido adicional</button></div>`);
+    sh.el.addEventListener('click', (e) => { const b = e.target.closest('[data-see]'); if (b) { sh.close(); myOrderSheet(orderById(b.dataset.see)); } });
+    $('#eoExtra', sh.el).onclick = () => { sh.close(); openClient(client ? client.name : name, { client, isNew: !client, extra: true }); };
+  }
+  async function openClientNow(name, opts) {
+    opts = opts || {};
     name = String(name || '').replace(/\s+/g, ' ').trim();
     if (!name) { toast('Escribe o elige el cliente', 'err'); return; }
     if (name.length > 80) name = name.slice(0, 80);
-    const key = norm(name);
     const seller = sellerById(S.session.sellerId);
-    let client = myClients().find((c) => norm(c.name) === key);
-    let o = pendingOrdersToday().find((x) => x.clientKey === key);
+    let client = opts.client || myClients().find((c) => norm(c.name) === norm(name));
+    // 1) Escrito a mano y no está tal cual: primero se ofrecen los parecidos
+    if (!client && !opts.isNew) { pickClientSheet(name, Dedup.similar(name, myClients())); return; }
+    if (client) name = client.name;
+    const key = norm(name);
+    // 2) Pedido de hoy aún editable: se abre ese (no se crea otro)
+    let o = pendingOrdersToday().find((x) => x.clientKey === key || (client && x.clientId === client.id));
+    if (o && !opts.extra) toast(`Ya tenías un pedido de ${o.clientName}: se abrió ese`, 'ok');
+    // 3) Ya pidió hoy o ayer (aprobado, despachado…): confirmar que es adicional
+    if (!o && !opts.extra) {
+      const prev = recentOrdersOf(client, name);
+      if (prev.length) { extraOrderSheet(client, name, prev); return; }
+    }
+    if (o && opts.extra) o = null;
     if (!o) {
       if (!client) {
         // Cliente nuevo captado en la calle: la oficina lo verá en Clientes
@@ -655,7 +704,7 @@
         clientId: client.id, clientRif: client.rif || '', clientName: client.name, clientKey: key,
         route: client.route || S.session.route || '', routeDate: today(),
         status: 'abierto', lines: {}, notes: '', loadId: null,
-        createdAt: DB.now(), deviceId: await Sync.deviceId(), deleted: false,
+        createdAt: DB.now(), deviceId: await Sync.deviceId(), deleted: false, ...(opts.extra ? { extraOk: true } : {}),
       };
       await saveOrder(o);
       await logEvent('pedido_nuevo', `Abrió pedido de ${client.name}`, { orderId: o.id, clientId: client.id, clientName: client.name });
@@ -785,7 +834,7 @@
 
     const rs = $('#routeSel');
     if (rs) rs.onchange = async () => { await setSession({ ...S.session, route: rs.value }); renderSeller(); };
-    $('#clientForm').onsubmit = (e) => { e.preventDefault(); openClient($('#clientInput').value); };
+    $('#clientForm').onsubmit = (e) => { e.preventDefault(); $('#clientSug').innerHTML = ''; openClient($('#clientInput').value); };
     // Buscador: desde 2 letras muestra coincidencias de la cartera (nombre, RIF,
     // dirección o teléfono); si no aparece, se escribe y se crea como nuevo.
     const sug = $('#clientSug');
@@ -912,7 +961,9 @@
 
   /** Alerta (no bloquea): el mismo cliente tiene otro pedido ese día (mismo u otro vendedor). */
   function dupHint(o) {
-    return `<div class="hint warn">⚠ <b>Cliente posiblemente duplicado:</b> ${esc(o.clientName)} también tiene pedido hoy con ${o.dupWith.map((d) => esc(d.sellerName)).join(', ')}. Verifica que no sea un error.</div>`;
+    const real = o.dupWith.filter((d) => !d.extra);
+    if (!real.length) return `<div class="hint">➕ Pedido adicional confirmado: ${esc(o.clientName)} ya tenía otro pedido${o.dupWith[0].routeDate ? ' del ' + esc(fmtDate(o.dupWith[0].routeDate)) : ''}.</div>`;
+    return `<div class="hint warn">⚠ <b>Posible pedido duplicado:</b> ${esc(o.clientName)} también tiene pedido ${real.map((d) => `${d.routeDate ? 'del ' + esc(fmtDate(d.routeDate)) + ' ' : ''}con ${esc(d.sellerName)}`).join(', ')}. Verifica que no sea el mismo pedido.</div>`;
   }
 
   function orderLinesHTML(o) {

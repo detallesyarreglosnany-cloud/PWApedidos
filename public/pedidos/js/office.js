@@ -104,21 +104,15 @@
 
   /** Pedidos del mismo cliente el mismo día (mismo u otro vendedor): alerta, no bloquea. */
   function dupIndex() {
-    // Mismo cliente = mismo ID de cartera o mismo nombre normalizado (cliente creado "nuevo" por error)
-    const g = new Map();
-    const add = (k, o) => { if (k) g.set(k, (g.get(k) || []).concat(o)); };
-    S.orders.filter((o) => !o.deleted && Matrix.orderTotals(o).items).forEach((o) => {
-      add(o.routeDate + '|id|' + (o.clientId || ''), o);
-      add(o.routeDate + '|nm|' + (o.clientKey || ''), o);
-    });
-    const out = new Map();
-    g.forEach((arr, k) => {
-      if (arr.length < 2 || /\|(id|nm)\|$/.test(k)) return;
-      arr.forEach((o) => { const cur = out.get(o.id) || []; arr.forEach((x) => { if (x.id !== o.id && !cur.includes(x)) cur.push(x); }); out.set(o.id, cur); });
-    });
-    return out;
+    // Mismo cliente (id de cartera, mismo nombre o nombre equivalente) con ±1 día: dedup.js
+    return Dedup.pairs(S.orders.filter((o) => !o.deleted && Matrix.orderTotals(o).items));
   }
-  const dupBadge = (o, idx) => { const d = idx.get(o.id); return d ? ` <span class="status over" title="También con: ${esc(d.map((x) => x.sellerName).join(', '))}">⚠ duplicado · ${esc(d.map((x) => Loads.initials(x.sellerName)).join(' '))}</span>` : ''; };
+  const dupBadge = (o, idx) => {
+    const d = idx.get(o.id); if (!d) return '';
+    const real = d.filter((x) => !x.extra), tip = d.map((x) => `${x.sellerName} ${x.routeDate ? fmtDate(x.routeDate) : ''}${x.extra ? ' (adicional)' : ''}`).join(', ');
+    return real.length ? ` <span class="status over" title="También con: ${esc(tip)}">⚠ duplicado · ${esc(real.map((x) => Loads.initials(x.sellerName)).join(' '))}</span>`
+      : ` <span class="status en_espera" title="${esc(tip)}">➕ adicional</span>`;
+  };
 
   function setupBanner() {
     return `<div class="container"><div class="hint warn setup">
@@ -512,7 +506,13 @@
       if (!confirm(`${st.name}: se descuenta el inventario y la hoja pasa al Archivo.\n\nFecha de la carga: ${fecha}${u.over ? `\n\n⚠ Supera el tope (${u.used}/${u.limit} ${u.measure}, ${u.clients}/${u.maxClients} clientes).` : ''}\n\n¿Continuar?`)) return back();
     } else if (!st.closing && Loads.isClosed(load)) {
       if (!confirm(`Reabrir la carga como "${st.name}": el inventario descontado se devuelve y los pedidos ${st.locked ? 'siguen bloqueados' : 'se podrán editar de nuevo'}. Los números de carga y notas se conservan. ¿Continuar?`)) return back();
-    } else if (st.locked && !cur.locked) {
+    }
+    // Antes de aprobar o cerrar: pedidos que parecen duplicados (mismo cliente con ±1 día)
+    if ((st.locked && !cur.locked) || closing) {
+      const idx = dupIndex(), dl = os.filter((o) => (idx.get(o.id) || []).some((x) => !x.extra));
+      if (dl.length && !confirm(`⚠ Posibles pedidos DUPLICADOS en esta hoja:\n\n${dl.slice(0, 12).map((o) => `• ${o.clientName} (${o.sellerName}) · también: ${idx.get(o.id).filter((x) => !x.extra).map((x) => `${x.sellerName} ${fmtDate(x.routeDate)}`).join(', ')}`).join('\n')}${dl.length > 12 ? `\n… y ${dl.length - 12} más` : ''}\n\nRevísalos antes de despachar (se entregaría dos veces). ¿${st.name} igual?`)) return back();
+    }
+    if (st.locked && !cur.locked && !closing && !Loads.isClosed(load)) {
       if (!confirm(`${st.name}: vendedores y oficina ya no podrán modificar estos ${os.length} pedidos. ¿Continuar?`)) return back();
     }
     // Los números de carga y de nota los entrega el servidor: nunca se repiten entre PCs
