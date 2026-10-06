@@ -702,8 +702,27 @@
     sh.el.addEventListener('click', (e) => { const b = e.target.closest('[data-see]'); if (b) { sh.close(); myOrderSheet(orderById(b.dataset.see)); } });
     $('#eoExtra', sh.el).onclick = () => { sh.close(); openClient(client ? client.name : name, { client, isNew: !client, extra: true }); };
   }
+  /* ---------------- Pausa de pedidos (la oficina suspende al vendedor) ---------------- */
+  function suspension() {
+    const me = S.session && sellerById(S.session.sellerId);
+    const until = me && me.suspendedUntil && Date.parse(me.suspendedUntil) > Date.now() ? me.suspendedUntil : null;
+    if (!until) return null;
+    // Cifras reales: sus pedidos enviados que aún no se despachan (en hojas o en espera)
+    const pend = S.orders.filter((o) => o.sellerId === me.id && !o.deleted && ['enviado', 'en_carga', 'en_espera'].includes(o.status) && Matrix.orderTotals(o).items);
+    const t = pend.reduce((a, o) => { const x = Matrix.orderTotals(o); a.cajas += x.cajas; a.unidades += x.unidades; return a; }, { cajas: 0, unidades: 0 });
+    return { until, note: me.suspendNote || '', clients: new Set(pend.map((o) => o.clientId || o.clientKey)).size, cajas: t.cajas, unidades: t.unidades };
+  }
+  function suspensionHTML(su) {
+    const hasta = new Date(su.until), mañana = hasta.toDateString() !== new Date().toDateString();
+    return `<div class="pause-card"><div class="pause-ico">☕</div><div>
+      <b>Tienes ${su.clients} cliente${su.clients === 1 ? '' : 's'} y ${nf0.format(su.cajas)} caja${su.cajas === 1 ? '' : 's'}${su.unidades ? ' + ' + nf0.format(su.unidades) + ' unid.' : ''} pendientes por despachar.</b>
+      <p>Excelente trabajo. Toma un respiro. Te avisaremos cuando se descongestionen tus hojas de pedidos y puedas volver a subir pedidos.</p>
+      <small class="muted">Pausa de la oficina hasta ${mañana ? hasta.toLocaleDateString('es-VE', { weekday: 'short', day: 'numeric', month: 'short' }) + ' ' : ''}${hasta.toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit' })}${su.note ? ' · ' + esc(su.note) : ''}</small></div></div>`;
+  }
+  let pauseTimer;
   async function openClientNow(name, opts) {
     opts = opts || {};
+    if (suspension()) { toast('Pausa de la oficina: por ahora no puedes subir pedidos nuevos', 'err'); return; }
     name = String(name || '').replace(/\s+/g, ' ').trim();
     if (!name) { toast('Escribe o elige el cliente', 'err'); return; }
     if (name.length > 80) name = name.slice(0, 80);
@@ -712,7 +731,7 @@
     // 1) Escrito a mano y no está tal cual: primero se ofrecen los parecidos
     if (!client && !opts.isNew) { pickClientSheet(name, Dedup.similar(name, myClients())); return; }
     // 1b) Cliente nuevo: se registra con su ficha completa (nombre, RIF, teléfono, dirección…)
-    if (!client && opts.isNew && !opts.quick) {
+    if (!client) {
       Clientes.formSheet(null, { mode: 'seller', prefillName: name, defaults: { route: S.session.route || '' }, onSaved: (c) => openClient(c.name, { client: c, extra: opts.extra }) });
       return;
     }
@@ -728,13 +747,7 @@
     }
     if (o && opts.extra) o = null;
     if (!o) {
-      if (!client) {
-        // Cliente nuevo captado en la calle: la oficina lo verá en Clientes
-        client = { id: DB.uid('c'), rif: '', name: name.toUpperCase(), phone: '', address: '', group: '', creditDays: 0,
-          sellerId: seller.id, route: S.session.route || '', active: true, source: 'campo', verified: false, verifyReason: 'cliente nuevo', createdAt: DB.now(), createdByName: seller.name, deleted: false };
-        await saveDocs('clients', client);
-        await logEvent('cliente_nuevo', `Creó el cliente nuevo ${client.name}`, { clientId: client.id, clientName: client.name });
-      }
+      if (!client) return; // nunca se crea un cliente solo con el nombre: siempre con su ficha
       o = {
         id: DB.uid('o'), sellerId: seller.id, sellerName: seller.name,
         clientId: client.id, clientRif: client.rif || '', clientName: client.name, clientKey: key,
@@ -837,7 +850,8 @@
       <nav class="quick-nav" id="quickNav" aria-label="Accesos">
         <button type="button" data-go="pedidos">🧾 Mis pedidos</button><button type="button" data-go="hojas">🚚 Mis hojas</button>
         <button type="button" data-go="clientes">👥 Mis clientes</button><button type="button" data-go="vacios">♻ Vacíos</button></nav>
-      <section class="client-bar">
+      ${suspension() ? suspensionHTML(suspension()) : ''}
+      <section class="client-bar" ${suspension() ? 'hidden' : ''}>
         <div class="row wrap client-row">
           ${routes.length > 1 ? `<select id="routeSel" class="select route-sel" aria-label="Ruta del día">
             ${routes.map((r) => `<option ${r === S.session.route ? 'selected' : ''}>${esc(r)}</option>`).join('')}</select>` : ''}
@@ -873,6 +887,8 @@
 
     const rs = $('#routeSel');
     if (rs) rs.onchange = async () => { await setSession({ ...S.session, route: rs.value }); renderSeller(); };
+    clearTimeout(pauseTimer);
+    { const su = suspension(); if (su) pauseTimer = setTimeout(() => { if (location.hash === '#/ruta') renderSeller(); }, Math.min(Date.parse(su.until) - Date.now() + 1000, 2147000000)); }
     $('#quickNav').onclick = (e) => {
       const b = e.target.closest('[data-go]'); if (!b) return;
       if (b.dataset.go === 'clientes') { location.hash = '#/ruta/clientes'; return; }
@@ -892,7 +908,7 @@
       const hits = clients.filter((c) => { const h = norm(c.name + ' ' + (c.tradeName || '') + ' ' + c.rif + ' ' + c.address + ' ' + c.phone); return tokens.every((t) => h.includes(t)); })
         .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name, 'es')).slice(0, 8);
       sug.innerHTML = hits.map((c) => `<button type="button" class="sug-item" data-name="${esc(c.name)}"><b>${esc(c.name)}</b><small>${esc([c.tradeName, c.rif, c.address].filter(Boolean).join(' · '))}</small></button>`).join('') +
-        `<button type="button" class="sug-item new" data-name="${esc(e.target.value.trim())}">＋ Usar «${esc(e.target.value.trim())}» como cliente nuevo</button>`;
+        `<button type="button" class="sug-item new" data-name="${esc(e.target.value.trim())}">＋ No está en la lista: registrar «${esc(e.target.value.trim().toUpperCase())}» con sus datos</button>`;
     });
     sug.onclick = (e) => { const b = e.target.closest('[data-name]'); if (b) { sug.innerHTML = ''; openClient(b.dataset.name); } };
     $('#clientChips').onclick = async (e) => {
@@ -1089,6 +1105,7 @@
     bindVacAsk(sh, o);
     const send = $('#sendOrder', sh.el);
     if (send) send.onclick = async () => {
+      if (suspension()) { toast('Pausa de la oficina: tu pedido queda guardado sin enviar hasta que te reactiven', 'err'); return; }
       o.notes = notes.value.slice(0, 300);
       o.status = 'enviado'; o.sentAt = DB.now();
       // Copia de lo que pidió el vendedor: luego ve qué ajustó la oficina
@@ -1162,7 +1179,9 @@
         const movable = others.filter((x) => !liquidated(x) && (office || editable(x)));
         const blocked = others.length - movable.length;
         const canDrop = !blocked && (office || cur.source === 'campo');
-        if ((movable.length || canDrop) && confirm(`¿Unir «${cur.name}» con «${target.name}»?\n\n${movable.length ? `• ${movable.length} pedido(s) más de «${cur.name}» pasan a «${target.name}».\n` : ''}${canDrop ? `• «${cur.name}» se elimina de la cartera (queda un solo cliente).` : `• «${cur.name}» se queda en la cartera: tiene ${blocked} pedido(s) ya liquidado(s) o aprobado(s).`}`)) {
+        if (office && confirm(`¿Fusionar «${cur.name}» en «${target.name}»?\n\nTodos sus pedidos (también los liquidados, con su kardex de vacíos) pasan a «${target.name}» y «${cur.name}» se elimina. Queda un solo cliente.`)) {
+          try { const r = await Clientes.merge(target, [cur]); merged = ` · se fusionó «${cur.name}» (${r.orders} pedido(s))`; } catch (err) { toast(err.message, 'err'); }
+        } else if (!office && (movable.length || canDrop) && confirm(`¿Unir «${cur.name}» con «${target.name}»?\n\n${movable.length ? `• ${movable.length} pedido(s) más de «${cur.name}» pasan a «${target.name}».\n` : ''}${canDrop ? `• «${cur.name}» se elimina de la cartera (queda un solo cliente).` : `• «${cur.name}» se queda en la cartera: tiene ${blocked} pedido(s) ya liquidado(s) o aprobado(s).`}`)) {
           if (movable.length) await saveDocs('orders', movable.map((x) => asOrder(x, target)));
           if (canDrop) await saveDocs('clients', { ...cur, deleted: true, mergedInto: target.id });
           merged = ` · se unió «${cur.name}»`;
@@ -1326,6 +1345,26 @@
   const liqBadge = (d) => `<span class="status ${d.result === 'entregada' ? 'aprobada' : d.result === 'anulada' ? 'over' : 'en_espera'}">${esc(LIQ_TEXT[d.result] || 'Liquidado')}</span>${d.newValery ? ` <span class="muted" style="font-size:12px">nota nueva ${esc(d.newValery)}</span>` : ''}`;
   const qty = (l) => (l ? [l.cajas ? l.cajas + ' cj' : '', l.unidades ? l.unidades + ' un' : ''].filter(Boolean).join(' + ') || '—' : '—');
 
+  /**
+   * Pedido «sin enviar»: se elimina completo (no suma en nada). Si su cliente es uno
+   * nuevo sin verificar y no tiene otros pedidos, se ofrece eliminarlo también.
+   */
+  async function deleteUnsent(o, after) {
+    if (!o || o.status !== 'abierto') return;
+    if (!confirm(`¿Eliminar el pedido sin enviar de ${o.clientName}${Matrix.orderTotals(o).items ? ' (' + orderSummary(o) + ')' : ''}?`)) return;
+    await saveOrder({ ...o, deleted: true });
+    await logEvent('pedido_eliminado', `Eliminó el pedido sin enviar de ${o.clientName}`, { orderId: o.id, clientName: o.clientName });
+    if (S.session && S.session.activeOrderId === o.id) await setSession({ ...S.session, activeOrderId: null });
+    const c = o.clientId ? clientById(o.clientId) : null;
+    const others = c ? S.orders.filter((x) => !x.deleted && x.clientId === c.id && x.id !== o.id).length : 1;
+    if (c && !others && !Clientes.isVerified(c) && c.sellerId === S.session.sellerId &&
+      confirm(`${c.name} no tiene otros pedidos y aún no está verificado por la oficina. ¿Eliminarlo también de tu cartera?`)) {
+      await saveDocs('clients', { ...c, deleted: true });
+      await logEvent('cliente_eliminado', `Eliminó el cliente ${c.name} (sin pedidos, sin verificar)`, { clientId: c.id, clientName: c.name });
+    }
+    toast('Pedido eliminado', 'ok'); runSync(false);
+    if (after) after();
+  }
   function renderSellerOrders() {
     const seller = sellerById(S.session.sellerId), sid = seller.id;
     const f = S.ui.myo || (S.ui.myo = { tab: 'pedidos', g: 'todos', r: '15' });
@@ -1344,10 +1383,11 @@
     const chip = (key, cur, label, data) => `<button class="chip ${key === cur ? 'active' : ''}" ${data}="${key}">${label}</button>`;
     const orderRow = (o) => {
       const t = Matrix.orderTotals(o), l = loadOf(o), g = groupOf(o), d = isLiquidated(o) ? o.delivery : null;
+      const del = o.status === 'abierto' ? `<button type="button" class="btn btn-sm btn-danger" data-delopen="${esc(o.id)}" title="Eliminar este pedido sin enviar">🗑</button>` : '';
       return `<tr data-myo="${esc(o.id)}" style="cursor:pointer">
         <td><b>${esc(o.clientName)}</b><div class="muted" style="font-size:12px">${esc(fmtDate(o.routeDate))}${l ? ' · ' + esc(Loads.labelOf(l)) + (l.number ? ' · ' + esc(Loads.loadCode(l)) : '') : ''}${o.valeryNote ? ' · Nota ' + esc(o.valeryNote) : ''}${(o.officeMsgs || []).length ? ' · 💬 ' + o.officeMsgs.length : ''}</div>
           ${d ? liqBadge(d) : `<span class="status ${g === 'aprobados' ? 'en_carga' : o.status}">${esc(GROUP_TEXT[g])}</span>`}${o.createdBy === 'oficina' ? ' <span class="status aprobada">🏢 cargado por oficina</span>' : ''}${o.officeEdited ? ' <span class="status en_espera">ajustado por oficina</span>' : ''}${(o.dupWith || []).some((d) => !d.extra) ? ' <span class="status over">⚠ posible duplicado</span>' : ''}</td>
-        <td class="n" data-l="Monto">${d ? `${usd(d.monto)}${Math.abs(d.monto - t.monto) > 0.004 ? `<div class="muted" style="font-size:12px;text-decoration:line-through">${usd(t.monto)}</div>` : ''}` : usd(t.monto)}</td></tr>`;
+        <td class="n" data-l="Monto">${d ? `${usd(d.monto)}${Math.abs(d.monto - t.monto) > 0.004 ? `<div class="muted" style="font-size:12px;text-decoration:line-through">${usd(t.monto)}</div>` : ''}` : usd(t.monto)} ${del}</td></tr>`;
     };
     app.innerHTML = `
       ${brandHeader(seller.name, 'Mis pedidos · seguimiento',
@@ -1385,7 +1425,7 @@
     $('#myTab').onclick = (e) => { const b = e.target.closest('[data-t]'); if (b) { f.tab = b.dataset.t; renderSellerOrders(); } };
     if (f.tab === 'vacios') renderMyVacios($('#myVac'), sid);
     const mg = $('#myGroup'); if (mg) mg.onclick = (e) => { const b = e.target.closest('[data-g]'); if (b) { f.g = b.dataset.g; renderSellerOrders(); } };
-    app.querySelectorAll('[data-myo]').forEach((tr) => { tr.onclick = () => myOrderSheet(orderById(tr.dataset.myo)); });
+    app.querySelectorAll('[data-myo]').forEach((tr) => { tr.onclick = (e) => { const d = e.target.closest('[data-delopen]'); if (d) { deleteUnsent(orderById(d.dataset.delopen), renderSellerOrders); return; } myOrderSheet(orderById(tr.dataset.myo)); }; });
   }
 
   /* ---------- ♻ Vacíos de mis clientes (E6): saldo y movimientos, solo lectura ---------- */

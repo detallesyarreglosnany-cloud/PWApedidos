@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { Prisma } from '@prisma/client';
 import { isAdminReq, requireAdmin, requireReader, syncOk } from '@/lib/keys';
-import { CANCEL_KINDS, LIQ_KINDS, MANUAL_KINDS, ensureKardex, insertMovs, newMovId, reconcileAll, type VacMov } from '@/lib/vacios';
+import { CANCEL_KINDS, LIQ_KINDS, MANUAL_KINDS, ensureKardex, insertMovs, newMovId, reconcileAll, mergeClientsKardex, type VacMov } from '@/lib/vacios';
 
 // Kardex de vacíos (Fase 2 · E4).
 //
@@ -12,6 +12,7 @@ import { CANCEL_KINDS, LIQ_KINDS, MANUAL_KINDS, ensureKardex, insertMovs, newMov
 //   { action: 'add', mov }               → { mov }    (oficina) devolución, apertura…
 //   { action: 'anular', id, motivo }     → { mov }    (oficina) cancela un renglón manual
 //   { action: 'import', movs }           → { added }  (oficina) restaurar un respaldo
+//   { action: 'merge', from, to, toName } → { moved } (oficina) fusión de clientes: pasa los movimientos manuales
 //   { action: 'mine', sellerId }         → { movs }   (teléfono del vendedor, clave de sync) kardex de SUS clientes
 //
 // Los renglones nunca se editan ni se borran (disparador en la base).
@@ -115,6 +116,12 @@ export async function POST(req: NextRequest) {
       }
       const added = await insertMovs(ok);
       return NextResponse.json({ added, skipped: list.length - added });
+    }
+    if (action === 'merge') {
+      const from = (Array.isArray(body.from) ? body.from : []).map((x) => str(x, 120)).filter(Boolean).slice(0, 50);
+      const to = str(body.to, 120), toName = str(body.toName, 120);
+      if (!to || !from.length || from.includes(to)) return NextResponse.json({ error: 'Clientes inválidos' }, { status: 400 });
+      return NextResponse.json(await mergeClientsKardex(from, to, toName, str(body.by, 80) || 'Oficina'));
     }
     return NextResponse.json({ error: 'Acción inválida' }, { status: 400 });
   } catch (error) {

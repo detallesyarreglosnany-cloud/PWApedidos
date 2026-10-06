@@ -189,5 +189,34 @@
       ${row('Ingresó al sistema', c.createdAt ? fmtDate(String(c.createdAt).slice(0, 10)) + (c.createdByName ? ' · ' + c.createdByName : '') : '')}${row('Observaciones', c.notes)}</div>`;
   }
 
-  global.Clientes = { kindOf, docOf, missing, formSheet, infoHTML, words, isVerified, up };
+  /**
+   * Fusión de clientes (oficina): los repetidos pasan al cliente real sin cabos sueltos.
+   *  1. Kardex de vacíos: los movimientos manuales se pasan en el servidor (necesita internet).
+   *  2. Pedidos (también los liquidados): cliente, nombre y RIF del real. Los liquidados
+   *     suben su kxRev: el servidor cancela sus renglones viejos y los escribe para el real.
+   *  3. El real completa los datos que le faltan con los de los repetidos.
+   *  4. Los repetidos quedan eliminados con mergedInto (no se reusan ni aparecen en carteras).
+   */
+  async function merge(real, dups) {
+    const { S, saveDocs, logEvent, norm } = P();
+    dups = dups.filter((d) => d && d.id !== real.id);
+    if (!dups.length) return { orders: 0 };
+    const by = (S.config && S.config.adminName) || 'Oficina';
+    const k = await global.Sync.adminCall('envases', { action: 'merge', from: dups.map((d) => d.id), to: real.id, toName: real.name, by });
+    if (!k.ok) throw new Error('Se necesita internet para pasar el kardex de vacíos (' + (k.error || 'sin conexión') + '). No se cambió nada.');
+    const ids = new Set(dups.map((d) => d.id));
+    const os = S.orders.filter((o) => !o.deleted && ids.has(o.clientId));
+    await saveDocs('orders', os.map((o) => ({ ...o, clientId: real.id, clientName: real.name, clientKey: norm(real.name), clientRif: real.rif || o.clientRif || '',
+      mergedFrom: o.clientId, ...(o.delivery && o.delivery.at ? { kxRev: (+o.kxRev || 0) + 1 } : {}) })));
+    const fill = {};
+    ['rif', 'docType', 'docNumber', 'phone', 'phone2', 'email', 'address', 'reference', 'tradeName'].forEach((f) => { if (!real[f]) { const src = dups.find((d) => d[f]); if (src) fill[f] = src[f]; } });
+    const now = new Date().toISOString();
+    await saveDocs('clients', [{ ...real, ...fill, mergedIds: [...new Set([...(real.mergedIds || []), ...dups.map((d) => d.id)])] },
+      ...dups.map((d) => ({ ...d, deleted: true, active: false, mergedInto: real.id, mergedAt: now, mergedBy: by }))]);
+    await logEvent('clientes_fusionados', `Fusionó ${dups.map((d) => '«' + d.name + '»').join(', ')} en «${real.name}» · ${os.length} pedido(s) pasados${k.data && k.data.moved ? ' · ' + k.data.moved + ' movimiento(s) de vacíos' : ''}`, { clientId: real.id, clientName: real.name });
+    P().runSync(false);
+    return { orders: os.length, liquidated: os.filter((o) => o.delivery && o.delivery.at).length, kardex: (k.data && k.data.moved) || 0, filled: Object.keys(fill) };
+  }
+
+  global.Clientes = { kindOf, docOf, missing, formSheet, infoHTML, words, isVerified, up, merge };
 })(window);

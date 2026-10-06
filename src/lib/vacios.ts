@@ -11,8 +11,10 @@ import { db } from '@/lib/db';
 // reabre (delivery = null) o se cierra de nuevo con otros números, los renglones
 // anteriores se cancelan con un «reverso» y se escriben los nuevos.
 //
-// Los ids son deterministas (liq:<pedido>:<cierre>:<producto>:<tipo>) y todo se
-// inserta con ON CONFLICT DO NOTHING: repetirlo no duplica nada.
+// Los ids son deterministas (liq:<pedido>:<cierre>[:r<rev>]:<producto>:<tipo>) y todo
+// se inserta con ON CONFLICT DO NOTHING: repetirlo no duplica nada. Al fusionar un
+// cliente, el pedido sube su kxRev: los renglones viejos se cancelan (reverso) y
+// se escriben otra vez a nombre del cliente que queda.
 
 export const LIQ_KINDS = ['despacho', 'recibido', 'asignado'] as const;
 export const MANUAL_KINDS = ['devolucion', 'dev_asignado', 'apertura', 'apertura_asig'] as const;
@@ -29,6 +31,7 @@ type Delivery = { at?: string; date?: string; loadId?: string; newValery?: strin
 type OrderDoc = {
   id: string; clientId?: string; clientKey?: string; clientName?: string; sellerId?: string; sellerName?: string;
   route?: string; valeryNote?: string; deleted?: boolean; delivery?: Delivery | null;
+  kxRev?: number; // sube al fusionar el cliente: sus renglones se rehacen para el cliente nuevo
 };
 
 const n0 = (v: unknown) => Math.max(0, Math.round(Number(v) || 0));
@@ -53,7 +56,7 @@ export function desiredMovs(o: OrderDoc, closedLoads: Map<string, string>): VacM
     const qty: Record<string, number> = { despacho: n0(v.boxes), recibido: n0(v.recv), asignado: n0(v.asg) };
     for (const k of LIQ_KINDS) {
       if (!qty[k]) continue;
-      out.push({ ...base, id: `liq:${o.id}:${d.at}:${pid}:${k}`, kind: k, qty: qty[k], motivo: k === 'despacho' ? String(v.motivo || '') : '' });
+      out.push({ ...base, id: `liq:${o.id}:${d.at}${o.kxRev ? ':r' + n0(o.kxRev) : ''}:${pid}:${k}`, kind: k, qty: qty[k], motivo: k === 'despacho' ? String(v.motivo || '') : '' });
     }
   }
   return out;
@@ -162,3 +165,25 @@ export async function reconcileAll() {
 
 export const newMovId = (prefix: string) => prefix + '_' + Date.now().toString(36) + randomBytes(4).toString('hex');
 export { insertMovs };
+
+/**
+ * Fusión de clientes: los movimientos MANUALES vigentes (devoluciones, aperturas…)
+ * de los clientes repetidos pasan al cliente que queda: cada uno se anula en el
+ * repetido y se escribe igual en el real. Los de liquidación los rehace la propia
+ * liquidación (kxRev del pedido). Repetirlo no duplica nada (ids deterministas).
+ */
+export async function mergeClientsKardex(from: string[], to: string, toName: string, by: string) {
+  await ensureKardex();
+  if (!from.length) return { moved: 0 };
+  const movs = await db.distVacMov.findMany({ where: { clientId: { in: from } } });
+  const cancelled = new Set(movs.filter((m) => (CANCEL_KINDS as readonly string[]).includes(m.kind) && m.refId).map((m) => m.refId as string));
+  const live = movs.filter((m) => (MANUAL_KINDS as readonly string[]).includes(m.kind) && !cancelled.has(m.id));
+  const today = new Date().toISOString().slice(0, 10);
+  const rows: VacMov[] = [];
+  for (const m of live) {
+    rows.push({ ...m, id: 'anu:mrg:' + m.id, kind: 'anulacion', refId: m.id, date: today, motivo: `Fusión de cliente → ${toName}`, by, data: '{}' });
+    rows.push({ ...m, id: 'mrg:' + m.id, clientId: to, clientName: toName, refId: null, motivo: (m.motivo ? m.motivo + ' · ' : '') + 'pasado por fusión de cliente', by });
+  }
+  await insertMovs(rows);
+  return { moved: live.length };
+}
