@@ -634,10 +634,10 @@
     opening = opening.then(() => openClientNow(name, opts)).catch((e) => toast(e.message || 'Error', 'err'));
     return opening;
   }
-  // Pedidos recientes (hoy y ayer) del mismo cliente: por id de cartera, por
+  // Pedidos recientes (últimos 4 días) del mismo cliente: por id de cartera, por
   // nombre o por nombre equivalente («Bodega Sofía» = «VARIEDADES SOFIA»).
   function recentOrdersOf(client, name) {
-    const sid = S.session.sellerId, from = dayMinus(1), fk = Dedup.key(client ? client.name : name), key = norm(client ? client.name : name);
+    const sid = S.session.sellerId, from = dayMinus(Dedup.WINDOW_DAYS), fk = Dedup.key(client ? client.name : name), key = norm(client ? client.name : name);
     return S.orders.filter((o) => o.sellerId === sid && Dedup.live(o) && String(o.routeDate) >= from && Matrix.orderTotals(o).items &&
       ((client && o.clientId === client.id) || o.clientKey === key || Dedup.key(o.clientName || o.clientKey) === fk))
       .sort((a, b) => String(b.sentAt || b.createdAt).localeCompare(String(a.sentAt || a.createdAt)));
@@ -660,11 +660,11 @@
     });
     $('#pcNew', sh.el).onclick = () => { sh.close(); openClient(name, { isNew: true }); };
   }
-  /** Ya le tomó pedido hoy o ayer: ¿de verdad es un pedido ADICIONAL? */
+  /** Ya le tomó pedido en los últimos 4 días: ¿de verdad es un pedido ADICIONAL? */
   function extraOrderSheet(client, name, prev) {
     const sh = openSheet(`
       <div class="row"><h2 class="grow">⚠ Ya le tomaste pedido a ${esc(client ? client.name : name)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
-      <table class="inv">${prev.slice(0, 4).map((o) => `<tr><td><b>${esc(fmtDate(o.routeDate))}</b> ${esc(hhmm(o.sentAt || o.createdAt))}<div class="muted">${esc(Loads.orderLabel(o))}${o.createdBy === 'oficina' ? ' · 🏢 cargado por oficina' : ''}</div></td>
+      <table class="inv">${prev.slice(0, 4).map((o) => `<tr><td><b>${esc(fmtDate(o.routeDate))}</b> ${esc(hhmm(o.sentAt || o.createdAt))}<div class="muted">${esc(Loads.orderLabel(o))}${loadOf(o) ? ' · hoja ' + esc(Loads.labelOf(loadOf(o))) + (loadOf(o).number ? ' ' + esc(Loads.loadCode(loadOf(o))) : '') : ''}${o.createdBy === 'oficina' ? ' · 🏢 cargado por oficina' : ''}</div></td>
         <td class="n">${usd(Matrix.orderTotals(o).monto)}</td><td><button class="btn btn-sm" type="button" data-see="${esc(o.id)}">Ver</button></td></tr>`).join('')}</table>
       <div class="hint warn" style="margin-top:12px">Si es el <b>mismo pedido</b>, no lo cargues otra vez: se despacharía dos veces y habría devolución.<br>Solo si el cliente pidió <b>más mercancía aparte</b>, cárgalo como adicional.</div>
       <div class="actions"><button class="btn btn-primary" data-close>No, cancelar</button><button class="btn" id="eoExtra">＋ Es un pedido adicional</button></div>`);
@@ -685,7 +685,7 @@
     // 2) Pedido de hoy aún editable: se abre ese (no se crea otro)
     let o = pendingOrdersToday().find((x) => x.clientKey === key || (client && x.clientId === client.id));
     if (o && !opts.extra) toast(`Ya tenías un pedido de ${o.clientName}: se abrió ese`, 'ok');
-    // 3) Ya pidió hoy o ayer (aprobado, despachado…): confirmar que es adicional
+    // 3) Ya pidió en los últimos 4 días (en cualquier hoja: esperando aprobación, aprobada, despachada…): confirmar que es adicional
     if (!o && !opts.extra) {
       const prev = recentOrdersOf(client, name);
       if (prev.length) { extraOrderSheet(client, name, prev); return; }
@@ -962,8 +962,11 @@
   /** Alerta (no bloquea): el mismo cliente tiene otro pedido ese día (mismo u otro vendedor). */
   function dupHint(o) {
     const real = o.dupWith.filter((d) => !d.extra);
-    if (!real.length) return `<div class="hint">➕ Pedido adicional confirmado: ${esc(o.clientName)} ya tenía otro pedido${o.dupWith[0].routeDate ? ' del ' + esc(fmtDate(o.dupWith[0].routeDate)) : ''}.</div>`;
-    return `<div class="hint warn">⚠ <b>Posible pedido duplicado:</b> ${esc(o.clientName)} también tiene pedido ${real.map((d) => `${d.routeDate ? 'del ' + esc(fmtDate(d.routeDate)) + ' ' : ''}con ${esc(d.sellerName)}`).join(', ')}. Verifica que no sea el mismo pedido.</div>`;
+    const where = (d) => { const l = d.loadId ? S.loads.find((x) => x.id === d.loadId) : null; return `${d.routeDate ? 'del ' + esc(fmtDate(d.routeDate)) : ''}${l ? ' en hoja ' + esc(Loads.labelOf(l)) : ''} con ${esc(d.sellerName)}`; };
+    if (!real.length) return `<div class="hint">➕ Pedido adicional confirmado: ${esc(o.clientName)} ya tenía otro pedido ${where(o.dupWith[0])}.</div>`;
+    const same = real.filter((d) => d.kind !== 'similar'), sim = real.filter((d) => d.kind === 'similar');
+    return `<div class="hint warn">${same.length ? `⚠ <b>Posible pedido duplicado:</b> ${esc(o.clientName)} también tiene pedido ${same.map(where).join('; ')}.` : ''}
+      ${sim.length ? `${same.length ? '<br>' : ''}≈ <b>Nombre parecido:</b> ${sim.map((d) => `«${esc(d.clientName)}» ${where(d)}`).join('; ')}.` : ''} Verifica que no sea el mismo pedido.</div>`;
   }
 
   function orderLinesHTML(o) {

@@ -488,3 +488,8 @@ table.inv tr.kx-sub td { background: var(--bg-2); border-top: 1px solid var(--li
 }
 @media print { .aviso { display: none; } }
 .pick-list { display: grid; gap: 8px; }
+/* Posible pedido duplicado */
+.dup-btn { cursor: pointer; border: 0; font: inherit; }
+.dup-line { font-size: 12px; color: var(--warn); margin-top: 2px; line-height: 1.3; }
+.dup-line.same { color: #ff6b76; font-weight: 700; }
+.dup-line.extra { color: var(--muted); }
