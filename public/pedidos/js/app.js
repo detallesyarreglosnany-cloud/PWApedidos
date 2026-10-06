@@ -241,7 +241,25 @@
   // Cada cuánto se revisa el servidor. Con la app en segundo plano casi no se
   // consulta: al volver a la pantalla, al recuperar señal o al llegar un aviso
   // push se sincroniza en el acto (así se ahorra tráfico de servidor y base de datos).
-  const syncEvery = () => (document.hidden ? (isOffice() ? 120000 : 300000) : (isOffice() ? 20000 : 45000));
+  // Modo ahorro: si nadie toca la pantalla (10 min en el teléfono, 15 en la
+  // oficina) se consulta cada 5 / 2 min, y tras 1 hora cada 15 / 5 min. Lo que
+  // se escribe en el equipo se sube igual a los segundos (notifyChange), un aviso
+  // push sincroniza en el acto, y al primer toque vuelve a la velocidad normal.
+  let lastInput = Date.now();
+  const idleFor = () => Date.now() - lastInput;
+  const isIdle = () => idleFor() > (isOffice() ? 15 : 10) * 60000;
+  const syncEvery = () => {
+    const off = isOffice();
+    if (idleFor() > 3600000) return off ? 300000 : 900000;
+    if (document.hidden || isIdle()) return off ? 120000 : 300000;
+    return off ? 20000 : 45000;
+  };
+  function onUserInput() {
+    const wasIdle = isIdle();
+    lastInput = Date.now();
+    if (wasIdle) { updateSyncPill(); runSync(false); }
+  }
+  ['pointerdown', 'keydown', 'touchstart', 'wheel'].forEach((ev) => window.addEventListener(ev, onUserInput, { passive: true, capture: true }));
 
   const isSupervisor = () => location.hash.startsWith('#/supervisor');
   const syncScope = () => (isOffice() || isSupervisor() ? {} : (S.session && S.session.sellerId ? { sellerId: S.session.sellerId } : {}));
@@ -297,9 +315,9 @@
     el.className = 'pill' + (!online || serverDown ? ' offline' : '') + (pending ? ' pending' : '');
     const r = lastSyncResult || {};
     const label = !online ? 'Sin señal' : r.noKey ? 'Falta clave' : r.status === 401 ? 'Clave inválida' : serverDown ? 'Sin servidor' : 'En línea';
-    el.innerHTML = '<span class="dot"></span>' + label +
+    el.innerHTML = '<span class="dot"></span>' + label + (online && !serverDown && isIdle() ? ' · ahorro' : '') +
       (pending ? ' · ' + pending : '');
-    el.title = lastSyncResult && lastSyncResult.error ? lastSyncResult.error : 'Tocar para sincronizar';
+    el.title = lastSyncResult && lastSyncResult.error ? lastSyncResult.error : isIdle() ? 'Modo ahorro: sin uso hace un rato, se consulta el servidor con menos frecuencia. Toca para sincronizar.' : 'Tocar para sincronizar';
   }
 
   /* ===================== Notificaciones (oficina) ===================== */
@@ -1314,6 +1332,7 @@
   window.PV = {
     S, $, $$, esc, nf2, nf0, usd, bs, int, dec, norm, slug, today, fmtDate, fmtStock, hasStock, productSort, productLabel, rubroIcon,
     toast, openSheet, copyText, saveFile, saveBinary, pickFile, brandHeader, creditFooter,
+    syncInfo: () => ({ idle: isIdle(), every: syncEvery() }), _idleSince: (ms) => { lastInput = Date.now() - ms; },
     loadAll, saveDocs, saveOrder, saveSettings, setSession, msgThreadHTML, rememberOffice, forgetOffice, PERSIST_HINT, runSync, updateSyncPill, render, refreshAfterRemote, updateBell, beep, logEvent, isSupervisor,
     notifSheet, refreshPush,
     productById, sellerById, orderById, clientById, rubros, orderLinesHTML,
