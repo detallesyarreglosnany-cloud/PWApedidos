@@ -498,3 +498,8 @@ details.sr > summary { cursor: pointer; list-style: none; }
 details.sr > summary::-webkit-details-marker { display: none; }
 details.sr[open] > summary { border-bottom: 1px dashed var(--line); padding-bottom: 8px; }
 details.sr mark { background: var(--accent); color: #111; border-radius: 4px; padding: 0 3px; }
+/* Accesos rápidos del vendedor */
+.quick-nav { display: flex; gap: 6px; overflow-x: auto; padding: 8px 12px 0; scrollbar-width: none; }
+.quick-nav::-webkit-scrollbar { display: none; }
+.quick-nav button { flex: 0 0 auto; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 999px; padding: 8px 12px; font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.quick-nav button:active { transform: scale(.97); }
