@@ -562,7 +562,7 @@
   function brandHeader(title, sub, right) {
     return `<header class="topbar">
       <img class="brand-mark" src="./icons/mark-white.png" alt="Puerto Venado" width="40" height="40">
-      <div class="grow"><h1>${esc(title)}<small>${esc(sub)}</small></h1></div>${right}</header>`;
+      <div class="grow"><h1>${esc(title)}<small>${esc(sub)}</small></h1></div><button class="bell" type="button" data-search aria-label="Buscar cliente, nota o fecha" title="Buscar cliente, nota Valery o fecha">🔍</button>${right}</header>`;
   }
 
   /* =============================== Login =============================== */
@@ -1023,7 +1023,7 @@
     const locked = !editable(o);
     const client = clientById(o.clientId) || {};
     const sh = openSheet(`
-      <div class="row"><div class="grow"><h2>${esc(o.clientName)}</h2>
+      <div class="row"><div class="grow"><h2>${esc(o.clientName)} <button type="button" class="btn btn-sm" id="fixClient" title="Elegir el cliente correcto o corregir el nombre">✎ Cliente</button></h2>
         <div class="muted">${esc([client.rif, client.address].filter(Boolean).join(' · '))}</div>
         <div class="muted">${esc(fmtDate(o.routeDate))} · Ruta ${esc(o.route || '—')} · <span class="status ${o.status}">${esc(Loads.orderLabel(o))}</span></div></div>
         <button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
@@ -1040,6 +1040,7 @@
       </div>`, { cls: 'sheet-order' });
     const notes = $('#notes', sh.el);
     notes.onchange = async () => { o.notes = notes.value.slice(0, 300); await saveOrder(o); };
+    $('#fixClient', sh.el).onclick = () => { sh.close(); clientFixSheet(orderById(o.id) || o, { onDone: () => renderSeller() }); };
     bindVacAsk(sh, o);
     const send = $('#sendOrder', sh.el);
     if (send) send.onclick = async () => {
@@ -1065,6 +1066,149 @@
       runSync(false);
     };
   }
+
+  /* ================== Corregir el cliente de un pedido ================== */
+  // El vendedor escribió el nombre a mano (con errores, en minúsculas o repitiendo
+  // un cliente). La oficina, y el vendedor en lo suyo, pueden:
+  //   · elegir el cliente correcto de la lista de coincidencias (y unir el repetido)
+  //   · corregir el nombre del cliente (se corrige en todos sus pedidos)
+  // Un pedido ya liquidado no cambia de cliente (sus vacíos están en el kardex):
+  // solo se le corrige el nombre.
+  const liquidated = (x) => !!(x && x.delivery && x.delivery.at);
+  function clientFixSheet(o, opts) {
+    opts = opts || {};
+    const office = !!opts.office, sid = S.session && S.session.sellerId;
+    const cur = o.clientId ? clientById(o.clientId) : null;
+    const pool = (office ? S.clients : S.clients.filter((c) => c.sellerId === sid)).filter((c) => c.active !== false && !c.deleted && (!cur || c.id !== cur.id));
+    const canMove = !liquidated(o) && (office || editable(o));
+    const canRename = office || !cur || (cur.sellerId === sid && cur.source === 'campo');
+    const owner = cur && cur.sellerId ? (sellerById(cur.sellerId) || {}).name : '';
+    const list = (q) => {
+      const tokens = norm(q).split(' ').filter(Boolean);
+      const hits = tokens.length ? pool.filter((c) => tokens.every((t) => norm(c.name + ' ' + (c.rif || '') + ' ' + (c.phone || '')).includes(t))).slice(0, 8) : Dedup.similar(o.clientName, pool, 0.34);
+      return hits.map((c) => `<button type="button" class="sug-item" data-fix="${esc(c.id)}"><b>${esc(c.name)}</b><small>${esc([c.rif, c.address, office && c.sellerId ? 'cartera de ' + ((sellerById(c.sellerId) || {}).name || '—') : ''].filter(Boolean).join(' · '))}</small></button>`).join('')
+        || '<p class="muted">Sin coincidencias. Escribe parte del nombre, RIF o teléfono.</p>';
+    };
+    const sh = openSheet(`
+      <div class="row"><h2 class="grow">✎ Cliente del pedido</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <div class="hint">Ahora: <b>${esc(o.clientName)}</b>${cur ? ` <span class="muted">${esc([cur.rif, cur.address, owner ? 'cartera de ' + owner : '', cur.source === 'campo' ? 'creado por el vendedor en la calle' : cur.source === 'oficina' ? 'creado por la oficina' : ''].filter(Boolean).join(' · '))}</span>` : ''}</div>
+      ${canMove ? `<div class="section-title" style="margin:14px 0 6px">1 · Elegir el cliente correcto <span class="muted">(un solo nombre, sin duplicados)</span></div>
+        <input id="cfQ" class="input" placeholder="Buscar cliente por nombre, RIF o teléfono…" autocomplete="off">
+        <div id="cfList" class="pick-list" style="margin-top:8px">${list('')}</div>`
+        : `<div class="hint warn">${liquidated(o) ? 'Este pedido ya está liquidado: no cambia de cliente (sus vacíos ya están en el kardex).' : 'Este pedido ya está aprobado: el cambio de cliente lo hace la oficina.'} Sí puedes corregir el nombre.</div>`}
+      ${canRename ? `<div class="section-title" style="margin:16px 0 6px">${canMove ? '2 · ' : ''}Corregir el nombre de este cliente <span class="muted">(se corrige en todos sus pedidos)</span></div>
+        <div class="row" style="gap:6px"><input id="cfName" class="input grow" maxlength="80" value="${esc(o.clientName)}"><button type="button" class="btn btn-sm" id="cfUp" title="Pasar a MAYÚSCULAS">AA</button></div>
+        <div class="actions"><button class="btn btn-primary" id="cfSave">Guardar nombre</button></div>` : ''}`, { wide: true });
+    const done = () => { sh.close(); if (opts.onDone) opts.onDone(); runSync(false); };
+    const q = $('#cfQ', sh.el);
+    if (q) q.oninput = () => { $('#cfList', sh.el).innerHTML = list(q.value); };
+    const up = $('#cfUp', sh.el); if (up) up.onclick = () => { const i = $('#cfName', sh.el); i.value = i.value.toUpperCase(); i.focus(); };
+    const asOrder = (x, c) => ({ ...x, clientId: c.id, clientName: c.name, clientKey: norm(c.name), clientRif: c.rif || x.clientRif || '', clientFixedAt: DB.now() });
+    sh.el.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-fix]'); if (!b) return;
+      const target = clientById(b.dataset.fix); if (!target) return;
+      const cur2 = orderById(o.id) || o;
+      if (!confirm(`¿Cambiar el cliente de este pedido?\n\n«${cur2.clientName}» → «${target.name}»`)) return;
+      await saveDocs('orders', asOrder(cur2, target));
+      let merged = '';
+      if (cur) {
+        // Unir: los demás pedidos del cliente repetido pasan al correcto
+        const others = S.orders.filter((x) => !x.deleted && x.clientId === cur.id && x.id !== o.id);
+        const movable = others.filter((x) => !liquidated(x) && (office || editable(x)));
+        const blocked = others.length - movable.length;
+        const canDrop = !blocked && (office || cur.source === 'campo');
+        if ((movable.length || canDrop) && confirm(`¿Unir «${cur.name}» con «${target.name}»?\n\n${movable.length ? `• ${movable.length} pedido(s) más de «${cur.name}» pasan a «${target.name}».\n` : ''}${canDrop ? `• «${cur.name}» se elimina de la cartera (queda un solo cliente).` : `• «${cur.name}» se queda en la cartera: tiene ${blocked} pedido(s) ya liquidado(s) o aprobado(s).`}`)) {
+          if (movable.length) await saveDocs('orders', movable.map((x) => asOrder(x, target)));
+          if (canDrop) await saveDocs('clients', { ...cur, deleted: true, mergedInto: target.id });
+          merged = ` · se unió «${cur.name}»`;
+        }
+      }
+      await logEvent('cliente_corregido', `Cambió el cliente del pedido: «${cur2.clientName}» → «${target.name}» (${cur2.sellerName})${merged}`, { orderId: o.id, clientId: target.id, clientName: target.name });
+      toast(`Cliente: ${target.name}${merged}`, 'ok');
+      done();
+    });
+    const save = $('#cfSave', sh.el);
+    if (save) save.onclick = async () => {
+      const name = $('#cfName', sh.el).value.replace(/\s+/g, ' ').trim().slice(0, 80);
+      if (!name) return;
+      const cur2 = orderById(o.id) || o;
+      if (name === cur2.clientName) { sh.close(); return; }
+      const clash = pool.find((c) => norm(c.name) === norm(name));
+      if (clash && canMove) { toast(`Ya existe «${clash.name}»: elígelo en la lista (así se unen y queda uno solo)`, 'err'); $('#cfQ', sh.el).value = clash.name; $('#cfList', sh.el).innerHTML = list(clash.name); return; }
+      if (cur) {
+        await saveDocs('clients', { ...cur, name });
+        const mine = S.orders.filter((x) => !x.deleted && x.clientId === cur.id && (office || editable(x)));
+        await saveDocs('orders', mine.map((x) => ({ ...x, clientName: name, clientKey: norm(name), clientFixedAt: DB.now() })));
+      } else {
+        await saveDocs('orders', { ...cur2, clientName: name, clientKey: norm(name), clientFixedAt: DB.now() });
+      }
+      await logEvent('cliente_corregido', `Corrigió el nombre del cliente: «${cur2.clientName}» → «${name}»`, { orderId: o.id, clientId: cur ? cur.id : '', clientName: name });
+      toast('Nombre corregido: ' + name, 'ok');
+      done();
+    };
+  }
+
+  /* =============== Buscar: cliente, nota Valery o fecha (lupa) =============== */
+  // Para todos (vendedor: sus pedidos; oficina y supervisor: todos). Si la nota
+  // buscada se anuló, dice qué llevaba el cliente, el estado y la nota que la reemplaza.
+  const RESULT_TXT = { entregada: '✓ Entregada', parcial: '↩ Devolución parcial', pendiente: '⏳ No se entregó · se entrega después', anulada: '✕ Nota anulada · no se entregó' };
+  function noteStatusHTML(o, hitNote) {
+    const d = o.delivery && o.delivery.at ? o.delivery : null;
+    const vn = o.valeryNote || '', mark = (n) => (hitNote && n && String(n).replace(/\D/g, '').includes(hitNote) ? `<mark>${esc(n)}</mark>` : esc(n));
+    if (!d) return `${esc(Loads.orderLabel(o))} · ${vn ? 'Nota Valery ' + mark(vn) : '<span class="muted">sin nota Valery todavía</span>'}`;
+    if (d.result === 'parcial') return `<span class="warn-txt">Nota ${mark(d.voidedNote || vn)} ANULADA</span> → la reemplaza la nota <b>${mark(d.newValery || '—')}</b> (devolución parcial)`;
+    if (d.result === 'anulada') return `<span class="warn-txt">Nota ${mark(d.voidedNote || vn)} ANULADA</span> · el cliente no recibió el pedido${d.motivo ? ' · ' + esc(d.motivo) : ''}`;
+    if (d.result === 'pendiente') return `⏳ No se entregó: se entrega después con la misma nota ${mark(vn)}`;
+    return `✓ Entregada · Nota ${mark(vn)}`;
+  }
+  function searchSheet() {
+    const office = isOffice() || isSupervisor(), sid = S.session && S.session.sellerId;
+    const scope = () => S.orders.filter((o) => !o.deleted && (office || o.sellerId === sid));
+    const sh = openSheet(`
+      <div class="row"><h2 class="grow">🔍 Buscar</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <div class="row wrap" style="gap:8px"><input id="sQ" class="input grow" type="search" placeholder="Cliente, N° de nota Valery o RIF…" autocomplete="off">
+        <input id="sD" class="input" type="date" style="max-width:180px" aria-label="Fecha"></div>
+      <p class="muted" style="margin:6px 0 0">${office ? 'Todos los pedidos de este equipo.' : 'Tus pedidos.'} Puedes buscar una nota anulada: te dice qué llevaba y la nota que la reemplaza.</p>
+      <div id="sRes" style="margin-top:10px"></div>`, { wide: true });
+    const draw = () => {
+      const q = $('#sQ', sh.el).value.trim(), date = $('#sD', sh.el).value;
+      const digits = q.replace(/\D/g, ''), isNum = !!q && /^[\d\s.\-#ne]+$/i.test(q) && digits.length >= 2;
+      const tokens = isNum ? [] : norm(q).split(' ').filter(Boolean);
+      if (!q && !date) { $('#sRes', sh.el).innerHTML = '<p class="muted">Escribe un nombre, un número de nota o elige una fecha.</p>'; return; }
+      const notesOf = (o) => [o.valeryNote, o.delivery && o.delivery.voidedNote, o.delivery && o.delivery.newValery, o.noteNumber ? Loads.noteCode(o.noteNumber) : ''].filter(Boolean);
+      const res = scope().filter((o) => {
+        if (date) { const l = loadOf(o); if (![o.routeDate, l && l.date, o.delivery && o.delivery.date].includes(date)) return false; }
+        if (isNum) return notesOf(o).some((n) => String(n).replace(/\D/g, '').includes(digits)) || String(o.clientRif || '').replace(/\D/g, '').includes(digits);
+        if (!tokens.length) return true;
+        const h = norm([o.clientName, o.clientRif, o.sellerName, o.route].join(' '));
+        return tokens.every((t) => h.includes(t));
+      }).sort((a, b) => String(b.routeDate).localeCompare(String(a.routeDate)) || String(b.sentAt || b.createdAt).localeCompare(String(a.sentAt || a.createdAt))).slice(0, 40);
+      const qty = (l) => (l ? [l.cajas ? l.cajas + ' cj' : '', l.unidades ? l.unidades + ' un' : ''].filter(Boolean).join(' + ') : '') || '—';
+      const card = (o) => {
+        const l = loadOf(o), d = o.delivery && o.delivery.at ? o.delivery : null, t = Matrix.orderTotals(o);
+        const dl = d ? d.lines || {} : null;
+        const rows = Object.entries(o.lines || {}).map(([pid, x]) => {
+          const got = dl ? dl[pid] : null;
+          const ret = dl ? { cajas: Math.max(0, (+x.cajas || 0) - (got ? +got.cajas || 0 : 0)), unidades: Math.max(0, (+x.unidades || 0) - (got ? +got.unidades || 0 : 0)) } : null;
+          return `<tr><td>${esc(x.code)} ${esc(x.name)} ${esc(x.presentation || '')}</td><td class="num">${qty(x)}</td>${dl ? `<td class="num">${qty(got)}</td><td class="num">${ret.cajas || ret.unidades ? qty(ret) : ''}</td>` : ''}</tr>`;
+        }).join('');
+        return `<details class="card card-pad sr" style="margin-bottom:8px"><summary><b>${esc(o.clientName)}</b> · ${esc(fmtDate(o.routeDate))}${office ? ' · ' + esc(o.sellerName) : ''} · ${usd(d ? d.monto : t.monto)}
+          <div style="margin-top:3px">${noteStatusHTML(o, isNum ? digits : '')}</div>
+          <div class="muted" style="font-size:13px">${l ? `Hoja ${esc(Loads.labelOf(l))}${l.number ? ' ' + esc(Loads.loadCode(l)) : ''} · ${esc(Loads.statusOf(l, S.config).name)}` : 'Sin hoja'}${o.route ? ' · Ruta ' + esc(o.route) : ''}${o.pendingFrom ? ' · reprogramado de otro pedido' : ''}${o.createdBy === 'oficina' ? ' · 🏢 oficina' : ''}</div></summary>
+          <table class="lines" style="margin-top:8px"><thead><tr><th style="text-align:left">Producto</th><th class="num">Llevaba</th>${dl ? '<th class="num">Entregado</th><th class="num">Devuelto</th>' : ''}</tr></thead><tbody>${rows}</tbody></table>
+          ${o.notes ? `<p class="muted">📝 ${esc(o.notes)}</p>` : ''}</details>`;
+      };
+      $('#sRes', sh.el).innerHTML = res.length ? `<p class="muted">${res.length === 40 ? 'Primeros 40 resultados' : res.length + ' resultado' + (res.length > 1 ? 's' : '')}</p>${res.map(card).join('')}`
+        : '<div class="empty"><strong>Sin resultados</strong>Prueba con parte del nombre o del número.</div>';
+      if (res.length === 1) { const dt = $('#sRes details', sh.el); if (dt) dt.open = true; }
+    };
+    let tm;
+    $('#sQ', sh.el).oninput = () => { clearTimeout(tm); tm = setTimeout(draw, 120); };
+    $('#sD', sh.el).onchange = draw;
+    draw();
+    setTimeout(() => $('#sQ', sh.el).focus(), 50);
+  }
+  document.addEventListener('click', (e) => { if (e.target.closest('[data-search]')) searchSheet(); });
 
   /* ====================== Mis pedidos (seguimiento) ====================== */
   // El vendedor sigue TODOS sus pedidos (no solo los de hoy): enviados, aprobados,
@@ -1386,6 +1530,7 @@
   window.PV = {
     S, $, $$, esc, nf2, nf0, usd, bs, int, dec, norm, slug, today, fmtDate, fmtStock, hasStock, productSort, productLabel, rubroIcon,
     toast, openSheet, copyText, saveFile, saveBinary, pickFile, brandHeader, creditFooter,
+    clientFixSheet, searchSheet,
     syncInfo: () => ({ idle: isIdle(), every: syncEvery() }), _idleSince: (ms) => { lastInput = Date.now() - ms; },
     loadAll, saveDocs, saveOrder, saveSettings, setSession, msgThreadHTML, rememberOffice, forgetOffice, PERSIST_HINT, runSync, updateSyncPill, render, refreshAfterRemote, updateBell, beep, logEvent, isSupervisor,
     notifSheet, refreshPush,
