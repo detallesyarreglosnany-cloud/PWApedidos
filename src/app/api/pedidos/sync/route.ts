@@ -6,6 +6,7 @@ import { sendPush, type PushMsg } from '@/lib/push';
 import { RESET_LOCK, currentEpoch, epochAt } from '@/lib/epoch';
 import { ordersOfLoads, syncKardexForOrders } from '@/lib/vacios';
 import { dupPairs, DUP_WINDOW_DAYS, type DupOrder } from '@/lib/dedup';
+import { stashImage, productsWithInlineImage } from '@/lib/images';
 
 // Sincronización de la PWA de pedidos (public/pedidos).
 //
@@ -176,6 +177,25 @@ function mergeFields(a: Doc, b: Doc, kind: string) {
   const differs = (x: Doc) => [...keysOf(doc, x)].some((k) => !FV_SKIP.has(k) && !same(doc[k], x[k]));
   return { doc, fromA: differs(b), fromB: differs(a) };
 }
+// Migración de fotos: por tandas, como mucho una revisión cada 10 min por instancia
+let lastImageCheck = 0;
+async function migrateInlineImages(epoch: string) {
+  if (Date.now() - lastImageCheck < 10 * 60_000) return;
+  lastImageCheck = Date.now();
+  try {
+    const rows = await productsWithInlineImage(40);
+    if (!rows.length) return;
+    const out: Row[] = [];
+    for (const r of rows) {
+      const cur = parseDoc(r.data);
+      const st = await stashImage(cur);
+      out.push(toRow('products', { ...st.doc, updatedAt: later(cur.updatedAt) }));
+    }
+    await writeRows(out, epoch);
+    if (rows.length === 40) lastImageCheck = 0; // quedan más: sigue en la próxima
+  } catch (e) { console.warn('[fotos]', e); }
+}
+
 /** Una hora estrictamente posterior a todas (la versión combinada debe ganar en todos los equipos). */
 function later(...ts: string[]) {
   const max = ts.slice().sort().pop()!;
@@ -361,6 +381,14 @@ export async function POST(req: NextRequest) {
           // Un reloj de teléfono adelantado no puede "ganar" para siempre.
           if (doc.updatedAt > maxTs) doc.updatedAt = serverTime.toISOString();
           if (FV_KINDS.includes(kind)) cleanFv(doc, maxTs, serverTime.toISOString());
+          // Fotos aparte: el producto se guarda sin la foto (solo su huella imageV) y con
+          // una versión nueva, para que el mismo equipo baje la versión liviana
+          let stashed = false;
+          if (kind === 'products') {
+            if (JSON.stringify(doc).length > MAX_DOC_BYTES) { rejected.push({ kind, id: doc.id, reason: 'too_large' }); continue; }
+            const st = await stashImage(doc);
+            if (st.changed) { doc = st.doc; stashed = true; }
+          }
           if (JSON.stringify(doc).length > MAX_DOC_BYTES) {
             rejected.push({ kind, id: doc.id, reason: 'too_large' });
             continue;
@@ -389,6 +417,11 @@ export async function POST(req: NextRequest) {
             }
           }
 
+          if (stashed) {
+            // Si la foto no venía (equipo con la dirección de la foto), se conserva la que tenía
+            if (!('imageV' in doc) && cur && 'imageV' in cur) (doc as Record<string, unknown>).imageV = cur.imageV;
+            if (!existing || existing.updatedAt <= doc.updatedAt) doc.updatedAt = later(existing ? existing.updatedAt : doc.updatedAt, doc.updatedAt);
+          }
           if (existing && cur) {
             if (kind === 'orders' && !isAdmin && (cur.locked === true || existing.status === 'despachado')) {
               rejected.push({ kind, id: doc.id, reason: 'locked', doc: cur });
@@ -474,6 +507,9 @@ export async function POST(req: NextRequest) {
 
     // Tandas intermedias de una subida grande: la bajada va en la última
     if (body.noPull) return NextResponse.json({ serverTime: serverTime.toISOString(), accepted, rejected, pull: {} });
+
+    // Productos guardados con la foto adentro (versión anterior): se pasan a fotos aparte
+    await migrateInlineImages(epoch);
 
     // ---- Bajada (por páginas) ----
     const since = body.since && !Number.isNaN(Date.parse(body.since)) ? new Date(Date.parse(body.since) - PULL_OVERLAP_MS) : null;

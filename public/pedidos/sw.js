@@ -5,7 +5,8 @@
  *  - /api/*: siempre red (los datos viven en IndexedDB, no en caché HTTP).
  * Subir CACHE_VERSION en cada despliegue para forzar la actualización.
  * ========================================================================= */
-const CACHE_VERSION = 'pedidos-v47';
+const CACHE_VERSION = 'pedidos-v48';
+const IMG_CACHE = 'fotos-productos'; // no empieza con «pedidos-»: sobrevive a las actualizaciones
 const SHELL = [
   './index.html', './styles.css', './manifest.webmanifest',
   './js/db.js', './js/seed.js', './js/matrix.js', './js/dedup.js', './js/sync.js', './js/loads.js', './js/print.js', './js/envases.js', './js/liquidacion.js', './js/kardex.js', './js/xlsx.js', './js/exportar.js', './js/reportes.js', './js/excelcmp.js',
@@ -31,6 +32,22 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   const url = new URL(req.url);
   if (req.method !== 'GET' || url.origin !== self.location.origin) return;
+  // Fotos de productos: cada versión tiene su dirección; se guardan para usarlas sin
+  // señal y no se vuelven a bajar. Al llegar una versión nueva se borra la anterior.
+  if (url.pathname === '/api/pedidos/img') {
+    e.respondWith(caches.open(IMG_CACHE).then(async (c) => {
+      const hit = await c.match(req);
+      if (hit) return hit;
+      const res = await fetch(req);
+      if (res && res.ok) {
+        const id = url.searchParams.get('id');
+        (await c.keys()).forEach((k) => { const u = new URL(k.url); if (u.searchParams.get('id') === id && k.url !== req.url) c.delete(k); });
+        c.put(req, res.clone());
+      }
+      return res;
+    }).catch(() => caches.match(req).then((r) => r || Response.error())));
+    return;
+  }
   if (url.pathname.startsWith('/api/')) return; // red directa
 
   // Navegación: devuelve el shell aunque no haya red

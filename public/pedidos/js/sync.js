@@ -384,6 +384,11 @@
       if (!r.data.next) { bundle.counters = r.data.counters || {}; bundle.vacmovs = r.data.vacmovs || []; break; }
       after = r.data.next;
     }
+    // Fotos (se guardan aparte en el servidor): vuelven dentro de su producto, así
+    // «Cargar paquete» las repone sin pasos extra
+    const imgs = new Map((bundle.images || []).map((d) => [d.id, d.image]));
+    (bundle.products || []).forEach((p) => { if (!p.image && imgs.get(p.id)) p.image = imgs.get(p.id); });
+    delete bundle.images;
     return { ok: true, bundle, count: n };
   }
 

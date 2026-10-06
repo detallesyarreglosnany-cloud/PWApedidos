@@ -21,7 +21,7 @@ import { RESET_LOCK } from '@/lib/epoch';
 export const dynamic = 'force-dynamic';
 
 const OPS_KINDS = ['orders', 'loads', 'events'];
-const ALL_KINDS = ['orders', 'loads', 'events', 'clients', 'products', 'sellers', 'config'];
+const ALL_KINDS = ['orders', 'loads', 'events', 'clients', 'products', 'images', 'sellers', 'config'];
 
 export async function POST(req: NextRequest) {
   const denied = requireAdmin(req);
