@@ -264,6 +264,8 @@
         <button class="btn" id="lNew">＋ Nueva hoja</button>
         <button class="btn" id="lSync">⟳ Actualizar</button>
       </div>
+      ${S.sellers.filter(pausedUntil).map((x) => `<div class="hint warn">⏸ <b>${esc(x.name)}</b> en pausa de pedidos hasta ${esc(fmtPause(pausedUntil(x)))} · ${pendingOf(x.id).clients} clientes / ${nf0.format(pendingOf(x.id).cajas)} cajas por despachar <button type="button" class="btn btn-sm btn-ok" data-resume="${esc(x.id)}">▶ Reactivar</button></div>`).join('')}
+      ${sid && !pausedUntil(sellerById(sid)) ? `<div class="row" style="justify-content:flex-end"><button type="button" class="btn btn-sm" data-pause="${esc(sid)}">⏸ Suspender pedidos de ${esc((sellerById(sid) || {}).name || '')}</button></div>` : ''}
       <p class="muted">Tope por hoja: <b>${nf0.format(L.limit)} ${L.measure}</b> o <b>${L.maxClients} clientes</b>. Los pedidos se pueden editar (vendedor y oficina) mientras la hoja esté en un estado sin 🔒.</p>
       ${groups.map(({ st, list }) => `
         <div class="section-title">${st.locked ? '🔒 ' : ''}${esc(st.name)} · ${list.length}</div>
@@ -283,6 +285,9 @@
     $('#lNew').onclick = () => newLoadDialog(root);
     $('#lOrder').onclick = () => officeOrderDialog(() => renderLoads(root));
     root.onclick = async (e) => {
+      const pz = e.target.closest('[data-pause]'); if (pz) { pauseDialog(sellerById(pz.dataset.pause), () => renderLoads(root)); return; }
+      const rs = e.target.closest('[data-resume]');
+      if (rs) { const x = sellerById(rs.dataset.resume); await saveDocs('sellers', { ...x, suspendedUntil: '', suspendNote: '' }); await log('vendedor_pausa', `Reactivó la subida de pedidos de ${x.name}`, { sellerId: x.id }); toast(`${x.name} puede volver a subir pedidos`, 'ok'); PV.runSync(false); renderLoads(root); return; }
       const c = e.target.closest('[data-lid]');
       if (c) { U().loadId = c.dataset.lid; renderLoads(root); return; }
       const ed = e.target.closest('[data-edit]');
@@ -778,7 +783,7 @@
       const res = tokens.length ? S.clients.filter((c) => c.active !== false && tokens.every((t) => norm(c.name + ' ' + (c.rif || '')).includes(t))).slice(0, 10) : [];
       const exact = res.some((c) => norm(c.name) === norm(raw));
       q('#noCliRes').innerHTML = res.map((c) => `<button class="result" type="button" data-cid="${esc(c.id)}"><b>${esc(c.name)}</b> <span class="muted">${esc([c.rif, (sellerById(c.sellerId) || {}).name, c.route].filter(Boolean).join(' · '))}</span></button>`).join('')
-        + (raw && !exact ? `<button class="result" type="button" data-newc="1">➕ Cliente nuevo: <b>${esc(raw)}</b></button>` : '');
+        + (raw && !exact ? `<button class="result" type="button" data-newc="1">➕ No está: registrar cliente nuevo <b>${esc(raw.toUpperCase())}</b> con sus datos</button>` : '');
     };
     q('#noSeller').onchange = (e) => { d.sellerId = e.target.value; drawLines(); };
     q('#noRoute').onchange = (e) => { d.route = e.target.value; drawLines(); };
@@ -791,7 +796,14 @@
     };
     el.addEventListener('click', (e) => {
       const c = e.target.closest('[data-cid]'); if (c) { pickClient(S.clients.find((x) => x.id === c.dataset.cid)); return; }
-      if (e.target.closest('[data-newc]')) { const nm = q('#noCli').value.replace(/\s+/g, ' ').trim().slice(0, 80); if (nm) pickClient(null, nm); return; }
+      if (e.target.closest('[data-newc]')) {
+        // Cliente nuevo: se registra con su ficha completa ANTES de cargarle el pedido
+        const nm = q('#noCli').value.replace(/\s+/g, ' ').trim().slice(0, 80);
+        Clientes.formSheet(null, { mode: 'office', prefillName: nm, defaults: { sellerId: d.sellerId || '', route: d.route || '' },
+          onSave: async (prev, next) => { await saveClient(prev, next); await log('cliente_nuevo', `Registró el cliente ${next.name}${next.rif ? ' (' + next.rif + ')' : ''}`, { clientId: next.id, clientName: next.name }); },
+          onSaved: (c) => pickClient(clientById(c.id) || c) });
+        return;
+      }
       if (e.target.closest('[data-clear]')) { d.client = null; d.newName = ''; drawClient(); drawLines(); q('#noCli').focus(); return; }
       const a = e.target.closest('[data-add]');
       if (a) {
@@ -811,12 +823,9 @@
       const tot = Matrix.orderTotals({ lines: d.lines });
       const dup = S.orders.find((o) => !o.deleted && o.clientKey === key && o.routeDate === d.date && o.sellerId === seller.id && Loads.editable(o));
       if (dup && !confirm(`${clientName()} ya tiene un pedido de ${seller.name} para el ${fmtDate(d.date)} (${usd(Matrix.orderTotals(dup).monto)}).\n\n¿Crear otro pedido aparte?`)) { btn.disabled = false; return; }
-      if (!client) {
-        client = { id: DB.uid('c'), rif: '', name: clientName().toUpperCase(), phone: '', address: '', group: '', creditDays: 0,
-          sellerId: seller.id, route: d.route, active: true, source: 'oficina', verified: false, verifyReason: 'creado rápido desde un pedido: completa su ficha', createdAt: DB.now(), createdByName: (S.config && S.config.adminName) || 'Oficina', deleted: false };
-        await saveDocs('clients', client);
-        await log('cliente_nuevo', `Oficina creó el cliente ${client.name} (${seller.name})`, { clientId: client.id, clientName: client.name });
-      }
+      if (!client) { toast('Registra el cliente con su ficha antes de cargarle el pedido', 'err'); btn.disabled = false; return; }
+      // Cliente recién registrado sin vendedor: pasa a la cartera del vendedor del pedido
+      if (!client.sellerId) { const prevC = client; client = { ...client, sellerId: seller.id, route: client.route || d.route }; await saveClient(prevC, client); }
       const at = DB.now();
       const o = { id: DB.uid('o'), sellerId: seller.id, sellerName: seller.name,
         clientId: client.id, clientRif: client.rif || '', clientName: client.name, clientKey: norm(client.name),
@@ -1860,6 +1869,7 @@
           ${S.sellers.map((s) => `<option value="${esc(s.id)}" ${s.id === sid ? 'selected' : ''}>${esc(s.name)} (${count(s.id)})</option>`).join('')}
           <option value="__none" ${sid === '__none' ? 'selected' : ''}>— Sin vendedor — (${S.clients.filter((c) => !sellerById(c.sellerId)).length})</option></select></label>
         <button class="btn btn-primary" id="cNew">＋ Nuevo</button>
+        <button class="btn" id="cMerge" title="Pasar los pedidos de clientes repetidos al cliente real">🔗 Fusionar clientes</button>
         <button class="btn" id="cImp">⇧ Importar Excel</button>
       </div>
       <div class="chips" id="cPend"><button class="chip ${pend ? '' : 'active'}" data-p="0">Todos</button><button class="chip ${pend ? 'active' : ''}" data-p="1">🕓 Por verificar (${toVerify})</button></div>
@@ -1871,12 +1881,13 @@
           <td class="mono" data-l="RIF">${esc(c.rif || '')}</td><td data-l="Tel.">${esc(c.phone || '')}</td>
           <td data-l="Vendedor"><select class="select sm" data-cf="sellerId">${sellerOptions(c.sellerId)}</select></td>
           <td data-l="Ruta"><select class="select sm" data-cf="route"><option value="">—</option>${(S.config.routes || []).map((r) => `<option ${r === c.route ? 'selected' : ''}>${esc(r)}</option>`).join('')}</select></td>
-          <td><button class="btn btn-sm ${Clientes.isVerified(c) ? '' : 'btn-primary'}" data-cedit="${esc(c.id)}">${Clientes.isVerified(c) ? 'Editar' : 'Revisar'}</button></td></tr>`).join('')}</tbody></table></div>`;
+          <td style="white-space:nowrap"><button class="btn btn-sm ${Clientes.isVerified(c) ? '' : 'btn-primary'}" data-cedit="${esc(c.id)}">${Clientes.isVerified(c) ? 'Editar' : 'Revisar'}</button> <button class="btn btn-sm" data-cmerge="${esc(c.id)}" title="Fusionar repetidos en este cliente">🔗</button></td></tr>`).join('')}</tbody></table></div>`;
     let t;
     $('#cq').oninput = (e) => { clearTimeout(t); t = setTimeout(() => { U().cliQ = e.target.value; renderClients(root); const i = $('#cq'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 250); };
     $('#cs').onchange = (e) => { U().cliSeller = e.target.value; renderClients(root); };
     $('#cPend').onclick = (e) => { const b = e.target.closest('[data-p]'); if (b) { U().cliPend = b.dataset.p === '1'; renderClients(root); } };
     $('#cNew').onclick = () => clientForm(null, root);
+    $('#cMerge').onclick = () => mergeDialog(null, root);
     $('#cImp').onclick = () => importDialog('clients', root);
     root.onchange = async (e) => {
       const s = e.target.closest('[data-cf]'); if (!s) return;
@@ -1885,7 +1896,56 @@
       await saveClient(c, upd); toast('Cliente actualizado', 'ok');
       if (s.dataset.cf === 'sellerId') renderClients(root);
     };
-    root.onclick = (e) => { const b = e.target.closest('[data-cedit]'); if (b) clientForm(clientById(b.dataset.cedit), root); };
+    root.onclick = (e) => {
+      const b = e.target.closest('[data-cedit]'); if (b) { clientForm(clientById(b.dataset.cedit), root); return; }
+      const m = e.target.closest('[data-cmerge]'); if (m) mergeDialog(clientById(m.dataset.cmerge), root);
+    };
+  }
+
+  /* ---------------- Fusionar clientes repetidos en el cliente real ---------------- */
+  function mergeDialog(pre, root) {
+    let real = pre || null; const pick = new Set();
+    const stats = (c) => { const os = S.orders.filter((o) => !o.deleted && o.clientId === c.id); return { n: os.length, liq: os.filter((o) => o.delivery && o.delivery.at).length }; };
+    const info = (c) => { const st = stats(c), miss = Clientes.missing(c); return `${esc([c.rif || 'sin RIF', c.sellerId ? 'cartera de ' + ((sellerById(c.sellerId) || {}).name || '—') : 'sin vendedor'].join(' · '))} · ${st.n} pedido(s)${st.liq ? ` (${st.liq} liquidado(s))` : ''}${miss.length >= 3 ? ' · <b>solo nombre</b>' : ''}${Clientes.isVerified(c) ? '' : ' · 🕓'}`; };
+    const sh = openSheet(`
+      <div class="row"><h2 class="grow">🔗 Fusionar clientes</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <p class="muted" style="margin-top:0">Elige el cliente <b>real</b> (el que queda) y marca los repetidos. Todos sus pedidos —también los liquidados, con su kardex de vacíos— pasan al real, el real completa los datos que le falten y los repetidos se eliminan. No quedan pedidos ni vacíos sueltos ni duplicados.</p>
+      <div id="mgBody"></div>`, { wide: true });
+    const body = sh.el.querySelector('#mgBody');
+    const search = (q, excl) => { const t = norm(q).split(' ').filter(Boolean); return t.length ? S.clients.filter((c) => !excl.has(c.id) && t.every((w) => norm([c.name, c.tradeName, c.rif, c.phone].join(' ')).includes(w))).slice(0, 12) : []; };
+    const draw = (q) => {
+      if (!real) {
+        body.innerHTML = `<label class="field"><span>1 · Cliente real (el correcto)</span><input id="mgQ" class="input" placeholder="Buscar por nombre, RIF o teléfono…" value="${esc(q || '')}" autocomplete="off"></label>
+          <div class="pick-list" style="margin-top:8px">${search(q || '', new Set()).map((c) => `<button type="button" class="sug-item" data-real="${esc(c.id)}"><b>${esc(c.name)}</b><small>${info(c)}</small></button>`).join('') || '<p class="muted">Escribe para buscar.</p>'}</div>`;
+      } else {
+        const others = S.clients.filter((c) => c.id !== real.id);
+        const cands = [...new Map([...Dedup.similar(real.name, others, 0.34), ...search(q || '', new Set([real.id])), ...others.filter((c) => pick.has(c.id))].map((c) => [c.id, c])).values()];
+        const tot = [...pick].map((id) => stats(clientById(id) || { id })).reduce((a, x) => ({ n: a.n + x.n, liq: a.liq + x.liq }), { n: 0, liq: 0 });
+        body.innerHTML = `<div class="hint">✓ Queda: <b>${esc(real.name)}</b> <span class="muted">${info(real)}</span> <button type="button" class="btn btn-sm" id="mgChange">Cambiar</button></div>
+          <div class="section-title" style="margin:12px 0 6px">2 · Marca los repetidos</div>
+          <input id="mgQ" class="input" placeholder="Buscar otro cliente para agregar…" value="${esc(q || '')}" autocomplete="off">
+          <div class="pick-list" style="margin-top:8px">${cands.map((c) => `<label class="sug-item" style="grid-template-columns:auto 1fr;gap:10px;align-items:center"><input type="checkbox" data-dup="${esc(c.id)}" ${pick.has(c.id) ? 'checked' : ''} style="width:22px;height:22px"><span><b>${esc(c.name)}</b><small style="display:block">${info(c)}</small></span></label>`).join('') || '<p class="muted">No hay clientes parecidos. Búscalo por nombre.</p>'}</div>
+          <div class="actions"><button class="btn" data-close>Cancelar</button><button class="btn btn-primary" id="mgGo" ${pick.size ? '' : 'disabled'}>🔗 Fusionar ${pick.size || ''} en «${esc(real.name)}»${pick.size ? ` · ${tot.n} pedido(s)` : ''}</button></div>`;
+      }
+      const qi = body.querySelector('#mgQ'); if (qi) { qi.oninput = () => { const v = qi.value, pos = qi.selectionStart; draw(v); const n = body.querySelector('#mgQ'); n.focus(); n.setSelectionRange(pos, pos); }; }
+    };
+    body.addEventListener('click', async (e) => {
+      const r = e.target.closest('[data-real]'); if (r) { real = clientById(r.dataset.real); pick.clear(); draw(''); return; }
+      if (e.target.closest('#mgChange')) { real = null; pick.clear(); draw(''); return; }
+      const go = e.target.closest('#mgGo');
+      if (go) {
+        const dups = [...pick].map((id) => clientById(id)).filter(Boolean);
+        if (!confirm(`Fusionar en «${real.name}»:\n\n${dups.map((d) => `• ${d.name} (${stats(d).n} pedido(s))`).join('\n')}\n\nSus pedidos y vacíos pasan a «${real.name}» y estos clientes se eliminan. ¿Continuar?`)) return;
+        go.disabled = true; go.textContent = 'Fusionando…';
+        try {
+          const res = await Clientes.merge(real, dups);
+          sh.close(); toast(`Listo: ${res.orders} pedido(s) pasados a ${real.name}${res.kardex ? ' · ' + res.kardex + ' movimiento(s) de vacíos' : ''}`, 'ok');
+          if (root) renderClients(root);
+        } catch (err) { toast(err.message, 'err'); go.disabled = false; draw(''); }
+      }
+    });
+    body.addEventListener('change', (e) => { const c = e.target.closest('[data-dup]'); if (c) { if (c.checked) pick.add(c.dataset.dup); else pick.delete(c.dataset.dup); draw(body.querySelector('#mgQ') ? body.querySelector('#mgQ').value : ''); } });
+    draw('');
   }
 
   /** Opciones de vendedor para un cliente, con "Sin vendedor" (nunca se muestra uno que no tiene). */
@@ -1912,7 +1972,7 @@
   const EVENT_LABEL = {
     apertura: 'Abrió la app', regreso: 'Volvió', entrada: 'Entró a su ruta', salida: 'Salió', cliente_nuevo: 'Cliente nuevo',
     pedido_nuevo: 'Abrió pedido', pedido_enviado: 'Envió pedido', pedido_reabierto: 'Reabrió pedido', pedido_modificado: 'Modificó pedido',
-    pedido_eliminado: 'Eliminó pedido', cliente_editado: 'Actualizó cliente', cliente_corregido: 'Corrigió cliente', espera: 'Puso en espera', reincorporado: 'Reincorporó', movido: 'Movió de hoja',
+    pedido_eliminado: 'Eliminó pedido', cliente_editado: 'Actualizó cliente', cliente_corregido: 'Corrigió cliente', clientes_fusionados: 'Fusionó clientes', cliente_eliminado: 'Eliminó cliente', vendedor_pausa: 'Pausa de pedidos', espera: 'Puso en espera', reincorporado: 'Reincorporó', movido: 'Movió de hoja',
     pedido_editado_oficina: 'Ajuste de oficina', carga_estado: 'Estado de hoja', cliente_reasignado: 'Reasignó cliente', respaldo: 'Respaldo',
     datos_borrados: 'Datos borrados por el navegador', nota_valery: 'Nota Valery', retornables: 'Retornables', mensaje: 'Mensaje a vendedor', liquidacion: 'Liquidación', vacios: 'Kardex de vacíos',
   };
@@ -1971,13 +2031,25 @@
             <div class="row"><input class="input grow" data-rename value="${esc(s.name)}" maxlength="30" aria-label="Nombre">
               <label class="row" style="white-space:nowrap"><input type="checkbox" data-active ${s.active ? 'checked' : ''} style="width:22px;height:22px"> Activo</label></div>
             <div class="row wrap">${routes.map((r) => `<label class="chip-check"><input type="checkbox" data-route="${esc(r)}" ${(s.routes || []).includes(r) ? 'checked' : ''}> ${esc(r)}</label>`).join('')}</div>
-            <div class="muted" style="font-size:13px">${S.clients.filter((c) => c.sellerId === s.id).length} clientes en cartera</div>
+            <div class="row wrap" style="gap:8px;align-items:center"><span class="muted grow" style="font-size:13px">${S.clients.filter((c) => c.sellerId === s.id).length} clientes en cartera · ${pendingOf(s.id).clients} clientes / ${nf0.format(pendingOf(s.id).cajas)} cajas por despachar</span>
+              ${pausedUntil(s) ? `<span class="status over">⏸ En pausa hasta ${esc(fmtPause(pausedUntil(s)))}</span><button type="button" class="btn btn-sm btn-ok" data-resume="${esc(s.id)}">▶ Reactivar</button>`
+                : `<button type="button" class="btn btn-sm" data-pause="${esc(s.id)}">⏸ Suspender pedidos</button>`}</div>
           </div>`).join('')}
       </div>`;
     $('#sNew').onsubmit = async (e) => {
       e.preventDefault(); const name = e.target.n.value.trim(); if (!name) return;
       await saveDocs('sellers', { id: DB.uid('s'), name, routes: [], aliases: [], active: true, deleted: false });
       renderSellers(root); toast('Vendedor agregado', 'ok');
+    };
+    root.onclick = async (e) => {
+      const p = e.target.closest('[data-pause]'); if (p) { pauseDialog(sellerById(p.dataset.pause), () => renderSellers(root)); return; }
+      const r = e.target.closest('[data-resume]');
+      if (r) {
+        const s = sellerById(r.dataset.resume);
+        await saveDocs('sellers', { ...s, suspendedUntil: '', suspendNote: '' });
+        await log('vendedor_pausa', `Reactivó la subida de pedidos de ${s.name}`, { sellerId: s.id });
+        toast(`${s.name} puede volver a subir pedidos (se le avisa al teléfono)`, 'ok'); PV.runSync(false); renderSellers(root);
+      }
     };
     root.onchange = async (e) => {
       const row = e.target.closest('[data-sid]'); if (!row) return;
@@ -1986,6 +2058,38 @@
       if (e.target.matches('[data-active]')) s.active = e.target.checked;
       if (e.target.matches('[data-route]')) s.routes = [...row.querySelectorAll('[data-route]:checked')].map((x) => x.dataset.route);
       await saveDocs('sellers', s); toast('Guardado', 'ok');
+    };
+  }
+
+  /* ---------------- Pausa de pedidos de un vendedor ---------------- */
+  // Pedidos enviados del vendedor que aún no se despachan (en hojas o en espera)
+  function pendingOf(sid) {
+    const os = S.orders.filter((o) => o.sellerId === sid && !o.deleted && ['enviado', 'en_carga', 'en_espera'].includes(o.status) && Matrix.orderTotals(o).items);
+    const loads = new Set(os.map((o) => o.loadId).filter(Boolean));
+    return { clients: new Set(os.map((o) => o.clientId || o.clientKey)).size, cajas: os.reduce((a, o) => a + Matrix.orderTotals(o).cajas, 0), loads: loads.size };
+  }
+  const pausedUntil = (s) => (s && s.suspendedUntil && Date.parse(s.suspendedUntil) > Date.now() ? s.suspendedUntil : '');
+  const fmtPause = (iso) => { const d = new Date(iso), far = d - Date.now() > 20 * 86400000; return far ? 'que la reactives' : (d.toDateString() !== new Date().toDateString() ? d.toLocaleDateString('es-VE', { weekday: 'short', day: 'numeric' }) + ' ' : '') + d.toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit' }); };
+  function pauseDialog(s, onDone) {
+    if (!s) return;
+    const p = pendingOf(s.id);
+    const sh = openSheet(`
+      <div class="row"><h2 class="grow">⏸ Suspender pedidos · ${esc(s.name)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <div class="hint">Tiene <b>${p.clients} cliente(s)</b> y <b>${nf0.format(p.cajas)} cajas</b> por despachar en ${p.loads} hoja(s). Mientras dure la pausa no puede subir pedidos nuevos (lo que tenga sin enviar queda guardado) y ve este mensaje con sus cifras reales.</div>
+      <div class="field"><span>¿Por cuánto tiempo?</span><div class="chips" id="paDur">
+        ${[[1, '1 hora'], [2, '2 horas'], [3, '3 horas'], [4, '4 horas'], [6, '6 horas'], ['manana', 'Hasta mañana 7:00'], ['manual', 'Hasta que lo reactive']].map(([v, l], i) => `<button type="button" class="chip ${i === 1 ? 'active' : ''}" data-h="${v}">${l}</button>`).join('')}</div></div>
+      <label class="field"><span>Nota para el vendedor (opcional)</span><input id="paNote" class="input" maxlength="120" placeholder="Ej: hasta despachar las hojas del martes"></label>
+      <div class="actions"><button class="btn" data-close>Cancelar</button><button class="btn btn-danger" id="paGo">⏸ Suspender</button></div>`);
+    let h = '2';
+    sh.el.querySelector('#paDur').onclick = (e) => { const b = e.target.closest('[data-h]'); if (!b) return; h = b.dataset.h; sh.el.querySelectorAll('#paDur .chip').forEach((x) => x.classList.toggle('active', x === b)); };
+    sh.el.querySelector('#paGo').onclick = async () => {
+      const d = new Date();
+      if (h === 'manana') { d.setDate(d.getDate() + 1); d.setHours(7, 0, 0, 0); } else if (h === 'manual') d.setDate(d.getDate() + 60); else d.setTime(d.getTime() + +h * 3600000);
+      const note = sh.el.querySelector('#paNote').value.trim();
+      await saveDocs('sellers', { ...s, suspendedUntil: d.toISOString(), suspendNote: note, suspendedAt: DB.now(), suspendedBy: (S.config && S.config.adminName) || 'Oficina' });
+      await log('vendedor_pausa', `Suspendió la subida de pedidos de ${s.name} hasta ${fmtPause(d.toISOString())} · ${p.clients} clientes / ${p.cajas} cajas por despachar${note ? ' · ' + note : ''}`, { sellerId: s.id });
+      sh.close(); toast(`${s.name} en pausa hasta ${fmtPause(d.toISOString())} (se le avisa al teléfono)`, 'ok'); PV.runSync(false);
+      if (onDone) onDone();
     };
   }
 

@@ -372,6 +372,16 @@ export async function POST(req: NextRequest) {
   const rejected: { kind: Kind; id: string; reason: string; doc?: Doc }[] = [];
   const notices: Notice[] = [];
   const sentNow: string[] = [];
+  // Vendedor suspendido por la oficina: sus pedidos no pasan a «enviado» hasta que se reactive
+  let suspendedUntil: string | null | undefined;
+  const suspended = async () => {
+    if (suspendedUntil === undefined) {
+      const r = sellerId ? await db.distDoc.findUnique({ where: { kind_id: { kind: 'sellers', id: sellerId } }, select: { data: true } }) : null;
+      const until = r ? String((parseDoc(r.data) as Record<string, unknown>).suspendedUntil || '') : '';
+      suspendedUntil = until && Date.parse(until) > Date.now() ? until : null;
+    }
+    return suspendedUntil;
+  };
   const maxTs = new Date(serverTime.getTime() + 60_000).toISOString();
 
   try {
@@ -463,6 +473,12 @@ export async function POST(req: NextRequest) {
             }
           }
 
+          if (kind === 'orders' && !isAdmin && isSent(doc as Record<string, unknown>) && !isSent(cur as Record<string, unknown> | null) && (await suspended())) {
+            // Se queda «sin enviar» en el teléfono (no se pierde) y vuelve corregido
+            const d = doc as Record<string, unknown>;
+            d.status = cur && cur.status ? cur.status : 'abierto';
+            doc.updatedAt = later(existing ? existing.updatedAt : doc.updatedAt, doc.updatedAt);
+          }
           if (stashed) {
             // Si la foto no venía (equipo con la dirección de la foto), se conserva la que tenía
             if (!('imageV' in doc) && cur && 'imageV' in cur) (doc as Record<string, unknown>).imageV = cur.imageV;
@@ -507,6 +523,12 @@ export async function POST(req: NextRequest) {
               accepted[kind].push(doc.id); // reintento idempotente
               continue;
             }
+          }
+          if (kind === 'sellers' && isAdmin) {
+            const was = cur && cur.suspendedUntil && Date.parse(String(cur.suspendedUntil)) > Date.now();
+            const now2 = doc.suspendedUntil && Date.parse(String(doc.suspendedUntil)) > Date.now();
+            if (now2 && (!was || cur!.suspendedUntil !== doc.suspendedUntil)) notices.push({ to: 'seller', sellerId: doc.id, msg: { title: '⏸ Pausa en la subida de pedidos', body: 'Excelente trabajo. Toma un respiro: tus hojas de pedidos están por despachar. Te avisaremos cuando puedas volver a subir pedidos.', tag: `s-${doc.id}-pausa` } });
+            if (was && !now2) notices.push({ to: 'seller', sellerId: doc.id, msg: { title: '✅ Ya puedes volver a subir pedidos', body: 'Tus hojas se descongestionaron. ¡A vender!', tag: `s-${doc.id}-pausa` } });
           }
           if (kind === 'orders') {
             const n = orderNotice(cur as Record<string, unknown> | null, doc as Record<string, unknown>, isAdmin);
