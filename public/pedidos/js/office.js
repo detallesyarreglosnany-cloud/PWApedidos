@@ -1444,7 +1444,7 @@
     const rows = S.products.filter((p) => (!cat || p.category === cat) && (!onlyRet || Envases.isReturnable(p)) &&
       tokens.every((t) => norm(p.code + ' ' + (p.unitCode || '') + ' ' + p.name + ' ' + p.presentation + ' ' + (p.brand || '')).includes(t)))
       .sort(PV.productSort());
-    const noPhoto = S.products.filter((p) => !p.image).length;
+    const noPhoto = S.products.filter((p) => !PV.hasPhoto(p)).length;
     root.innerHTML = `
       <div class="toolbar">
         <label class="field grow"><span>Buscar</span><input id="iq" class="input" type="search" value="${esc(q)}" placeholder="Código, nombre, marca o gramaje"></label>
@@ -1463,7 +1463,7 @@
         <thead><tr><th></th><th>Código</th><th>Producto</th><th>Rubro</th><th>Venta</th><th>$ Caja</th><th>$ Unidad</th><th>Stock</th><th>Orden</th><th></th></tr></thead>
         <tbody>${rows.map((p) => `
           <tr class="${p.active ? '' : 'inactive'}" data-row="${esc(p.id)}">
-            <td class="thumb">${p.image ? `<img src="${esc(p.image)}" alt="">` : `<span>${PV.rubroIcon(p.category)}</span>`}</td>
+            <td class="thumb">${PV.hasPhoto(p) ? `<img src="${esc(PV.imgSrc(p))}" alt="" loading="lazy">` : `<span>${PV.rubroIcon(p.category)}</span>`}</td>
             <td class="mono" data-l="Código">${esc(p.code)}${p.unitCode ? `<div class="muted">UN: ${esc(p.unitCode)}</div>` : ''}${Envases.isReturnable(p) ? `<div class="ret-tag">${esc(Envases.label(p))}</div>` : ''}</td>
             <td><b>${esc(p.name)}</b><div class="muted">${esc(p.presentation)}${p.brand ? ' · ' + esc(p.brand) : ''}${p.unitsPerBox > 1 ? ' · caja x' + p.unitsPerBox : ''}</div></td>
             <td data-l="Rubro">${esc(p.category)}${p.subgroup ? `<div class="muted">${esc(p.subgroup)}</div>` : ''}</td>
@@ -1575,7 +1575,9 @@
     const isNew = !p;
     p = p || { code: '', unitCode: '', name: '', presentation: '', category: rubros()[0] || '', subgroup: '', brand: '',
       unitsPerBox: 1, unitPrice: 0, boxPrice: 0, sellBy: 'caja', stock: null, sort: 0, active: true, image: '' };
-    let image = p.image || '';
+    // La foto solo se envía si cambió (foto nueva o quitada): si no, el producto viaja liviano
+    const image0 = PV.imgSrc(p);
+    let image = image0;
     const ret = Envases.info(p);
     const upb = +p.unitsPerBox || 1;
     const stockCj = hasStock(p) ? (p.sellBy === 'unidad' ? 0 : Math.floor(Math.max(0, p.stock) / upb)) : '';
@@ -1657,9 +1659,10 @@
         boxPrice: sellBy === 'unidad' ? 0 : Matrix.r2(dec(form.boxPrice.value)),
         unitPrice: sellBy === 'caja' ? 0 : Matrix.r2(dec(form.unitPrice.value)),
         stock: cj === '' && un === '' ? null : int(cj) * u + int(un),
-        active: form.active.checked, image, deleted: false,
+        active: form.active.checked, deleted: false,
         ret: form.retOn.checked ? { type: form.retType.value.trim().toUpperCase(), regime: form.retRegime.value, assign: form.retAssign.value === '1' } : false,
       };
+      if (image !== image0) { doc.image = image; if (!image) doc.imageV = ''; } else if (!/^data:/.test(String(doc.image || ''))) delete doc.image;
       if (doc.boxPrice < 0 || doc.unitPrice < 0) { toast('Los precios no pueden ser negativos', 'err'); return; }
       if (S.products.some((x) => x.id === doc.id && x.id !== p.id)) doc.id = DB.uid('p');
       const moved = isNew || doc.sort !== (+p.sort || 0) || doc.category !== p.category;

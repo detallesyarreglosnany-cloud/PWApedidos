@@ -51,6 +51,11 @@
   }
   const hasStock = (p) => p.stock !== null && p.stock !== undefined && p.stock !== '';
   const productLabel = (p) => p.name + ' ' + p.presentation;
+  // Foto del producto: la de este equipo si aún la tiene adentro (recién tomada o
+  // versión anterior), o la del servidor por su huella (se guarda en caché y
+  // funciona sin señal). Un cambio de precio ya no vuelve a bajar las fotos.
+  const imgSrc = (p) => (!p ? '' : p.image ? p.image : p.imageV ? '/api/pedidos/img?id=' + encodeURIComponent(p.id) + '&v=' + encodeURIComponent(p.imageV) : '');
+  const hasPhoto = (p) => !!(p && (p.image || p.imageV));
   const RUBRO_ICON = {
     REFRESCOS: '🥤', SODA: '🥤', JUGO: '🧃', NECTAR: '🧃', AGUA: '💧', MALTA: '🍺', CERVEZA: '🍺',
     SARDINA: '🐟', CONFITERIA: '🍿', GALLETA: '🍪', ARROZ: '🍚', PASTA: '🍝', MERMELADA: '🍓', GELATINA: '🍮',
@@ -303,7 +308,21 @@
     }
     updateSyncPill();
     scheduleSync(syncEvery());
+    if (r.ok) warmImages();
     return r;
+  }
+  // Precarga en segundo plano las fotos que este equipo aún no tiene (una vez por
+  // versión): así el catálogo se ve completo en la ruta, sin señal.
+  let warming = false;
+  async function warmImages() {
+    if (warming || !navigator.onLine || !('caches' in window) || !navigator.serviceWorker || !navigator.serviceWorker.controller) return;
+    warming = true;
+    try {
+      const c = await caches.open('fotos-productos');
+      const todo = [];
+      for (const p of S.products) { if (p.active === false || !p.imageV || p.image) continue; const u = new URL(imgSrc(p), location.href).href; if (!(await c.match(u))) todo.push(u); }
+      for (const u of todo.slice(0, 60)) { if (!navigator.onLine) break; try { await fetch(u, { credentials: 'same-origin' }); } catch (e) { break; } }
+    } catch (e) { /* sin caché: se ven al abrir el catálogo */ } finally { warming = false; }
   }
 
   async function updateSyncPill() {
@@ -771,7 +790,7 @@
     if (p.sellBy !== 'caja') prices.push(`<span>Unidad</span><b>${usd(p.unitPrice)}</b>`);
     return `
       <article class="pitem ${req ? 'has-qty' : ''}" data-pid="${esc(p.id)}" style="--grp:${grpHue(p.category + '|' + (p.subgroup || ''))}">
-        <div class="pimg">${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy">` : `<span aria-hidden="true">${rubroIcon(p.category)}</span>`}
+        <div class="pimg">${hasPhoto(p) ? `<img src="${esc(imgSrc(p))}" alt="" loading="lazy">` : `<span aria-hidden="true">${rubroIcon(p.category)}</span>`}
           ${req ? `<em class="qty-badge">${cj ? cj + 'cj' : ''}${cj && un ? '+' : ''}${un ? un + 'u' : ''}</em>` : ''}</div>
         <div class="pname">${esc(p.name)}</div>
         <div class="pcode mono">${esc(p.code)}</div>
@@ -1530,7 +1549,7 @@
   window.PV = {
     S, $, $$, esc, nf2, nf0, usd, bs, int, dec, norm, slug, today, fmtDate, fmtStock, hasStock, productSort, productLabel, rubroIcon,
     toast, openSheet, copyText, saveFile, saveBinary, pickFile, brandHeader, creditFooter,
-    clientFixSheet, searchSheet,
+    clientFixSheet, searchSheet, imgSrc, hasPhoto,
     syncInfo: () => ({ idle: isIdle(), every: syncEvery() }), _idleSince: (ms) => { lastInput = Date.now() - ms; },
     loadAll, saveDocs, saveOrder, saveSettings, setSession, msgThreadHTML, rememberOffice, forgetOffice, PERSIST_HINT, runSync, updateSyncPill, render, refreshAfterRemote, updateBell, beep, logEvent, isSupervisor,
     notifSheet, refreshPush,
