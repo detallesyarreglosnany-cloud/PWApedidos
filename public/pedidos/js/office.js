@@ -104,15 +104,62 @@
 
   /** Pedidos del mismo cliente el mismo día (mismo u otro vendedor): alerta, no bloquea. */
   function dupIndex() {
-    // Mismo cliente (id de cartera, mismo nombre o nombre equivalente) con ±1 día: dedup.js
+    // Mismo cliente o nombre parecido con ±4 días, en cualquier hoja y estado: dedup.js
     return Dedup.pairs(S.orders.filter((o) => !o.deleted && Matrix.orderTotals(o).items));
+  }
+  /** Dónde está el otro pedido: hoja (código y estado) o estado del pedido, fecha y vendedor. */
+  function dupWhere(x) {
+    const l = x.loadId ? S.loads.find((y) => y.id === x.loadId) : null, o = orderById(x.id);
+    const hoja = l ? `hoja ${Loads.labelOf(l)}${l.number ? ' (' + Loads.loadCode(l) + ')' : ''} · ${Loads.statusOf(l, S.config).name}` : (o ? Loads.orderLabel(o) + ' · sin hoja' : 'sin hoja');
+    return `${hoja} · pedido del ${fmtDate(x.routeDate)} · ${x.sellerName}`;
   }
   const dupBadge = (o, idx) => {
     const d = idx.get(o.id); if (!d) return '';
-    const real = d.filter((x) => !x.extra), tip = d.map((x) => `${x.sellerName} ${x.routeDate ? fmtDate(x.routeDate) : ''}${x.extra ? ' (adicional)' : ''}`).join(', ');
-    return real.length ? ` <span class="status over" title="También con: ${esc(tip)}">⚠ duplicado · ${esc(real.map((x) => Loads.initials(x.sellerName)).join(' '))}</span>`
-      : ` <span class="status en_espera" title="${esc(tip)}">➕ adicional</span>`;
+    const same = d.filter((x) => !x.extra && x.kind === 'same'), sim = d.filter((x) => !x.extra && x.kind === 'similar');
+    const tip = d.map((x) => `${x.kind === 'same' ? 'Mismo cliente' : 'Parecido: ' + x.clientName} · ${dupWhere(x)}${x.extra ? ' (adicional)' : ''}`).join('\n');
+    const [cls, txt] = same.length ? ['over', '⚠ duplicado'] : sim.length ? ['en_espera', '≈ nombre parecido'] : ['abierto', '➕ adicional'];
+    return ` <button type="button" class="status ${cls} dup-btn" data-dup="${esc(o.id)}" title="${esc(tip)}">${txt}</button>`;
   };
+  /** Líneas visibles bajo el cliente: con qué pedido coincide y en qué hoja está. */
+  const dupLines = (o, idx) => (idx.get(o.id) || []).map((x) => `<div class="dup-line ${x.extra ? 'extra' : x.kind}">${x.extra ? '➕ Adicional confirmado' : x.kind === 'same' ? '⚠ Mismo cliente' : `≈ Nombre parecido: <b>${esc(x.clientName)}</b>`} · ${esc(dupWhere(x))}</div>`).join('');
+  /** Revisión detallada: los pedidos que coinciden, con su hoja, nota, monto y productos. */
+  function dupSheet(oid) {
+    const o = orderById(oid); if (!o) return;
+    const hits = dupIndex().get(oid) || [];
+    const card = (x, kind) => {
+      const l = x.loadId ? S.loads.find((y) => y.id === x.loadId) : null, t = Matrix.orderTotals(x);
+      const lines = Object.values(x.lines || {}).map((ln) => `${ln.cajas ? ln.cajas + ' cj' : ''}${ln.cajas && ln.unidades ? ' + ' : ''}${ln.unidades ? ln.unidades + ' un' : ''} ${ln.name}`).join(' · ');
+      return `<div class="card card-pad" style="margin-bottom:8px">
+        <div class="row"><b class="grow">${esc(x.clientName)}</b>${kind}</div>
+        <div class="muted">${esc(x.sellerName)} · pedido del ${esc(fmtDate(x.routeDate))} · ${esc(Loads.orderLabel(x))}${x.valeryNote ? ' · Nota ' + esc(x.valeryNote) : ''}${x.extraOk ? ' · ➕ adicional confirmado' : ''}${x.createdBy === 'oficina' ? ' · 🏢 oficina' : ''}</div>
+        <div>${l ? `Hoja <b>${esc(Loads.labelOf(l))}</b>${l.number ? ' ' + esc(Loads.loadCode(l)) : ''} · <span class="status ${Loads.statusOf(l, S.config).locked ? 'en_carga' : 'enviado'}">${esc(Loads.statusOf(l, S.config).name)}</span>` : '<span class="muted">Sin hoja</span>'} · <b>${usd(t.monto)}</b> · ${t.bultos} bultos</div>
+        <div class="muted" style="font-size:13px;margin-top:4px">${esc(lines)}</div>
+        <div class="row" style="gap:6px;margin-top:8px">${l ? `<button class="btn btn-sm" type="button" data-goload="${esc(l.id)}">Ir a la hoja</button>` : ''}<button class="btn btn-sm" type="button" data-seeo="${esc(x.id)}">Ver / editar pedido</button></div></div>`;
+    };
+    const sh = openSheet(`
+      <div class="row"><h2 class="grow">Revisar posible duplicado</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <p class="muted" style="margin-top:0">Pedidos del mismo cliente o de nombre parecido en ${Dedup.WINDOW_DAYS} días. Pregunta al vendedor si es el mismo pedido antes de aprobar o despachar.</p>
+      ${card(o, '<span class="tag">este pedido</span>')}
+      ${hits.map((x) => { const ox = orderById(x.id); return ox ? card(ox, x.extra ? '<span class="status abierto">➕ adicional</span>' : x.kind === 'same' ? '<span class="status over">⚠ mismo cliente</span>' : '<span class="status en_espera">≈ nombre parecido</span>') : ''; }).join('')}
+      <div class="actions"><button class="btn btn-primary" data-close>Listo</button></div>`, { wide: true });
+    sh.el.addEventListener('click', (e) => {
+      const g = e.target.closest('[data-goload]');
+      if (g) {
+        const l = S.loads.find((y) => y.id === g.dataset.goload); sh.close(); if (!l) return;
+        // Al cambiar de pestaña la oficina limpia la hoja abierta: se abre después del cambio
+        const closed = Loads.isClosed(l), target = closed ? '#/oficina/archivo' : '#/oficina/cargas';
+        const go = () => { U().liqId = null; U().loadId = closed ? null : l.id; U().archiveId = closed ? l.id : null; PV.render(); };
+        if (location.hash !== target) { window.addEventListener('hashchange', go, { once: true }); location.hash = target; } else go();
+        return;
+      }
+      const v = e.target.closest('[data-seeo]'); if (v) { sh.close(); orderEditor(orderById(v.dataset.seeo), () => PV.render()); }
+    });
+  }
+  // La etiqueta de duplicado abre la revisión desde cualquier pantalla de la oficina
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-dup]'); if (!b || !location.hash.startsWith('#/oficina')) return;
+    e.stopPropagation(); dupSheet(b.dataset.dup);
+  }, true);
 
   function setupBanner() {
     return `<div class="container"><div class="hint warn setup">
@@ -204,14 +251,14 @@
         <div class="section-title">${st.locked ? '🔒 ' : ''}${esc(st.name)} · ${list.length}</div>
         ${list.length ? `<div class="load-grid">${list.map(card).join('')}</div>` : '<p class="muted">Ninguna.</p>'}`).join('')}
       <div class="section-title">⏸ Clientes en espera (no se pierde el pedido)</div>
-      ${held.length ? `<div class="card"><table class="inv">${held.map((o) => {
+      ${held.length ? `<div class="card"><table class="inv">${((dupIdx0) => held.map((o) => {
         const t = Matrix.orderTotals(o);
-        return `<tr><td><b>${esc(o.clientName)}</b>${dupBadge(o, dupIndex())}<div class="muted">${esc(o.sellerName)} · ${esc(o.route || '')} · ${esc(fmtDate(o.routeDate))}</div></td>
+        return `<tr><td><b>${esc(o.clientName)}</b>${dupBadge(o, dupIdx0)}<div class="muted">${esc(o.sellerName)} · ${esc(o.route || '')} · ${esc(fmtDate(o.routeDate))}</div>${dupLines(o, dupIdx0)}</td>
           <td class="n">${t.bultos} bultos</td><td class="n">${usd(t.monto)}</td>
           <td style="white-space:nowrap"><button class="btn btn-sm" data-edit="${esc(o.id)}">Editar</button>
             <button class="btn btn-sm" data-move="${esc(o.id)}">⇄ A una hoja</button>
             <button class="btn btn-sm btn-primary" data-release="${esc(o.id)}">↩ Reincorporar</button></td></tr>`;
-      }).join('')}</table></div>` : '<p class="muted">Ninguno.</p>'}`;
+      }).join(''))(dupIndex())}</table></div>` : '<p class="muted">Ninguno.</p>'}`;
 
     $('#lSeller').onchange = (e) => { U().loadSeller = e.target.value; renderLoads(root); };
     $('#lSync').onclick = () => PV.runSync(true);
@@ -376,7 +423,7 @@
         <tbody>${os.map((o, i) => { const t = Matrix.orderTotals(o); return `<tr>
           <td>${i + 1}</td>
           <td style="white-space:nowrap">${editableLoad ? `<button class="btn btn-sm" data-left="${i}" ${i ? '' : 'disabled'} aria-label="Mover a la izquierda">←</button><button class="btn btn-sm" data-right="${i}" ${i < os.length - 1 ? '' : 'disabled'} aria-label="Mover a la derecha">→</button>` : ''}</td>
-          <td><b>${esc(o.clientName)}</b> <span class="muted">${esc(fmtDate(o.routeDate))}</span>${dupBadge(o, dups)}
+          <td><b>${esc(o.clientName)}</b> <span class="muted">${esc(fmtDate(o.routeDate))}</span>${dupBadge(o, dups)}${dupLines(o, dups)}
             ${o.officeEdited ? ' <span class="status abierto">editado oficina</span>' : ''}${o.sellerEdited ? ' <span class="status en_espera">modificado por vendedor</span>' : ''}
             ${o.notes ? `<div class="muted">📝 ${esc(o.notes)}</div>` : ''}${(o.officeMsgs || []).length ? `<div class="muted">💬 ${o.officeMsgs.length} mensaje${o.officeMsgs.length > 1 ? 's' : ''} de oficina</div>` : ''}</td>
           <td><span class="tag">${esc(Loads.initials(o.sellerName))}</span></td>
@@ -510,7 +557,8 @@
     // Antes de aprobar o cerrar: pedidos que parecen duplicados (mismo cliente con ±1 día)
     if ((st.locked && !cur.locked) || closing) {
       const idx = dupIndex(), dl = os.filter((o) => (idx.get(o.id) || []).some((x) => !x.extra));
-      if (dl.length && !confirm(`⚠ Posibles pedidos DUPLICADOS en esta hoja:\n\n${dl.slice(0, 12).map((o) => `• ${o.clientName} (${o.sellerName}) · también: ${idx.get(o.id).filter((x) => !x.extra).map((x) => `${x.sellerName} ${fmtDate(x.routeDate)}`).join(', ')}`).join('\n')}${dl.length > 12 ? `\n… y ${dl.length - 12} más` : ''}\n\nRevísalos antes de despachar (se entregaría dos veces). ¿${st.name} igual?`)) return back();
+      const txt = (o) => `• ${o.clientName} (${o.sellerName})\n${idx.get(o.id).filter((x) => !x.extra).map((x) => `   ${x.kind === 'same' ? '⚠ mismo cliente' : '≈ nombre parecido «' + x.clientName + '»'} en ${dupWhere(x)}`).join('\n')}`;
+      if (dl.length && !confirm(`⚠ Posibles pedidos DUPLICADOS en esta hoja:\n\n${dl.slice(0, 10).map(txt).join('\n')}${dl.length > 10 ? `\n… y ${dl.length - 10} más` : ''}\n\nPregunta al vendedor antes de despachar (se entregaría dos veces). ¿${st.name} igual?`)) return back();
     }
     if (st.locked && !cur.locked && !closing && !Loads.isClosed(load)) {
       if (!confirm(`${st.name}: vendedores y oficina ya no podrán modificar estos ${os.length} pedidos. ¿Continuar?`)) return back();
@@ -665,6 +713,13 @@
       q('#noCliSel').innerHTML = clientName() ? `<div class="hint">Cliente: <b>${esc(clientName())}</b>${c ? ` <span class="muted">${esc([c.rif, c.address].filter(Boolean).join(' · '))}${c.sellerId ? ' · cartera de ' + esc((sellerById(c.sellerId) || {}).name || '—') : ''}</span>` : ' <span class="tag">cliente nuevo</span>'}
         <button class="btn btn-sm" type="button" data-clear style="margin-left:8px">Cambiar</button></div>` : '';
       q('#noCli').style.display = clientName() ? 'none' : '';
+      // Pedidos recientes de este cliente (o de nombre parecido) en cualquier vendedor y hoja
+      if (clientName()) {
+        const fk = Dedup.key(clientName()), d0 = Date.parse(d.date + 'T12:00:00Z');
+        const rec = S.orders.filter((o) => Dedup.live(o) && Matrix.orderTotals(o).items && Math.abs(Date.parse(o.routeDate + 'T12:00:00Z') - d0) <= Dedup.WINDOW_DAYS * 86400000 &&
+          ((c && o.clientId === c.id) || Dedup.key(o.clientName || o.clientKey) === fk));
+        if (rec.length) q('#noCliSel').insertAdjacentHTML('beforeend', `<div class="hint warn">⚠ Este cliente ya tiene ${rec.length === 1 ? 'un pedido' : rec.length + ' pedidos'} en ${Dedup.WINDOW_DAYS} días:${rec.slice(0, 4).map((o) => `<div class="dup-line same">${esc(o.clientName)} · ${esc(dupWhere({ id: o.id, loadId: o.loadId, routeDate: o.routeDate, sellerName: o.sellerName }))} · ${usd(Matrix.orderTotals(o).monto)}</div>`).join('')}</div>`);
+      }
     };
     const drawLines = () => {
       const lines = Object.entries(d.lines).map(([pid, l]) => ({ pid, l, t: Matrix.lineTotals(l), p: productById(pid) }))
@@ -791,7 +846,7 @@
           ${r.cells.map((v) => `<td class="n ${v ? '' : 'zero'}">${v ? (money ? nf2.format(v) : nf0.format(v)) : '·'}</td>`).join('')}<td class="n tot">${money ? nf2.format(r.total) : nf0.format(r.total)}</td></tr>`).join('')}</tbody>
         <tfoot>${m.footer.map((f) => `<tr><td class="sticky-col">${esc(f.label)}</td><td></td>${f.cells.map((v) => `<td class="n">${f.money ? nf2.format(v) : nf0.format(v)}</td>`).join('')}<td class="n tot">${f.money ? nf2.format(f.total) : nf0.format(f.total)}</td></tr>`).join('')}</tfoot></table></div>
         <div class="section-title">Detalle por cliente</div>
-        <div class="card"><table class="inv">${source.map((o) => `<tr><td><b>${esc(o.clientName)}</b>${dupBadge(o, dupIdx)}${o.createdBy === 'oficina' ? ' <span class="tag" title="Cargado por la oficina">🏢 oficina</span>' : ''}<div class="muted">${esc(o.sellerName)} · ${esc(o.route || '')}</div></td>
+        <div class="card"><table class="inv">${source.map((o) => `<tr><td><b>${esc(o.clientName)}</b>${dupBadge(o, dupIdx)}${o.createdBy === 'oficina' ? ' <span class="tag" title="Cargado por la oficina">🏢 oficina</span>' : ''}<div class="muted">${esc(o.sellerName)} · ${esc(o.route || '')}</div>${dupLines(o, dupIdx)}</td>
           <td><span class="status ${o.status}">${esc(Loads.orderLabel(o))}</span></td><td class="n">${usd(Matrix.orderTotals(o).monto)}</td>
           <td><button class="btn btn-sm" data-edit="${esc(o.id)}">Ver / editar</button></td></tr>`).join('')}</table></div>`
       : `<div class="empty card"><strong>Sin pedidos</strong>No hay pedidos para ${esc(fmtDate(date))}.</div>`}`;

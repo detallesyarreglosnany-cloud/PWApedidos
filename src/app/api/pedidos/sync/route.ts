@@ -5,7 +5,7 @@ import { isAdminReq, isSupervisorReq, syncOk } from '@/lib/keys';
 import { sendPush, type PushMsg } from '@/lib/push';
 import { RESET_LOCK, currentEpoch, epochAt } from '@/lib/epoch';
 import { ordersOfLoads, syncKardexForOrders } from '@/lib/vacios';
-import { dupPairs, type DupOrder } from '@/lib/dedup';
+import { dupPairs, DUP_WINDOW_DAYS, type DupOrder } from '@/lib/dedup';
 
 // Sincronización de la PWA de pedidos (public/pedidos).
 //
@@ -183,16 +183,16 @@ function later(...ts: string[]) {
 }
 
 /**
- * Alertas de pedido duplicado: mismo cliente (id de cartera, mismo nombre o nombre
- * equivalente, p. ej. «Bodega Sofía» = «VARIEDADES SOFIA») con 1 día o menos de
- * diferencia, del mismo u otro vendedor (src/lib/dedup.ts). Solo lee de la base los
+ * Alertas de pedido duplicado: mismo cliente (id de cartera o mismo nombre) o nombre
+ * parecido (p. ej. «Bodega Sofía» ≈ «VARIEDADES SOFIA») con 4 días o menos de
+ * diferencia, en cualquier hoja y estado, del mismo u otro vendedor (src/lib/dedup.ts). Solo lee de la base los
  * campos que necesita (no el pedido completo) y responde solo los pedidos CON alerta
  * (el equipo toma como «sin alerta» los que no vienen). from = desde qué día rige.
  */
 async function duplicates(sellerId: string | null) {
-  const from = daysAgo(3), read = daysAgo(4);
+  const from = daysAgo(DUP_WINDOW_DAYS), read = daysAgo(DUP_WINDOW_DAYS * 2);
   const orders = await db.$queryRaw<DupOrder[]>`
-    SELECT "id", "sellerId", "routeDate",
+    SELECT "id", "sellerId", "routeDate", "status", ("data"::jsonb ->> 'loadId') AS "loadId",
       ("data"::jsonb ->> 'sellerName') AS "sellerName", ("data"::jsonb ->> 'clientId') AS "clientId",
       ("data"::jsonb ->> 'clientKey') AS "clientKey", ("data"::jsonb ->> 'clientName') AS "clientName",
       ("data"::jsonb ->> 'pendingFrom') AS "pendingFrom", ("data"::jsonb ->> 'extraOk') AS "extraOk",

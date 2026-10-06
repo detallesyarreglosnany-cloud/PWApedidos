@@ -12,12 +12,14 @@ export function clientKeyOf(name: unknown) {
 }
 
 export type DupOrder = { id: string; sellerId: string | null; sellerName: string | null; routeDate: string | null; clientId: string | null;
-  clientKey: string | null; clientName: string | null; pendingFrom: string | null; extraOk: string | null; result: string | null };
-export type DupHit = { id: string; sellerName: string; routeDate: string; extra: boolean };
+  clientKey: string | null; clientName: string | null; pendingFrom: string | null; extraOk: string | null; result: string | null;
+  loadId: string | null; status: string | null };
+export type DupHit = { id: string; kind: 'same' | 'similar'; clientName: string; sellerName: string; routeDate: string; loadId: string; status: string; extra: boolean };
+export const DUP_WINDOW_DAYS = 4;
 
 const dayN = (d: string | null) => Date.parse(String(d || '') + 'T12:00:00Z') / 86400000;
 
-/** Pedidos del mismo cliente (id, nombre o nombre equivalente) con 1 día o menos de diferencia. */
+/** Pedidos del mismo cliente ('same': id o nombre) o de nombre parecido ('similar') con 4 días o menos de diferencia. */
 export function dupPairs(orders: DupOrder[], onlyFor?: (o: DupOrder) => boolean) {
   const list = orders.filter((o) => o.result !== 'anulada');
   const groups = new Map<string, DupOrder[]>();
@@ -29,19 +31,23 @@ export function dupPairs(orders: DupOrder[], onlyFor?: (o: DupOrder) => boolean)
     if (f) add('f|' + f, o);
   }
   const out = new Map<string, DupHit[]>();
-  for (const g of groups.values()) {
+  for (const [gk, g] of groups) {
     if (g.length < 2) continue;
+    const kind: DupHit['kind'] = gk.startsWith('f|') ? 'similar' : 'same';
     for (const o of g) {
       if (onlyFor && !onlyFor(o)) continue;
       for (const x of g) {
         if (x.id === o.id || x.pendingFrom === o.id || o.pendingFrom === x.id) continue;
-        if (Math.abs(dayN(x.routeDate) - dayN(o.routeDate)) > 1) continue;
+        if (Math.abs(dayN(x.routeDate) - dayN(o.routeDate)) > DUP_WINDOW_DAYS) continue;
         const cur = out.get(o.id) || [];
-        if (cur.some((d) => d.id === x.id)) continue;
-        cur.push({ id: x.id, sellerName: x.sellerName || '', routeDate: x.routeDate || '', extra: x.sellerId === o.sellerId && (x.extraOk === 'true' || o.extraOk === 'true') });
+        const had = cur.find((d) => d.id === x.id);
+        if (had) { if (kind === 'same') had.kind = 'same'; continue; }
+        cur.push({ id: x.id, kind, clientName: x.clientName || '', sellerName: x.sellerName || '', routeDate: x.routeDate || '', loadId: x.loadId || '',
+          status: x.status || '', extra: x.sellerId === o.sellerId && (x.extraOk === 'true' || o.extraOk === 'true') });
         out.set(o.id, cur);
       }
     }
   }
+  for (const arr of out.values()) arr.sort((a, b) => (a.kind === b.kind ? b.routeDate.localeCompare(a.routeDate) : a.kind === 'same' ? -1 : 1));
   return out;
 }

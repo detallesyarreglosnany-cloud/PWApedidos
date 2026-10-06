@@ -7,7 +7,7 @@
  *                           «abasto», «C.A.», acentos ni signos)
  *   Dedup.key(nombre)       clave para comparar (mismo cliente aunque cambie el orden)
  *   Dedup.similar(n, list)  clientes parecidos (también con un error de tipeo)
- *   Dedup.pairs(orders)     pedidos del mismo cliente con ±1 día de diferencia
+ *   Dedup.pairs(orders)     pedidos del mismo cliente (o de nombre parecido) con ±4 días
  * Espejo en el servidor: src/lib/dedup.ts (mismas reglas).
  * ========================================================================= */
 (function (global) {
@@ -57,37 +57,45 @@
   }
 
   const dayN = (d) => Date.parse(String(d || '') + 'T12:00:00Z') / 86400000;
+  const WINDOW_DAYS = 4;
   /** ¿Cuenta para comparar? (no borrado, no anulado al liquidar). */
   const live = (o) => !o.deleted && !(o.delivery && o.delivery.result === 'anulada');
   /**
-   * Pedidos del mismo cliente (mismo id de cartera, mismo nombre o nombre
-   * equivalente) con 1 día o menos de diferencia. Un pedido «se entrega después»
-   * y su reprogramación no cuentan como duplicado. extra = el vendedor confirmó
-   * que era un pedido adicional (mismo vendedor).
-   * Devuelve Map(orderId → [{ id, sellerName, routeDate, extra }]).
+   * Pedidos del mismo cliente con 4 días o menos de diferencia, estén donde estén
+   * (enviado, hoja esperando aprobación, aprobada, cerrada, despachada…).
+   *   kind 'same'    = mismo cliente (mismo id de cartera o mismo nombre)
+   *   kind 'similar' = solo el nombre se parece («Bodega Sofía» ≈ «VARIEDADES SOFIA»)
+   * Un pedido «se entrega después» y su reprogramación no cuentan. extra = el
+   * vendedor confirmó que era un pedido adicional (mismo vendedor).
+   * Devuelve Map(orderId → [{ id, kind, clientName, sellerName, routeDate, loadId, status, extra }]).
    */
-  function pairs(orders, onlyFor) {
+  function pairs(orders, onlyFor, days) {
+    const win = days || WINDOW_DAYS;
     const list = orders.filter(live);
     const groups = new Map();
     const add = (k, o) => { if (!k) return; const g = groups.get(k) || []; g.push(o); groups.set(k, g); };
     list.forEach((o) => { if (o.clientId) add('i|' + o.clientId, o); if (o.clientKey) add('k|' + o.clientKey, o); const f = key(o.clientName || o.clientKey); if (f) add('f|' + f, o); });
     const out = new Map();
-    groups.forEach((g) => {
+    groups.forEach((g, gk) => {
       if (g.length < 2) return;
+      const kind = gk.startsWith('f|') ? 'similar' : 'same';
       g.forEach((o) => {
         if (onlyFor && !onlyFor(o)) return;
         g.forEach((x) => {
           if (x.id === o.id || x.pendingFrom === o.id || o.pendingFrom === x.id) return;
-          if (Math.abs(dayN(x.routeDate) - dayN(o.routeDate)) > 1) return;
+          if (Math.abs(dayN(x.routeDate) - dayN(o.routeDate)) > win) return;
           const cur = out.get(o.id) || [];
-          if (cur.some((d) => d.id === x.id)) return;
-          cur.push({ id: x.id, sellerName: x.sellerName || '', routeDate: x.routeDate || '', extra: !!(x.sellerId === o.sellerId && (x.extraOk || o.extraOk)) });
+          const had = cur.find((d) => d.id === x.id);
+          if (had) { if (kind === 'same') had.kind = 'same'; return; }
+          cur.push({ id: x.id, kind, clientName: x.clientName || '', sellerName: x.sellerName || '', routeDate: x.routeDate || '', loadId: x.loadId || '',
+            status: x.status || '', extra: !!(x.sellerId === o.sellerId && (x.extraOk || o.extraOk)) });
           out.set(o.id, cur);
         });
       });
     });
+    out.forEach((arr) => arr.sort((a, b) => (a.kind === b.kind ? String(b.routeDate).localeCompare(String(a.routeDate)) : a.kind === 'same' ? -1 : 1)));
     return out;
   }
 
-  global.Dedup = { norm, core, key, score, similar, pairs, live };
+  global.Dedup = { norm, core, key, score, similar, pairs, live, WINDOW_DAYS };
 })(typeof window !== 'undefined' ? window : globalThis);
