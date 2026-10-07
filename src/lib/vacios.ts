@@ -75,14 +75,20 @@ async function insertMovs(rows: VacMov[]) {
   return n;
 }
 
-/** Hojas con la liquidación CERRADA → hora del cierre (la misma que lleva order.delivery.at). */
+/**
+ * Hojas con la liquidación CERRADA → hora del cierre (la misma que lleva order.delivery.at).
+ * known = hojas que SÍ existen en el servidor (cerradas o no).
+ */
 async function closedLiquidations(loadIds: string[]) {
-  const out = new Map<string, string>();
+  const out = new Map<string, string>() as Map<string, string> & { known?: Set<string> };
+  const known = new Set<string>();
+  out.known = known;
   const ids = [...new Set(loadIds)];
   for (let i = 0; i < ids.length; i += 300) {
     const rows = await db.distDoc.findMany({ where: { kind: 'loads', id: { in: ids.slice(i, i + 300) } }, select: { id: true, data: true } });
     for (const r of rows) {
       const l = JSON.parse(r.data) as { deleted?: boolean; liq?: { status?: string; closedAt?: string } | null };
+      known.add(r.id);
       if (!l.deleted && l.liq && l.liq.status === 'cerrada' && l.liq.closedAt) out.set(r.id, l.liq.closedAt);
     }
   }
@@ -128,12 +134,16 @@ export async function syncKardexForOrders(orders: OrderDoc[]) {
   const reversed = new Set(existing.filter((m) => m.kind === 'reverso' && m.refId).map((m) => m.refId as string));
   const have = new Set(existing.map((m) => m.id));
   const closed = await closedLiquidations(orders.map((o) => o.delivery?.loadId).filter((x): x is string => !!x));
-  const want = orders.flatMap((o) => desiredMovs(o, closed));
+  // Pedido cuya hoja todavía NO está en el servidor (llegó primero el pedido, p. ej. al
+  // restaurar un respaldo): no se sabe si la liquidación está cerrada → no se toca
+  // nada; se revisa cuando llegue la hoja. Sin esto se cancelaban vacíos válidos.
+  const unknown = new Set(orders.filter((o) => o.delivery && o.delivery.loadId && !closed.known!.has(o.delivery.loadId)).map((o) => o.id));
+  const want = orders.filter((o) => !unknown.has(o.id)).flatMap((o) => desiredMovs(o, closed));
   const wantIds = new Set(want.map((m) => m.id));
   const toAdd = want.filter((m) => !have.has(m.id));
   const now = new Date().toISOString().slice(0, 10);
   const toReverse: VacMov[] = existing
-    .filter((m) => (LIQ_KINDS as readonly string[]).includes(m.kind) && m.id.startsWith('liq:') && !reversed.has(m.id) && !wantIds.has(m.id))
+    .filter((m) => (LIQ_KINDS as readonly string[]).includes(m.kind) && m.id.startsWith('liq:') && !reversed.has(m.id) && !wantIds.has(m.id) && !unknown.has(String(m.orderId)))
     .map((m) => ({ ...m, id: 'rev:' + m.id, kind: 'reverso', refId: m.id, date: now, motivo: 'Liquidación reabierta o corregida', data: '{}' }));
   // Primero los reversos: si algo falla a la mitad, la próxima revisión lo completa
   await insertMovs(toReverse);
