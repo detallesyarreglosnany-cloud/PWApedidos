@@ -188,7 +188,13 @@
   async function epochChanged() {
     return (await DB.getMeta('epoch', '')) !== (S.epoch || '') || !!(await DB.getMeta('resetPending', null));
   }
-  async function saveSettings(patch) { S.settings = { ...S.settings, ...patch }; await DB.setMeta('settings', S.settings); }
+  async function saveSettings(patch) {
+    // Otra clave u otro servidor = otros permisos: lo que no se pudo bajar antes se baja completo
+    // (si no, el marcador de sincronización solo traería lo nuevo y lo antiguo nunca llegaría)
+    const access = ['syncKey', 'adminKey', 'supervisorKey', 'syncUrl'].some((k) => k in patch && String(patch[k] || '') !== String(S.settings[k] || ''));
+    S.settings = { ...S.settings, ...patch }; await DB.setMeta('settings', S.settings);
+    if (access) await Sync.redownload();
+  }
   async function setSession(sess) {
     S.session = sess; await DB.setMeta('session', sess);
     // El último vendedor también queda en una cookie: sobrevive si el navegador borra los datos
