@@ -17,7 +17,7 @@ const MAX_DAYS = 366;
 
 type Line = { code?: string; name?: string; presentation?: string; category?: string; cajas?: number; unidades?: number; boxPrice?: number; unitPrice?: number; unitsPerBox?: number };
 type VacLine = { code?: string; type?: string; regime?: string; boxes?: number; recv?: number; asg?: number | null; pending?: number; motivo?: string };
-type Delivery = { at?: string; date?: string; loadId?: string; result?: string; lines?: Record<string, Line>; monto?: number; motivo?: string; voidedNote?: string; newValery?: string; vac?: Record<string, VacLine> };
+type Delivery = { at?: string; date?: string; loadId?: string; result?: string; lines?: Record<string, Line>; monto?: number; motivo?: string; voidedNote?: string; newValery?: string; vac?: Record<string, VacLine>; prevVac?: { type?: string; from?: string; qty?: number; motivo?: string }[] };
 type OrderDoc = { id: string; deleted?: boolean; sellerId?: string; sellerName?: string; clientId?: string; clientName?: string; valeryNote?: string; lines?: Record<string, Line>; delivery?: Delivery | null };
 type SnapRow = { key?: string; code?: string; name?: string; presentation?: string; um?: string; pedido?: number; entregado?: number; queda?: number; carga?: number; total?: number; debe?: number; dev?: number | null; dif?: number | null; motivo?: string; dest?: string };
 type LoadDoc = {
@@ -149,8 +149,10 @@ export async function POST(req: NextRequest) {
 
     // ---- Vacíos (de lo liquidado) ----
     const vacByCode = new Map<string, { pid: string; code: string; type: string; despachados: number; recibidos: number; asignados: number; debe: number }>();
-    const vacByDispatcher = new Map<string, { name: string; type: string; despachados: number; recibidos: number; asignados: number; debe: number }>();
-    const vacBySeller = new Map<string, { name: string; type: string; despachados: number; recibidos: number; asignados: number; debe: number }>();
+    // anteriores = vacíos que devolvió el cliente de entregas pasadas y trajo el despachador de esa hoja
+    type VacPerson = { name: string; type: string; despachados: number; recibidos: number; asignados: number; debe: number; anteriores: number };
+    const vacByDispatcher = new Map<string, VacPerson>();
+    const vacBySeller = new Map<string, VacPerson>();
     const add = (x: { despachados: number; recibidos: number; asignados: number; debe: number }, v: VacLine) => {
       x.despachados += num(v.boxes); x.recibidos += num(v.recv); x.asignados += num(v.asg);
       x.debe += Math.max(0, num(v.boxes) - num(v.recv) - num(v.asg));
@@ -167,9 +169,15 @@ export async function POST(req: NextRequest) {
         const type = String(v.type || v.code || pid);
         add(bump(vacByCode, pid, () => ({ pid, code: String(v.code || pid), type, despachados: 0, recibidos: 0, asignados: 0, debe: 0 })), v);
         const dn = load.dispatcherName || 'Sin despachador';
-        add(bump(vacByDispatcher, dn + '\u0001' + type, () => ({ name: dn, type, despachados: 0, recibidos: 0, asignados: 0, debe: 0 })), v);
+        add(bump(vacByDispatcher, dn + '\u0001' + type, () => ({ name: dn, type, despachados: 0, recibidos: 0, asignados: 0, debe: 0, anteriores: 0 })), v);
         const sn = o.sellerName || '—';
-        add(bump(vacBySeller, sn + '\u0001' + type, () => ({ name: sn, type, despachados: 0, recibidos: 0, asignados: 0, debe: 0 })), v);
+        add(bump(vacBySeller, sn + '\u0001' + type, () => ({ name: sn, type, despachados: 0, recibidos: 0, asignados: 0, debe: 0, anteriores: 0 })), v);
+      }
+      for (const p of Array.isArray(d.prevVac) ? d.prevVac : []) {
+        const q = num(p.qty), type = String(p.type || ''); if (!q || !type) continue;
+        const dn = load.dispatcherName || 'Sin despachador', sn = o.sellerName || '—';
+        bump(vacByDispatcher, dn + '\u0001' + type, () => ({ name: dn, type, despachados: 0, recibidos: 0, asignados: 0, debe: 0, anteriores: 0 })).anteriores += q;
+        bump(vacBySeller, sn + '\u0001' + type, () => ({ name: sn, type, despachados: 0, recibidos: 0, asignados: 0, debe: 0, anteriores: 0 })).anteriores += q;
       }
     }
     // Devoluciones posteriores registradas en el kardex dentro del período

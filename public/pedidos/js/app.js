@@ -1030,15 +1030,40 @@
       ${sim.length ? `${same.length ? '<br>' : ''}≈ <b>Nombre parecido:</b> ${sim.map((d) => `«${esc(d.clientName)}» ${where(d)}`).join('; ')}.` : ''} Verifica que no sea el mismo pedido.</div>`;
   }
 
+  /**
+   * Líneas de un pedido agrupadas por presentación (2 L, 1,5 L, 1,25 L…): los grupos
+   * en el orden en que aparecen en el catálogo y, dentro de cada grupo, el orden del
+   * catálogo. Solo cambia cómo se muestran: el pedido guardado no se toca.
+   * items: [{ pid, l, ... }] → [{ pres, items }]
+   */
+  const presKey = (s) => String(s || '').toUpperCase().replace(/\s+/g, '').replace('.', ',');
+  function groupLines(items) {
+    const sorted = S.products.filter((p) => !p.deleted).sort(productSort());
+    const rank = new Map(sorted.map((p, i) => [p.id, i]));
+    const presRank = new Map();
+    sorted.forEach((p, i) => { const k = presKey(p.presentation); if (!presRank.has(k)) presRank.set(k, i); });
+    const R = 1e9, rk = (x) => (rank.has(x.pid) ? rank.get(x.pid) : R);
+    const gr = (k) => (k ? (presRank.has(k) ? presRank.get(k) : R - 1) : R);
+    const groups = new Map();
+    items.forEach((x) => { const k = presKey(x.l.presentation); if (!groups.has(k)) groups.set(k, { key: k, pres: x.l.presentation || '', items: [] }); groups.get(k).items.push(x); });
+    return [...groups.values()]
+      .sort((a, b) => gr(a.key) - gr(b.key) || a.key.localeCompare(b.key, 'es', { numeric: true }))
+      .map((g) => ({ pres: g.pres, items: g.items.sort((a, b) => rk(a) - rk(b) || String(a.l.category || '').localeCompare(String(b.l.category || ''), 'es') || String(a.l.name || '').localeCompare(String(b.l.name || ''), 'es')) }));
+  }
+  /** Filas de una tabla .lines con un rótulo por presentación (si hay más de una). */
+  function groupedRows(items, cols, rowHTML) {
+    const gs = groupLines(items);
+    return gs.map((g) => (gs.length > 1 ? `<tr class="grp-row"><td colspan="${cols}">${esc(g.pres || 'Otros')}</td></tr>` : '') + g.items.map(rowHTML).join('')).join('');
+  }
+
   function orderLinesHTML(o) {
-    const lines = Object.values(o.lines).map((l) => ({ l, t: Matrix.lineTotals(l) }))
-      .sort((a, b) => a.l.category.localeCompare(b.l.category, 'es') || a.l.name.localeCompare(b.l.name, 'es'));
+    const lines = Object.entries(o.lines || {}).map(([pid, l]) => ({ pid, l, t: Matrix.lineTotals(l) }));
     const tot = Matrix.orderTotals(o);
     const rate = +S.config.exchangeRate || 0;
     if (!lines.length) return '<div class="empty"><strong>Pedido vacío</strong>Agrega productos desde el catálogo.</div>';
-    return `<table class="lines">${lines.map(({ l, t }) => `
+    return `<table class="lines">${groupedRows(lines, 2, ({ l, t }) => `
         <tr><td><b>${esc(l.name)} ${esc(l.presentation)}</b><div class="muted mono" style="font-size:12px">${esc(l.code)} · ${t.cajas ? t.cajas + ' cj × ' + usd(l.boxPrice) : ''}${t.cajas && t.unidades ? ' + ' : ''}${t.unidades ? t.unidades + ' un × ' + usd(l.unitPrice) : ''}</div></td>
-            <td class="num">${usd(t.monto)}</td></tr>`).join('')}
+            <td class="num">${usd(t.monto)}</td></tr>`)}
         <tr class="total-row"><td><b>TOTAL</b> · ${tot.cajas} cj + ${tot.unidades} un</td>
             <td class="num">${usd(tot.monto)}${rate ? `<div class="muted" style="font-size:12px">${bs(tot.monto * rate)}</div>` : ''}</td></tr>
       </table>`;
@@ -1251,11 +1276,11 @@
       const card = (o) => {
         const l = loadOf(o), d = o.delivery && o.delivery.at ? o.delivery : null, t = Matrix.orderTotals(o);
         const dl = d ? d.lines || {} : null;
-        const rows = Object.entries(o.lines || {}).map(([pid, x]) => {
+        const rows = groupedRows(Object.entries(o.lines || {}).map(([pid, l]) => ({ pid, l })), dl ? 4 : 2, ({ pid, l: x }) => {
           const got = dl ? dl[pid] : null;
           const ret = dl ? { cajas: Math.max(0, (+x.cajas || 0) - (got ? +got.cajas || 0 : 0)), unidades: Math.max(0, (+x.unidades || 0) - (got ? +got.unidades || 0 : 0)) } : null;
           return `<tr><td>${esc(x.code)} ${esc(x.name)} ${esc(x.presentation || '')}</td><td class="num">${qty(x)}</td>${dl ? `<td class="num">${qty(got)}</td><td class="num">${ret.cajas || ret.unidades ? qty(ret) : ''}</td>` : ''}</tr>`;
-        }).join('');
+        });
         return `<details class="card card-pad sr" style="margin-bottom:8px"><summary><b>${esc(o.clientName)}</b> · ${esc(fmtDate(o.routeDate))}${office ? ' · ' + esc(o.sellerName) : ''} · ${usd(d ? d.monto : t.monto)}
           <div style="margin-top:3px">${noteStatusHTML(o, isNum ? digits : '')}</div>
           <div class="muted" style="font-size:13px">${l ? `Hoja ${esc(Loads.labelOf(l))}${l.number ? ' ' + esc(Loads.loadCode(l)) : ''} · ${esc(Loads.statusOf(l, S.config).name)}` : 'Sin hoja'}${o.route ? ' · Ruta ' + esc(o.route) : ''}${o.pendingFrom ? ' · reprogramado de otro pedido' : ''}${o.createdBy === 'oficina' ? ' · 🏢 oficina' : ''}</div></summary>
@@ -1667,7 +1692,7 @@
     syncInfo: () => ({ idle: isIdle(), every: syncEvery() }), _idleSince: (ms) => { lastInput = Date.now() - ms; },
     loadAll, saveDocs, saveOrder, saveSettings, setSession, msgThreadHTML, rememberOffice, forgetOffice, PERSIST_HINT, runSync, updateSyncPill, render, refreshAfterRemote, updateBell, beep, logEvent, isSupervisor,
     notifSheet, refreshPush,
-    productById, sellerById, orderById, clientById, rubros, orderLinesHTML,
+    productById, sellerById, orderById, clientById, rubros, orderLinesHTML, groupLines, groupedRows,
     boot, localNotif,
   };
 })();

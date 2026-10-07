@@ -27,7 +27,9 @@ export type VacMov = {
 };
 
 type VacLine = { code?: string; type?: string; regime?: string; boxes?: number; recv?: number; asg?: number | null; pending?: number; motivo?: string };
-type Delivery = { at?: string; date?: string; loadId?: string; newValery?: string; dispatcherName?: string; by?: string; vac?: Record<string, VacLine> };
+// Vacíos que el cliente devolvió de entregas ANTERIORES (los trajo el despachador de esta hoja)
+type PrevVac = { type?: string; from?: string; qty?: number; motivo?: string };
+type Delivery = { at?: string; date?: string; loadId?: string; newValery?: string; dispatcherName?: string; by?: string; vac?: Record<string, VacLine>; prevVac?: PrevVac[] };
 type OrderDoc = {
   id: string; clientId?: string; clientKey?: string; clientName?: string; sellerId?: string; sellerName?: string;
   route?: string; valeryNote?: string; deleted?: boolean; delivery?: Delivery | null;
@@ -44,9 +46,22 @@ const day = (s: unknown) => (typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test
  */
 export function desiredMovs(o: OrderDoc, closedLoads: Map<string, string>): VacMov[] {
   const d = o.delivery;
-  if (!d || o.deleted || !d.at || !d.vac || !d.loadId || closedLoads.get(d.loadId) !== d.at) return [];
+  if (!d || o.deleted || !d.at || (!d.vac && !d.prevVac) || !d.loadId || closedLoads.get(d.loadId) !== d.at) return [];
   const out: VacMov[] = [];
-  for (const [pid, v] of Object.entries(d.vac)) {
+  const rev = o.kxRev ? ':r' + n0(o.kxRev) : '';
+  // Devoluciones de entregas anteriores registradas en esta liquidación: mismo cliente,
+  // vendedor y despachador de la hoja; se cancelan solas si la liquidación se reabre
+  for (const p of Array.isArray(d.prevVac) ? d.prevVac : []) {
+    const qty = n0(p.qty), type = String(p.type || '').slice(0, 40), kind = p.from === 'dev_asignado' ? 'dev_asignado' : 'devolucion';
+    if (!qty || !type) continue;
+    out.push({
+      id: `liq:${o.id}:${d.at}${rev}:prev:${type}:${kind}`, date: day(d.date), kind, clientId: String(o.clientId || o.clientKey || o.clientName || ''), clientName: String(o.clientName || ''),
+      sellerId: String(o.sellerId || ''), sellerName: String(o.sellerName || ''), type, pid: '', code: '', qty, orderId: o.id, loadId: d.loadId || null, refId: null,
+      motivo: ['Vacíos de entregas anteriores', String(p.motivo || '').slice(0, 200)].filter(Boolean).join(' · '), by: String(d.by || 'Oficina'),
+      data: JSON.stringify({ prev: true, dispatcherName: d.dispatcherName || '', route: o.route || '', valeryNote: d.newValery || o.valeryNote || '' }),
+    });
+  }
+  for (const [pid, v] of Object.entries(d.vac || {})) {
     const base = {
       date: day(d.date), clientId: String(o.clientId || o.clientKey || o.clientName || ''), clientName: String(o.clientName || ''),
       sellerId: String(o.sellerId || ''), sellerName: String(o.sellerName || ''), type: String(v.type || v.code || pid),
@@ -56,7 +71,7 @@ export function desiredMovs(o: OrderDoc, closedLoads: Map<string, string>): VacM
     const qty: Record<string, number> = { despacho: n0(v.boxes), recibido: n0(v.recv), asignado: n0(v.asg) };
     for (const k of LIQ_KINDS) {
       if (!qty[k]) continue;
-      out.push({ ...base, id: `liq:${o.id}:${d.at}${o.kxRev ? ':r' + n0(o.kxRev) : ''}:${pid}:${k}`, kind: k, qty: qty[k], motivo: k === 'despacho' ? String(v.motivo || '') : '' });
+      out.push({ ...base, id: `liq:${o.id}:${d.at}${rev}:${pid}:${k}`, kind: k, qty: qty[k], motivo: k === 'despacho' ? String(v.motivo || '') : '' });
     }
   }
   return out;
@@ -143,7 +158,7 @@ export async function syncKardexForOrders(orders: OrderDoc[]) {
   const toAdd = want.filter((m) => !have.has(m.id));
   const now = new Date().toISOString().slice(0, 10);
   const toReverse: VacMov[] = existing
-    .filter((m) => (LIQ_KINDS as readonly string[]).includes(m.kind) && m.id.startsWith('liq:') && !reversed.has(m.id) && !wantIds.has(m.id) && !unknown.has(String(m.orderId)))
+    .filter((m) => m.id.startsWith('liq:') && ((LIQ_KINDS as readonly string[]).includes(m.kind) || m.kind === 'devolucion' || m.kind === 'dev_asignado') && !reversed.has(m.id) && !wantIds.has(m.id) && !unknown.has(String(m.orderId)))
     .map((m) => ({ ...m, id: 'rev:' + m.id, kind: 'reverso', refId: m.id, date: now, motivo: 'Liquidación reabierta o corregida', data: '{}' }));
   // Primero los reversos: si algo falla a la mitad, la próxima revisión lo completa
   await insertMovs(toReverse);
@@ -157,7 +172,7 @@ export async function reconcileAll() {
   const withDelivery = await db.$queryRaw<{ id: string; data: string }[]>`
     SELECT "id", "data" FROM "DistDoc" WHERE "kind" = 'orders' AND "data" LIKE '%"delivery":{%'`;
   const inKardex = await db.$queryRaw<{ orderId: string }[]>`
-    SELECT DISTINCT "orderId" FROM "DistVacMov" WHERE "orderId" IS NOT NULL AND "kind" IN ('despacho', 'recibido', 'asignado')`;
+    SELECT DISTINCT "orderId" FROM "DistVacMov" WHERE "orderId" IS NOT NULL AND ("kind" IN ('despacho', 'recibido', 'asignado') OR "id" LIKE 'liq:%')`;
   const known = new Set(withDelivery.map((r) => r.id));
   const extra = inKardex.map((r) => r.orderId).filter((id) => !known.has(id));
   const extraRows = extra.length ? await db.distDoc.findMany({ where: { kind: 'orders', id: { in: extra } }, select: { id: true, data: true } }) : [];

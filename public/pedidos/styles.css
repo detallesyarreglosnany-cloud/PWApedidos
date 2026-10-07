@@ -451,6 +451,8 @@ table.liq-grid tr.liq-nov th.entregada { color: #53d68e; }
 table.liq-grid tr.liq-money td { color: var(--accent); }
 table.liq-grid tr.vac-row.k-DESPACHADOS td { border-top: 2px solid #53d68e; }
 table.liq-grid tr.vac-row.k-DEBEN td { color: var(--warn); font-weight: 900; }
+table.liq-grid tr.vac-row.k-PREV td { color: var(--accent, #3b82f6); }
+table.liq-grid tr.vac-row.k-ENTRAN td { font-weight: 900; border-top: 2px solid #53d68e; }
 table.liq-vac .select.sm { min-width: 190px; }
 
 /* ---------- Kardex de vacíos (Fase 2 · E4) ---------- */
@@ -507,3 +509,4 @@ details.sr mark { background: var(--accent); color: #111; border-radius: 4px; pa
 .pause-card { display: flex; gap: 12px; align-items: flex-start; margin: 10px 12px 0; padding: 14px; border-radius: 14px; border: 1px solid var(--accent); background: rgba(255, 196, 0, .10); }
 .pause-card .pause-ico { font-size: 34px; line-height: 1; }
 .pause-card p { margin: 6px 0; }
+table.lines tr.grp-row td { padding: 8px 6px 4px; font-weight: 800; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); border-bottom: 1px solid var(--line); }

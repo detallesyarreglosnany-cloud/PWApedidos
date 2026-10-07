@@ -203,8 +203,9 @@
           ${['ENTREGADO', 'QUEDAN', 'CARGA', 'TOTAL', 'DEBE QUEDAR', 'DEVOLUCIÓN', 'DIFERENCIA', 'MOTIVO', 'LO QUE SOBRA', 'TOTAL $'].map((x) => `<th class="cl rt"><div>${x}</div></th>`).join('')}</tr></thead>
         <tbody>${body}</tbody><tfoot>${foot}</tfoot></table>
       ${novs.length ? `<p class="novs"><b>Novedades:</b> ${novs.map(({ c, i }) => `${i + 1}. ${esc(c.order.clientName)} — ${esc(Liq.shortResult(c.entry).toLowerCase())}${c.entry.result === 'parcial' || c.entry.result === 'anulada' ? ` · nota ${esc(c.order.valeryNote || '—')} anulada` : ''}${c.entry.newValery && c.entry.result === 'parcial' ? ` → nueva ${esc(c.entry.newValery)}` : ''}${c.entry.motivo ? ` · ${esc(c.entry.motivo)}` : ''}`).join(' &nbsp;|&nbsp; ')}</p>` : ''}
+      ${(() => { const pv = Liq.prevRows(st.os, liq); return pv.length ? `<p class="novs"><b>Vacíos de entregas anteriores (trajo el despachador):</b> ${pv.map((p) => `${esc(p.client)} — ${p.qty} ${esc(p.type)}${p.from === 'dev_asignado' ? ' (asignados)' : ''}${p.motivo ? ' · ' + esc(p.motivo) : ''}`).join(' &nbsp;|&nbsp; ')}</p>` : ''; })()}
       ${st.vac.some((v) => v.pending) ? `<p class="novs"><b>Vacíos que quedan debiendo:</b> ${st.vac.filter((v) => v.pending).map((v) => `${esc(v.client)} — ${v.pending} ${esc(v.code)} (${esc(v.motivo || (v.regime === 'prestamo' ? 'PRÉSTAMO' : 'sin motivo'))})`).join(' &nbsp;|&nbsp; ')}</p>` : ''}
-      <p class="muted foot">↩ = devuelto por el cliente · Total = Quedan + Carga · Debe quedar = Total − Entregado · Diferencia = Debe quedar − Devolución · Vacíos: Despachados − Recibidos − Asignados = Quedan debiendo.</p>
+      <p class="muted foot">↩ = devuelto por el cliente · Total = Quedan + Carga · Debe quedar = Total − Entregado · Diferencia = Debe quedar − Devolución · Vacíos: Despachados − Recibidos − Asignados = Quedan debiendo · Vac. anteriores = devueltos de entregas anteriores · Que entran = Recibidos + Anteriores.</p>
       <div class="sign"><div>Despachador</div><div>Almacén</div><div>Liquidó (oficina)</div><div>Gerencia</div></div>
       </section>`;
   }
@@ -247,7 +248,7 @@
     d.vacios.byCode.forEach((v) => { if (v.type !== ty) { vflush(); ty = v.type; vs = { d: 0, r: 0, a: 0, q: 0 }; } vs.d += v.despachados; vs.r += v.recibidos; vs.a += v.asignados; vs.q += v.debe;
       vac += `<tr><td>${esc(v.code)}</td><td>${esc(v.type)}</td>${n(v.despachados)}${n(v.recibidos)}${n(v.asignados)}${n(v.debe)}<td></td></tr>`; });
     vflush();
-    const people = (arr) => arr.map((v) => `<tr><td>${esc(v.name)}</td><td>${esc(v.type)}</td>${n(v.despachados)}${n(v.recibidos)}${n(v.asignados)}${n(v.debe)}</tr>`).join('');
+    const people = (arr) => arr.map((v) => `<tr><td>${esc(v.name)}</td><td>${esc(v.type)}</td>${n(v.despachados)}${n(v.recibidos)}${n(v.asignados)}${n(v.debe)}${n(v.anteriores || 0)}${n(v.recibidos + (v.anteriores || 0))}</tr>`).join('');
     const R = global.Reportes;
     const vt = d.vacios.byCode.reduce((a, v) => ({ d: a.d + v.despachados, r: a.r + v.recibidos, a: a.a + v.asignados, q: a.q + v.debe }), { d: 0, r: 0, a: 0, q: 0 });
     const sumT = (title, who, sm, disp) => tbl(title, [who, ...(disp ? ['Hojas'] : []), 'Clientes', 'Cajas', 'Venta liquidada $', 'Vacíos despachados', 'Vacíos recibidos', 'Vacíos asignados', 'Quedan debiendo', disp ? 'Diferencias' : 'Novedades', 'Venta en proceso $'],
@@ -282,8 +283,8 @@
       ${tbl('Diferencias de camión', ['Fecha', 'Hoja', 'Despachador', 'Producto', 'Debe quedar', 'Devolución', 'Diferencia', 'Motivo'], d.diferencias.map((x) => `<tr><td>${esc(fdate(x.date + 'T12:00:00'))}</td><td>${esc(x.label || x.load)}</td><td>${esc(x.dispatcherName)}</td><td>${esc(x.code)} ${esc(x.name)} ${esc(x.um)}</td>${n(x.debe)}${n(x.dev)}${n(x.dif)}<td>${esc(x.motivo)}</td></tr>`).join(''))}
       ${tbl('Novedades de las notas', ['Fecha', 'Cliente', 'Vendedor', 'Resultado', 'Nota', 'Nota nueva', 'Motivo', 'Pedido $', 'Entregado $'], d.novedades.map((x) => `<tr><td>${esc(fdate(x.date + 'T12:00:00'))}</td><td>${esc(x.clientName)}</td><td>${esc(x.sellerName)}</td><td>${esc(RES[x.result] || x.result)}</td><td>${esc(x.valeryNote)}</td><td>${esc(x.newValery)}</td><td>${esc(x.motivo)}</td>${m(x.pedido)}${m(x.entregado)}</tr>`).join(''))}
       ${tbl('Vacíos por código', ['Código', 'Tipo', 'Despachados', 'Recibidos', 'Asignados', 'Quedan debiendo', 'Devoluciones posteriores'], vac, `<tr class="tot"><td colspan="2">TOTAL GENERAL</td>${n(vt.d)}${n(vt.r)}${n(vt.a)}${n(vt.q)}<td class="num">${Object.values(d.vacios.devoluciones || {}).reduce((a, x) => a + x, 0) || ''}</td></tr>`)}
-      ${tbl('Vacíos por despachador', ['Despachador', 'Tipo', 'Despachados', 'Recibidos', 'Asignados', 'Quedan debiendo'], people(d.vacios.byDispatcher))}
-      ${tbl('Vacíos por vendedor del cliente', ['Vendedor', 'Tipo', 'Despachados', 'Recibidos', 'Asignados', 'Quedan debiendo'], people(d.vacios.bySeller))}
+      ${tbl('Vacíos por despachador', ['Despachador', 'Tipo', 'Despachados', 'Recibidos', 'Asignados', 'Quedan debiendo', 'Devueltos entregas anteriores', 'Total que entran'], people(d.vacios.byDispatcher))}
+      ${tbl('Vacíos por vendedor del cliente', ['Vendedor', 'Tipo', 'Despachados', 'Recibidos', 'Asignados', 'Quedan debiendo', 'Devueltos entregas anteriores', 'Total que entran'], people(d.vacios.bySeller))}
       <div class="sign" style="grid-template-columns:repeat(3,1fr)"><div>Elaborado (oficina)</div><div>Revisado</div><div>Gerencia</div></div>
       </section>`;
     printHTML('Reporte ' + d.from + ' a ' + d.to, `@page{size:letter portrait;margin:10mm} h3{font-size:12px;margin:10px 0 3px;color:#730101}

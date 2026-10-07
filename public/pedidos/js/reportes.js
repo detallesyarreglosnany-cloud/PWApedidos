@@ -205,10 +205,11 @@
     const novedades = E.table({ name: 'Novedades', title: 'NOVEDADES DE LAS NOTAS', subtitle: sub, cols: [{ h: 'FECHA', k: 'date', w: 12 }, { h: 'CLIENTE', w: 36 }, { h: 'VENDEDOR', w: 18 }, { h: 'RESULTADO', w: 22 }, { h: 'NOTA', w: 10 }, { h: 'NOTA NUEVA', w: 12 }, { h: 'MOTIVO', w: 24 }, { h: 'PEDIDO $', k: 'money', total: true }, { h: 'ENTREGADO $', k: 'money', total: true }],
       rows: d.novedades.map((x) => [x.date, x.clientName, x.sellerName, RES[x.result] || x.result, x.valeryNote, x.newValery, x.motivo, x.pedido, x.entregado]) });
     const vc = [{ h: 'DESPACHADOS', k: 'int', total: true }, { h: 'RECIBIDOS', k: 'int', total: true }, { h: 'ASIGNADOS', k: 'int', total: true }, { h: 'QUEDAN DEBIENDO', k: 'int', total: true }];
+    const va = [{ h: 'DEVUELTOS ENTREGAS ANTERIORES', k: 'int', total: true, w: 16 }, { h: 'TOTAL QUE ENTRAN', k: 'int', total: true, w: 12 }];
     const vacios = E.blocks('Vacíos', [
       { title: 'Vacíos por código (devoluciones posteriores = del kardex)', cols: [{ h: 'CÓDIGO', w: 14 }, { h: 'TIPO', w: 10, align: 'center' }, ...vc], rows: d.vacios.byCode.map((v) => [v.code, v.type, v.despachados, v.recibidos, v.asignados, v.debe]) },
-      { title: 'Vacíos por despachador (los que trajo)', cols: [{ h: 'DESPACHADOR', w: 26 }, { h: 'TIPO', align: 'center' }, ...vc], rows: d.vacios.byDispatcher.map((v) => [v.name, v.type, v.despachados, v.recibidos, v.asignados, v.debe]) },
-      { title: 'Vacíos por vendedor del cliente', cols: [{ h: 'VENDEDOR', w: 26 }, { h: 'TIPO', align: 'center' }, ...vc], rows: d.vacios.bySeller.map((v) => [v.name, v.type, v.despachados, v.recibidos, v.asignados, v.debe]) },
+      { title: 'Vacíos por despachador (los que trajo)', cols: [{ h: 'DESPACHADOR', w: 26 }, { h: 'TIPO', align: 'center' }, ...vc, ...va], rows: d.vacios.byDispatcher.map((v) => [v.name, v.type, v.despachados, v.recibidos, v.asignados, v.debe, v.anteriores || 0, v.recibidos + (v.anteriores || 0)]) },
+      { title: 'Vacíos por vendedor del cliente', cols: [{ h: 'VENDEDOR', w: 26 }, { h: 'TIPO', align: 'center' }, ...vc, ...va], rows: d.vacios.bySeller.map((v) => [v.name, v.type, v.despachados, v.recibidos, v.asignados, v.debe, v.anteriores || 0, v.recibidos + (v.anteriores || 0)]) },
     ], { title: 'VACÍOS DE LO LIQUIDADO', subtitle: sub });
     const detalle = E.table({ name: 'Detalle', title: 'DETALLE POR CLIENTE', subtitle: sub, cols: [{ h: 'FECHA', k: 'date', w: 12 }, { h: 'HOJA', w: 12 }, { h: 'CLIENTE', w: 38 }, { h: 'VENDEDOR', w: 18 }, { h: 'DESPACHADOR', w: 18 }, { h: 'NOTA', w: 10 }, { h: 'RESULTADO', w: 20 }, { h: 'CAJAS', k: 'int', total: true }, { h: 'UNIDADES', k: 'int', total: true }, { h: 'MONTO $', k: 'money', total: true }],
       rows: d.detail.map((x) => [x.date, x.load, x.clientName, x.sellerName, x.dispatcherName, x.valeryNote, RES[x.result] || x.result, x.cajas, x.unidades, x.monto]) });
@@ -282,7 +283,7 @@
       });
       vflush();
       const vt = d.vacios.byCode.reduce((a, v) => ({ d: a.d + v.despachados, r: a.r + v.recibidos, a: a.a + v.asignados, q: a.q + v.debe }), { d: 0, r: 0, a: 0, q: 0 });
-      const vacPeople = (arr, who) => arr.map((v) => `<tr><td>${esc(v.name)}</td><td>${esc(v.type)}</td><td class="n">${v.despachados}</td><td class="n">${v.recibidos}</td><td class="n">${v.asignados}</td><td class="n">${v.debe}</td></tr>`).join('');
+      const vacPeople = (arr, who) => arr.map((v) => `<tr><td>${esc(v.name)}</td><td>${esc(v.type)}</td><td class="n">${v.despachados}</td><td class="n">${v.recibidos}</td><td class="n">${v.asignados}</td><td class="n">${v.debe}</td><td class="n">${v.anteriores || ''}</td><td class="n">${v.recibidos + (v.anteriores || 0)}</td></tr>`).join('');
       const catTbl = (title, g) => {
         // Lo principal: cajas y unidades sueltas (de ahí sale la comisión); debajo, el monto
         const c = (x) => (x.monto || x.cajas || x.unidades ? `<b>${nf0.format(x.cajas)} cj${x.unidades ? ' + ' + nf0.format(x.unidades) + ' un' : ''}</b><div class="muted">${usd(x.monto)}</div>` : '<span class="muted">·</span>');
@@ -338,8 +339,8 @@
           d.novedades.map((x) => `<tr><td>${esc(fmtDate(x.date))}</td><td><b>${esc(x.clientName)}</b></td><td>${esc(x.sellerName)}</td><td>${esc(RES[x.result] || x.result)}</td><td class="mono">${esc(x.valeryNote)}</td><td class="mono">${esc(x.newValery)}</td><td>${esc(x.motivo)}</td><td class="n">${usd(x.pedido)}</td><td class="n">${usd(x.entregado)}</td></tr>`).join(''))}
         ${tbl('Vacíos por código <span class="muted">(de lo liquidado en el período)</span>', [{ t: 'Código' }, { t: 'Tipo' }, N('Despachados'), N('Recibidos'), N('Asignados'), N('Quedan debiendo'), N('Devoluciones posteriores')], vacRows,
           `<tr><td colspan="2">TOTAL GENERAL</td><td class="n">${vt.d}</td><td class="n">${vt.r}</td><td class="n">${vt.a}</td><td class="n">${vt.q}</td><td class="n">${Object.values(d.vacios.devoluciones || {}).reduce((a, x) => a + x, 0) || ''}</td></tr>`)}
-        ${tbl('Vacíos por despachador (los que trajo)', [{ t: 'Despachador' }, { t: 'Tipo' }, N('Despachados'), N('Recibidos'), N('Asignados'), N('Quedan debiendo')], vacPeople(d.vacios.byDispatcher))}
-        ${tbl('Vacíos por vendedor del cliente', [{ t: 'Vendedor' }, { t: 'Tipo' }, N('Despachados'), N('Recibidos'), N('Asignados'), N('Quedan debiendo')], vacPeople(d.vacios.bySeller))}
+        ${tbl('Vacíos por despachador (los que trajo)', [{ t: 'Despachador' }, { t: 'Tipo' }, N('Despachados'), N('Recibidos'), N('Asignados'), N('Quedan debiendo'), N('Devueltos entregas anteriores'), N('Total que entran')], vacPeople(d.vacios.byDispatcher))}
+        ${tbl('Vacíos por vendedor del cliente', [{ t: 'Vendedor' }, { t: 'Tipo' }, N('Despachados'), N('Recibidos'), N('Asignados'), N('Quedan debiendo'), N('Devueltos entregas anteriores'), N('Total que entran')], vacPeople(d.vacios.bySeller))}
         <p class="muted">${d.detail.length} clientes entregados en el período. El detalle completo va en el Excel.</p>`;
       renderCompare($('#xcBox'), d, st);
       $('#qzPrint').onclick = () => global.Print.printQuincena(d, { config: S.config, title: titleOf(f2), RES });
