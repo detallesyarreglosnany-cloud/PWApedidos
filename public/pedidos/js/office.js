@@ -399,7 +399,9 @@
       }
       return `<td class="n ${x ? '' : 'zero'}">${x === undefined ? '' : x === null ? '·' : nf0.format(x)}</td>`;
     }).join('')}<td class="n tot">${nf0.format(v.total)}</td></tr>`).join('');
-    const foot = m.footer.map((f) => `<tr><td class="sticky-col">${esc(f.label)}</td>${f.cells.map((v) => `<td class="n">${nf0.format(v)}</td>`).join('')}<td class="n tot">${nf0.format(f.total)}</td></tr>`).join('') + vacFoot;
+    // Solo «Total bultos» queda fija abajo (lo que lleva cada cliente); el resto del pie se ve al final
+    const stickKey = m.footer.some((f) => f.key === 'TOTAL_BULTOS') ? 'TOTAL_BULTOS' : (m.footer[0] || {}).key;
+    const foot = m.footer.map((f) => `<tr class="${f.key === stickKey ? 'stick' : ''}"><td class="sticky-col">${esc(f.label)}</td>${f.cells.map((v) => `<td class="n">${nf0.format(v)}</td>`).join('')}<td class="n tot">${nf0.format(f.total)}</td></tr>`).join('') + vacFoot;
     const totalUSD = os.reduce((a, o) => a + Matrix.orderTotals(o).monto, 0);
     const dups = dupIndex();
     const initialsRow = `<tr class="ini-row"><th class="sticky-col">Vendedor →</th>${m.cols.map((c) => `<th>${esc(Loads.initials(c.order.sellerName))}</th>`).join('')}<th class="tot"></th></tr>`;
@@ -874,7 +876,7 @@
         ${m.cols.map((c) => `<th class="client" title="${esc(c.client)}">${esc(c.client)}</th>`).join('')}<th class="tot">TOTAL</th></tr></thead>
         <tbody>${m.rows.map((r) => `<tr><td class="sticky-col"><span class="mono muted">${esc(r.code)}</span> ${esc(r.name)} <b>${esc(r.presentation)}</b></td><td><span class="um ${r.um}">${r.um}</span></td>
           ${r.cells.map((v) => `<td class="n ${v ? '' : 'zero'}">${v ? (money ? nf2.format(v) : nf0.format(v)) : '·'}</td>`).join('')}<td class="n tot">${money ? nf2.format(r.total) : nf0.format(r.total)}</td></tr>`).join('')}</tbody>
-        <tfoot>${m.footer.map((f) => `<tr><td class="sticky-col">${esc(f.label)}</td><td></td>${f.cells.map((v) => `<td class="n">${f.money ? nf2.format(v) : nf0.format(v)}</td>`).join('')}<td class="n tot">${f.money ? nf2.format(f.total) : nf0.format(f.total)}</td></tr>`).join('')}</tfoot></table></div>
+        <tfoot>${m.footer.map((f, i, all) => `<tr class="${f.key === (all.some((x) => x.key === 'TOTAL_BULTOS') ? 'TOTAL_BULTOS' : all[0].key) ? 'stick' : ''}"><td class="sticky-col">${esc(f.label)}</td><td></td>${f.cells.map((v) => `<td class="n">${f.money ? nf2.format(v) : nf0.format(v)}</td>`).join('')}<td class="n tot">${f.money ? nf2.format(f.total) : nf0.format(f.total)}</td></tr>`).join('')}</tfoot></table></div>
         <div class="section-title">Detalle por cliente</div>
         <div class="card"><table class="inv">${source.map((o) => `<tr><td><b>${esc(o.clientName)}</b>${dupBadge(o, dupIdx)}${o.createdBy === 'oficina' ? ' <span class="tag" title="Cargado por la oficina">🏢 oficina</span>' : ''}<div class="muted">${esc(o.sellerName)} · ${esc(o.route || '')}</div>${dupLines(o, dupIdx)}</td>
           <td><span class="status ${o.status}">${esc(Loads.orderLabel(o))}</span></td><td class="n">${usd(Matrix.orderTotals(o).monto)}</td>
@@ -1111,7 +1113,7 @@
           <td>${r.debe > 0 || r.dev > 0 ? `<select class="select sm" data-t="dest" ${dis}>${opt([['almacen', 'Volvió a almacén'], ['siguiente', 'Siguiente carga']], r.dest)}</select>` : ''}</td>
           <td class="n lq-usd">${usd(r.usd)}</td></tr>`).join('')}</tbody>
         <tfoot>
-          <tr><td class="sticky-col">TOTAL (cajas + unidades)</td>${sh.totals.bultos.map((v) => `<td class="n">${nf0.format(v)}</td>`).join('')}<td class="n lq-tot">${nf0.format(sh.totals.bultos.reduce((x, y) => x + y, 0))}</td><td colspan="8"></td><td></td></tr>
+          <tr class="stick"><td class="sticky-col">TOTAL (cajas + unidades)</td>${sh.totals.bultos.map((v) => `<td class="n">${nf0.format(v)}</td>`).join('')}<td class="n lq-tot">${nf0.format(sh.totals.bultos.reduce((x, y) => x + y, 0))}</td><td colspan="8"></td><td></td></tr>
           <tr class="liq-money"><td class="sticky-col">TOTAL $ POR CLIENTE</td>${sh.totals.monto.map((v) => `<td class="n">${usd(v)}</td>`).join('')}<td colspan="9"></td><td class="n lq-usd">${usd(sh.totals.usd)}</td></tr>
           ${rate ? `<tr><td class="sticky-col">TOTAL Bs (tasa ${nf2.format(rate)})</td>${sh.totals.monto.map((v) => `<td class="n">${nf2.format(v * rate)}</td>`).join('')}<td colspan="9"></td><td class="n lq-usd">${nf2.format(sh.totals.usd * rate)}</td></tr>` : ''}
           ${sh.vac.map((v) => `<tr class="vac-row k-${v.key}"><td class="sticky-col">${esc(v.label)}</td>${v.cells.map((x) => `<td class="n">${x === null ? '' : nf0.format(x)}</td>`).join('')}<td class="n lq-tot">${nf0.format(v.total)}</td><td colspan="9"></td></tr>`).join('')}
