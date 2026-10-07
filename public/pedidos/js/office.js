@@ -625,18 +625,17 @@
     const locked = !Loads.editable(o);
     const draw = (sh) => {
       const cur = orderById(o.id) || o;
-      const lines = Object.entries(cur.lines).map(([pid, l]) => ({ pid, l, t: Matrix.lineTotals(l), p: productById(pid) }))
-        .sort((a, b) => a.l.category.localeCompare(b.l.category, 'es') || a.l.name.localeCompare(b.l.name, 'es'));
+      const lines = Object.entries(cur.lines).map(([pid, l]) => ({ pid, l, t: Matrix.lineTotals(l), p: productById(pid) }));
       const tot = Matrix.orderTotals(cur);
       sh.el.querySelector('#oeBody').innerHTML = `
-        <table class="lines">${lines.map(({ pid, l, t, p }) => {
+        <table class="lines">${PV.groupedRows(lines, 3, ({ pid, l, t, p }) => {
           const sb = p ? p.sellBy : (l.boxPrice ? (l.unitPrice ? 'ambos' : 'caja') : 'unidad');
           return `<tr><td><b>${esc(l.name)} ${esc(l.presentation)}</b><div class="muted mono" style="font-size:12px">${esc(l.code)}</div></td>
             <td style="white-space:nowrap">
               ${sb !== 'unidad' ? `<label class="mini">CJ <input class="input mini-in" inputmode="numeric" data-pid="${esc(pid)}" data-kind="cajas" value="${t.cajas || ''}" ${locked ? 'disabled' : ''}></label>` : ''}
               ${sb !== 'caja' ? `<label class="mini">UN <input class="input mini-in" inputmode="numeric" data-pid="${esc(pid)}" data-kind="unidades" value="${t.unidades || ''}" ${locked ? 'disabled' : ''}></label>` : ''}
             </td><td class="num">${usd(t.monto)}</td></tr>`;
-        }).join('')}
+        })}
         <tr class="total-row"><td><b>TOTAL</b> · ${tot.cajas} cj + ${tot.unidades} un · ${tot.bultos} bultos</td><td></td><td class="num">${usd(tot.monto)}</td></tr></table>`;
     };
     const sh = openSheet(`
@@ -750,15 +749,14 @@
       }
     };
     const drawLines = () => {
-      const lines = Object.entries(d.lines).map(([pid, l]) => ({ pid, l, t: Matrix.lineTotals(l), p: productById(pid) }))
-        .sort((a, b) => a.l.category.localeCompare(b.l.category, 'es') || a.l.name.localeCompare(b.l.name, 'es'));
+      const lines = Object.entries(d.lines).map(([pid, l]) => ({ pid, l, t: Matrix.lineTotals(l), p: productById(pid) }));
       const tot = Matrix.orderTotals({ lines: d.lines });
-      q('#noLines').innerHTML = lines.length ? `<table class="lines">${lines.map(({ pid, l, t, p }) => {
+      q('#noLines').innerHTML = lines.length ? `<table class="lines">${PV.groupedRows(lines, 3, ({ pid, l, t, p }) => {
         const sb = p ? p.sellBy : 'ambos';
         return `<tr><td><b>${esc(l.name)} ${esc(l.presentation)}</b><div class="muted mono" style="font-size:12px">${esc(l.code)}</div></td>
           <td style="white-space:nowrap">${sb !== 'unidad' ? `<label class="mini">CJ <input class="input mini-in" inputmode="numeric" data-pid="${esc(pid)}" data-kind="cajas" value="${t.cajas || ''}"></label>` : ''}
             ${sb !== 'caja' ? `<label class="mini">UN <input class="input mini-in" inputmode="numeric" data-pid="${esc(pid)}" data-kind="unidades" value="${t.unidades || ''}"></label>` : ''}</td>
-          <td class="num">${usd(t.monto)}</td></tr>`; }).join('')}
+          <td class="num">${usd(t.monto)}</td></tr>`; })}
         <tr class="total-row"><td><b>TOTAL</b> · ${tot.cajas} cj + ${tot.unidades} un · ${tot.bultos} bultos</td><td></td><td class="num">${usd(tot.monto)}</td></tr></table>`
         : '<div class="empty"><strong>Pedido vacío</strong>Busca y agrega productos.</div>';
       q('#noSend').disabled = !ready();
@@ -1009,6 +1007,12 @@
     const opt = (arr, cur) => arr.map(([v, l]) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`).join('');
     const motivoSel = (cur, attr) => `<select class="select sm" ${attr} ${dis}><option value="">— Motivo —</option>${Liq.MOTIVOS.map((m) => `<option ${m === cur ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>`;
     const sh = Liq.sheet(os, liq, rows, vac), rate = +S.config.exchangeRate || 0;
+    const prev = Liq.prevRows(os, liq);
+    // Lo que sale (despachados) contra lo que entra (recibidos + devueltos de entregas anteriores), por tipo
+    const vacIO = [...new Set(sh.vac.map((v) => v.type))].map((type) => {
+      const tot = (key) => (sh.vac.find((v) => v.type === type && v.key === key) || { total: 0 }).total;
+      return { type, salen: tot('DESPACHADOS'), recibidos: tot('RECIBIDOS'), anteriores: tot('PREV'), entran: tot('RECIBIDOS') + tot('PREV') };
+    });
     const counts = { parcial: 0, pendiente: 0, anulada: 0 };
     os.forEach((o) => { const r = Liq.entry(liq, o.id).result; if (counts[r] !== undefined) counts[r]++; });
 
@@ -1048,7 +1052,8 @@
         }).join('')}</tbody></table></div>
       <p class="muted">Anulada = la nota se anula en Valery en este momento. Devolución parcial = se anula la nota y se escribe la nueva de Valery que la reemplaza. «Se entrega después» deja la misma nota y el pedido vuelve a la cola para la próxima hoja.</p>
 
-      ${vac.length ? `<div class="section-title">2 · Vacíos <span class="muted">(prellenado: recibió los que le tocaban · Despachados − Recibidos − Asignados = Quedan debiendo · al cerrar va al kardex)</span></div>
+      <div class="section-title">2 · Vacíos <span class="muted">(prellenado: recibió los que le tocaban · Despachados − Recibidos − Asignados = Quedan debiendo · al cerrar va al kardex)</span></div>
+      ${vac.length ? `
       <div class="card" style="overflow:auto"><table class="inv liq-vac">
         <thead><tr><th>Cliente</th><th>Envase</th><th class="n">Despachados</th><th class="n">Vacíos recibidos</th><th class="n">Asignados</th><th class="n">Quedan debiendo</th><th>Motivo</th></tr></thead>
         <tbody>${vac.map((v) => `<tr data-oid="${esc(v.orderId)}" data-pid="${esc(v.pid)}">
@@ -1057,9 +1062,17 @@
           <td class="n"><input class="input qin small" inputmode="numeric" data-v="recv" value="${v.recv}" ${dis}></td>
           <td class="n">${v.assign ? `<input class="input qin small" inputmode="numeric" data-v="asg" value="${v.asg === null ? '' : v.asg}" placeholder="—" ${dis}>` : '—'}</td>
           <td class="n ${v.pending ? 'warn-txt' : ''}">${v.pending}</td>
-          <td>${v.pending ? `<select class="select sm" data-v="motivo" ${dis}><option value="">${v.regime === 'prestamo' ? 'Préstamo' : '— Motivo —'}</option>${Liq.VAC_MOTIVOS.map((m) => `<option ${m === v.motivo ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>` : ''}</td></tr>`).join('')}</tbody></table></div>` : ''}
+          <td>${v.pending ? `<select class="select sm" data-v="motivo" ${dis}><option value="">${v.regime === 'prestamo' ? 'Préstamo' : '— Motivo —'}</option>${Liq.VAC_MOTIVOS.map((m) => `<option ${m === v.motivo ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">Ningún cliente de esta hoja llevó retornables.</p>'}
+      <div class="row" style="align-items:center;gap:8px;margin-top:10px"><h3 class="grow" style="margin:0">↩ Vacíos de entregas anteriores <span class="muted" style="font-weight:400;font-size:13px">(los que un cliente de esta hoja devolvió de pedidos viejos y trajo este despachador · al cerrar van al kardex del cliente)</span></h3>
+        ${done ? '' : '<button class="btn btn-sm" id="qPrevAdd">+ Agregar</button>'}</div>
+      ${prev.length ? `<div class="card" style="overflow:auto"><table class="inv liq-prev">
+        <thead><tr><th>Cliente</th><th>Envase</th><th>Son de</th><th class="n">Vacíos devueltos</th><th>Nota</th><th></th></tr></thead>
+        <tbody>${prev.map((p) => `<tr data-oid="${esc(p.orderId)}" data-prev="${esc(p.key)}"><td><b>${esc(p.client)}</b></td><td>${esc(p.type)}</td><td>${p.from === 'dev_asignado' ? 'Sus asignados' : 'Lo que debía'}</td>
+          <td class="n"><b>${nf0.format(p.qty)}</b></td><td>${esc(p.motivo)}</td><td>${done ? '' : `<button class="btn btn-sm" data-prev-del="${esc(p.key)}" data-oid="${esc(p.orderId)}" aria-label="Quitar">✕</button>`}</td></tr>`).join('')}</tbody></table></div>`
+        : '<p class="muted">Ninguno. Usa «+ Agregar» si el despachador trajo vacíos que un cliente debía de antes.</p>'}
+      ${vacIO.length ? `<div class="kpi-row">${vacIO.map((t) => `<div class="kpi"><small>Vacíos ${esc(t.type)} · salen / entran</small><b>${nf0.format(t.salen)} / ${nf0.format(t.entran)}</b><small>entran = ${nf0.format(t.recibidos)} recibidos + ${nf0.format(t.anteriores)} de entregas anteriores</small></div>`).join('')}</div>` : ''}
 
-      <div class="section-title">${vac.length ? 3 : 2} · Cuadre del camión <span class="muted">(escribe a mano lo que quedó, lo que se cargó de verdad y lo que volvió · las celdas amarillas son tuyas)</span></div>
+      <div class="section-title">3 · Cuadre del camión <span class="muted">(escribe a mano lo que quedó, lo que se cargó de verdad y lo que volvió · las celdas amarillas son tuyas)</span></div>
       ${carry ? `<div class="hint">🚚 QUEDAN viene de la liquidación de <b>${esc(carrySrc ? Loads.labelOf(carrySrc) : carry.fromId)}</b> (mismo despachador, marcada «siguiente carga»). Puedes corregirlo.</div>` : ''}
       <div class="toolbar no-print"><button class="btn btn-sm" id="qAllStore" ${dis}>Todo lo que sobra → volvió a almacén</button><button class="btn btn-sm" id="qAllNext" ${dis}>Todo lo que sobra → siguiente carga</button></div>
       <div class="card" style="overflow:auto"><table class="inv liq-truck">
@@ -1077,7 +1090,7 @@
         <tfoot><tr><td colspan="2"><b>TOTAL</b></td>${['pedido', 'entregado', 'queda', 'carga', 'total', 'debe', 'dev', 'dif'].map((k) => `<td class="n"><b>${nf0.format(rows.reduce((a, r) => a + (+r[k] || 0), 0))}</b></td>`).join('')}<td colspan="2"></td></tr></tfoot></table></div>
       <p class="muted">Total = Quedan + Carga · Debe quedar = Total − Entregado · Diferencia = Debe quedar − Devolución. Si la diferencia no es 0, escribe el motivo. Quedan viene solo de la hoja anterior del mismo despachador; si no, escríbelo tú.</p>
 
-      <div class="section-title">${vac.length ? 4 : 3} · Hoja de liquidación <span class="muted">(lo entregado a cada cliente; a la derecha el mismo cuadre del camión)</span></div>
+      <div class="section-title">4 · Hoja de liquidación <span class="muted">(lo entregado a cada cliente; a la derecha el mismo cuadre del camión)</span></div>
       <div class="table-wrap"><table class="grid sheet-grid liq-grid">
         <thead>
           <tr class="ini-row"><th class="sticky-col">Vendedor →</th>${sh.cols.map((c) => `<th>${esc(Loads.initials(c.order.sellerName))}</th>`).join('')}<th colspan="10"></th></tr>
@@ -1130,8 +1143,11 @@
     const sa = $('#qAllStore'); if (sa) sa.onclick = () => setAll('almacen');
     const sn = $('#qAllNext'); if (sn) sn.onclick = () => setAll('siguiente');
 
+    const pa = $('#qPrevAdd'); if (pa) pa.onclick = () => prevVacDialog(cur(), saveLiq);
     root.onclick = (e) => {
       const b = e.target.closest('[data-ret]'); if (b) returnsDialog(orderById(b.dataset.ret), saveLiq);
+      const d = e.target.closest('[data-prev-del]');
+      if (d) saveLiq((q) => { const en = { result: 'entregada', ...(q.orders[d.dataset.oid] || {}) }; en.prev = { ...(en.prev || {}) }; delete en.prev[d.dataset.prevDel]; q.orders[d.dataset.oid] = en; });
     };
     root.onchange = async (e) => {
       const t = e.target;
@@ -1176,6 +1192,73 @@
     };
   }
 
+  /**
+   * Vacíos de entregas anteriores: un cliente de ESTA hoja devolvió vacíos que debía de
+   * pedidos viejos y los trajo este despachador. Solo avisa si devuelve más de lo que debe.
+   */
+  function prevVacDialog(load, saveLiq) {
+    const os = Loads.loadOrders(load, byIdMap(S.orders));
+    const liq = load.liq || blankLiq();
+    const kid = (o) => String(o.clientId || o.clientKey || o.clientName || '');
+    const clients = []; // un renglón por cliente (su primer pedido de la hoja)
+    os.forEach((o) => { if (!clients.some((c) => c.kid === kid(o))) clients.push({ kid: kid(o), order: o }); });
+    if (!clients.length) { toast('La hoja no tiene clientes', 'err'); return; }
+    const types = [...new Set(vacTypes().concat(Liq.vacRows(os, liq, byIdMap(S.products)).map((v) => v.type)))];
+    if (!types.length) { toast('No hay productos retornables en el catálogo', 'err'); return; }
+    const opt = (arr, cur) => arr.map(([v, l]) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`).join('');
+    const sh = openSheet(`
+      <div class="row"><h2 class="grow">↩ Vacíos de entregas anteriores</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <p class="muted">Solo clientes de esta hoja. Se registran en el kardex del cliente con este despachador y su vendedor al cerrar la liquidación.</p>
+      <label class="field"><span>Cliente</span><select class="select" id="pvCl">${opt(clients.map((c) => [c.order.id, c.order.clientName]), clients[0].order.id)}</select></label>
+      <div class="row" style="gap:10px;flex-wrap:wrap">
+        <label class="field"><span>Tipo de envase</span><select class="select" id="pvType">${opt(types.map((t) => [t, t]), types[0])}</select></label>
+        <label class="field"><span>Vacíos que devolvió</span><input class="input" id="pvQty" inputmode="numeric" placeholder="0"></label>
+        <label class="field"><span>Son de</span><select class="select" id="pvFrom">${opt([['devolucion', 'Lo que debía'], ['dev_asignado', 'Sus asignados']], 'devolucion')}</select></label></div>
+      <p id="pvBal" class="muted"></p>
+      <label class="field"><span>Nota (opcional)</span><input class="input" id="pvNote" maxlength="120" placeholder="Ej.: vacíos de la nota 1234"></label>
+      <div class="actions"><button class="btn btn-primary" id="pvOk">Guardar</button></div>`);
+    const k = kxState();
+    const val = (id) => $(id, sh.el).value;
+    const keyOf = () => val('#pvType') + '|' + val('#pvFrom');
+    const balOf = () => {
+      if (!k.movs) return null;
+      const o = orderById(val('#pvCl')); if (!o) return null;
+      return Kardex.balances(k.movs).find((b) => b.clientId === kid(o) && b.type === val('#pvType')) || { debe: 0, asignados: 0 };
+    };
+    const show = () => {
+      const o = orderById(val('#pvCl')), cur = (Liq.entry(liq, val('#pvCl')).prev || {})[keyOf()];
+      $('#pvQty', sh.el).value = cur ? cur.qty : ''; $('#pvNote', sh.el).value = cur ? cur.motivo || '' : '';
+      const b = balOf();
+      $('#pvBal', sh.el).innerHTML = b ? `Según el kardex, <b>${esc(o ? o.clientName : '')}</b> debe <b>${nf0.format(b.debe)}</b> vacíos ${esc(val('#pvType'))} y tiene <b>${nf0.format(b.asignados)}</b> asignados.`
+        : (k.err ? `<span class="warn-txt">No se pudo leer el kardex (${esc(k.err)}): se guarda igual.</span>` : 'Leyendo el kardex…');
+    };
+    ['#pvCl', '#pvType', '#pvFrom'].forEach((id) => { $(id, sh.el).onchange = show; });
+    show();
+    if (!k.movs || Date.now() - k.at > 60000) {
+      Sync.readerCall('envases', { action: 'list' }).then((r) => {
+        if (r.ok) { k.movs = r.data.movs || []; k.at = Date.now(); k.canWrite = !!r.data.canWrite; k.err = ''; } else k.err = r.error || 'sin conexión';
+        if (sh.el.isConnected) { const q = val('#pvQty'), n = val('#pvNote'); show(); if (q) { $('#pvQty', sh.el).value = q; $('#pvNote', sh.el).value = n; } }
+      });
+    }
+    $('#pvOk', sh.el).onclick = async () => {
+      const oid = val('#pvCl'), type = val('#pvType'), from = val('#pvFrom'), qty = int(val('#pvQty')), motivo = val('#pvNote').trim();
+      if (qty < 0) { toast('Cantidad inválida', 'err'); return; }
+      const b = balOf();
+      if (b && qty > 0) {
+        const tiene = from === 'dev_asignado' ? b.asignados : b.debe;
+        if (qty > tiene && !confirm(`Ojo: según el kardex ${orderById(oid).clientName} ${from === 'dev_asignado' ? 'tiene' : 'debe'} ${tiene} vacíos ${type}${from === 'dev_asignado' ? ' asignados' : ''} y estás registrando ${qty}.\n\n¿Guardar de todos modos?`)) return;
+      }
+      sh.close();
+      await saveLiq((q) => {
+        const en = { result: 'entregada', ...(q.orders[oid] || {}) };
+        en.prev = { ...(en.prev || {}) };
+        if (qty > 0) en.prev[type + '|' + from] = { type, from, qty, motivo }; else delete en.prev[type + '|' + from];
+        q.orders[oid] = en;
+      });
+      toast(qty > 0 ? `${qty} vacíos ${type} de entregas anteriores · ${orderById(oid).clientName}` : 'Quitado', 'ok');
+    };
+  }
+
   /** Qué devolvió el cliente (devolución parcial): cajas y unidades por producto. */
   function returnsDialog(o, saveLiq) {
     if (!o) return;
@@ -1217,7 +1300,8 @@
         loadId: load.id, result: e.result, lines, monto: Matrix.orderTotals({ lines }).monto, motivo: e.motivo || '',
         voidedNote: e.result === 'parcial' || e.result === 'anulada' ? (o.valeryNote || '') : '',
         newValery: e.result === 'parcial' ? String(e.newValery || '').trim() : '',
-        vac: vacBy[o.id] || {}, date: load.date || at.slice(0, 10), at, by,
+        vac: vacBy[o.id] || {}, prevVac: Liq.prevRows([o], liq).map((p) => ({ type: p.type, from: p.from, qty: p.qty, motivo: p.motivo })),
+        date: load.date || at.slice(0, 10), at, by,
         dispatcherId: load.dispatcherId || '', dispatcherName: load.dispatcherName || '',
       } });
       if (e.result === 'pendiente') {

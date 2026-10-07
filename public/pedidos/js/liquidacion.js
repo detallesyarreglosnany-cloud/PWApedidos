@@ -12,6 +12,9 @@
  *     newValery: 'N°'   nota Valery que reemplaza (parcial)
  *     motivo: '...'
  *     vac:    { <productId>: { recv, asg } }         vacíos recibidos / asignados confirmados
+ *     prev:   { '<tipo>|<from>': { type, from, qty, motivo } }  vacíos que el cliente devolvió
+ *             de entregas ANTERIORES (los trajo el despachador de esta hoja; from:
+ *             'devolucion' = de lo que debía · 'dev_asignado' = de sus asignados)
  *   } },
  *   truck: { '<productId>|CJ' | '<productId>|UN': { queda, carga, dev, motivo, dest } }
  *     queda / carga: lo que la oficina corrige a mano (si no, QUEDAN viene de la hoja anterior y CARGA de la hoja)
@@ -121,6 +124,18 @@
     return out;
   }
 
+  /** Vacíos de entregas anteriores que trajo el despachador (uno por cliente, tipo y origen). */
+  function prevRows(orders, liq) {
+    const out = [];
+    orders.forEach((o) => {
+      Object.entries(entry(liq, o.id).prev || {}).forEach(([key, p]) => {
+        const qty = n0(p && p.qty); if (!qty || !p.type) return;
+        out.push({ key, orderId: o.id, clientId: o.clientId || '', client: o.clientName, type: String(p.type), from: p.from === 'dev_asignado' ? 'dev_asignado' : 'devolucion', qty, motivo: p.motivo || '' });
+      });
+    });
+    return out;
+  }
+
   /** Lo que impide cerrar la liquidación (lista de textos). */
   function problems(orders, liq, rows, vac) {
     const out = [];
@@ -163,13 +178,25 @@
     });
     // Vacíos por tipo (como la hoja de carga): DESPACHADOS (cajas retornables
     // entregadas) − RECIBIDOS − ASIGNADOS = QUEDAN DEBIENDO, por cliente y total.
+    // Si el despachador trajo vacíos de entregas anteriores: + DEVUELTOS ANTERIORES y
+    // ENTRAN AL CAMIÓN (recibidos + anteriores) para ver lo que sale contra lo que entra.
+    vac = vac || [];
+    const prev = prevRows(orders, liq);
     const types = [];
-    (vac || []).forEach((v) => { if (!types.includes(v.type)) types.push(v.type); });
+    vac.concat(prev).forEach((v) => { if (!types.includes(v.type)) types.push(v.type); });
     const vacRowsOut = [];
     types.forEach((ty) => {
       const of = (c, f) => vac.filter((v) => v.type === ty && v.orderId === c.order.id).reduce((a, v) => (v[f] === null ? a : (a || 0) + v[f]), null);
       const mk = (key, label, f) => { const cells = cols.map((c) => of(c, f)); return { key, type: ty, label: `${label} ${ty}`, cells, total: cells.reduce((a, x) => a + (x || 0), 0) }; };
       vacRowsOut.push(mk('DESPACHADOS', 'VACÍOS DESPACHADOS', 'boxes'), mk('RECIBIDOS', 'VACÍOS RECIBIDOS', 'recv'), mk('ASIGNADOS', 'ASIGNADOS', 'asg'), mk('DEBEN', 'QUEDAN DEBIENDO', 'pending'));
+      const pv = prev.filter((p) => p.type === ty);
+      if (!pv.length) return;
+      const prevCells = cols.map((c) => pv.filter((p) => p.orderId === c.order.id).reduce((a, p) => (a || 0) + p.qty, null));
+      const recvRow = vacRowsOut[vacRowsOut.length - 3];
+      const inCells = cols.map((c, i) => (recvRow.cells[i] === null && prevCells[i] === null ? null : (recvRow.cells[i] || 0) + (prevCells[i] || 0)));
+      const sum = (cells) => cells.reduce((a, x) => a + (x || 0), 0);
+      vacRowsOut.push({ key: 'PREV', type: ty, label: `VAC. ANTERIORES ${ty}`, cells: prevCells, total: sum(prevCells) },
+        { key: 'ENTRAN', type: ty, label: `VACÍOS QUE ENTRAN ${ty}`, cells: inCells, total: sum(inCells) });
     });
     return { cols, rows: mrows, vac: vacRowsOut,
       totals: { bultos: cols.map((c) => c.bultos), monto: cols.map((c) => c.monto), usd: Matrix.r2(cols.reduce((a, c) => a + c.monto, 0)) } };
@@ -178,5 +205,5 @@
   /** Texto corto de la novedad de un cliente (encabezado de su columna). */
   const shortResult = (e) => ({ entregada: '', parcial: 'DEV. PARCIAL', pendiente: 'SE ENTREGA DESPUÉS', anulada: 'ANULADA' })[e.result] || '';
 
-  global.Liq = { RESULTS, MOTIVOS, VAC_MOTIVOS, isDone, entry, deliveredLines, delivered, returnedAny, carryFor, truckRows, vacRows, problems, sheet, shortResult };
+  global.Liq = { RESULTS, MOTIVOS, VAC_MOTIVOS, isDone, entry, deliveredLines, delivered, returnedAny, carryFor, truckRows, vacRows, prevRows, problems, sheet, shortResult };
 })(window);
