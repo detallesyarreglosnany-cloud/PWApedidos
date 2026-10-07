@@ -448,6 +448,8 @@
     // clientes recibidos por archivo se reenvían en el próximo sync.
     n += await mergeRemote('clients', bundle.clients || [], isAdmin, isAdmin, true);
     n += await mergeRemote('orders', bundle.orders || [], isAdmin, true, true);
+    // Historial de actividad del respaldo (solo la oficina; en el servidor solo se agrega, nunca se pisa)
+    if (isAdmin) n += await mergeRemote('events', bundle.events || [], isAdmin, true, true);
     // Kardex de vacíos del respaldo: se repone en el servidor (necesita internet)
     if (isAdmin && Array.isArray(bundle.vacmovs) && bundle.vacmovs.length) {
       const r = await adminCall('envases', { action: 'import', movs: bundle.vacmovs });

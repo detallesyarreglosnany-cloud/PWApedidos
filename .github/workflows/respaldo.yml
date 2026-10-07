@@ -1,0 +1,67 @@
+# Respaldo automático diario de la app de pedidos (datos de Supabase vía la API de la app).
+#
+# Corre todos los días ~3:00 a. m. (hora de Venezuela) y también a mano (Actions →
+# «Respaldo diario» → Run workflow). Guarda un .zip CIFRADO con contraseña (AES-256):
+# aunque alguien vea la página de Actions, sin la contraseña no puede abrirlo.
+# Se conservan 30 días (el espacio gratis de GitHub en un repositorio privado es 500 MB). Si falla, GitHub envía un correo.
+#
+# Secretos necesarios (Settings → Secrets and variables → Actions):
+#   PEDIDOS_URL          dirección de la app, ej: https://pw-apedidos.vercel.app
+#   PEDIDOS_SYNC_KEY     la misma de Vercel
+#   PEDIDOS_ADMIN_KEY    la misma de Vercel
+#   RESPALDO_CLAVE       contraseña para abrir el .zip (guárdala en un lugar seguro)
+name: Respaldo diario
+
+on:
+  schedule:
+    - cron: '7 7 * * *'   # 07:07 UTC = 03:07 en Venezuela
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: respaldo
+  cancel-in-progress: false
+
+jobs:
+  respaldo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Revisar secretos
+        env:
+          PEDIDOS_URL: ${{ secrets.PEDIDOS_URL }}
+          PEDIDOS_ADMIN_KEY: ${{ secrets.PEDIDOS_ADMIN_KEY }}
+          RESPALDO_CLAVE: ${{ secrets.RESPALDO_CLAVE }}
+        run: |
+          for v in PEDIDOS_URL PEDIDOS_ADMIN_KEY RESPALDO_CLAVE; do
+            if [ -z "${!v}" ]; then echo "::error::Falta el secreto $v (Settings → Secrets and variables → Actions)"; exit 1; fi
+          done
+      - name: Bajar los datos
+        env:
+          PEDIDOS_URL: ${{ secrets.PEDIDOS_URL }}
+          PEDIDOS_SYNC_KEY: ${{ secrets.PEDIDOS_SYNC_KEY }}
+          PEDIDOS_ADMIN_KEY: ${{ secrets.PEDIDOS_ADMIN_KEY }}
+        run: node scripts/respaldo.mjs "$RUNNER_TEMP/respaldo"
+      - name: Cifrar (zip con contraseña AES-256)
+        env:
+          RESPALDO_CLAVE: ${{ secrets.RESPALDO_CLAVE }}
+        run: |
+          cd "$RUNNER_TEMP/respaldo"
+          cat resumen.json
+          7z a -tzip -mem=AES256 -p"$RESPALDO_CLAVE" "$RUNNER_TEMP/respaldo_puerto_venado.zip" ./*.json > /dev/null
+          rm -f ./*.json
+          ls -la "$RUNNER_TEMP"/respaldo_puerto_venado.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: respaldo-puerto-venado-${{ github.run_number }}
+          path: ${{ runner.temp }}/respaldo_puerto_venado.zip
+          retention-days: 30
+          compression-level: 0
