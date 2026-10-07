@@ -223,7 +223,7 @@
     // Vercel rechaza cuerpos de más de 4,5 MB en ambos sentidos: la subida va
     // por tandas y la bajada por páginas. El cursor avanza solo al terminar.
     const batches = splitPush(push);
-    const base = { deviceId: await deviceId(), epoch: await DB.getMeta('epoch', ''), since, sinceDays: since ? null : INITIAL_ORDER_DAYS, sellerId };
+    const base = { deviceId: await deviceId(), epoch: await DB.getMeta('epoch', ''), since, sinceDays: since ? null : (fullRead && !sellerId ? 365 : INITIAL_ORDER_DAYS), sellerId }; // la oficina baja hasta 1 año
     const empty = Object.fromEntries(KINDS.map((k) => [k, []]));
     const rejected = [];
     let first = null;
@@ -306,6 +306,86 @@
   async function pendingCount(scope, all) {
     const cfg = await settings();
     return total(await collectDirty(!!cfg.adminKey || !!all, scope && scope.sellerId || null));
+  }
+
+  /* ------------------------- Diagnóstico ------------------------- */
+  // Compara la copia de este equipo con el servidor (solo ids y versiones).
+  // up: lo que este equipo tiene y el servidor no (o más nuevo aquí) · down: al revés.
+  const DIAG_KINDS = ['orders', 'clients', 'loads', 'products', 'sellers', 'config'];
+  async function diagnose() {
+    const cfg = await settings();
+    const r = await readerCall('estado', {});
+    if (!r.ok) return { ok: false, error: r.error };
+    const out = { ok: true, keys: { sync: !!cfg.syncKey, admin: !!cfg.adminKey, supervisor: !!cfg.supervisorKey }, url: cfg.syncUrl || DEFAULT_SYNC_URL,
+      epochLocal: await DB.getMeta('epoch', ''), epochServer: r.data.epoch || '', lastSyncAt: await DB.getMeta('lastSyncAt', null), serverTime: r.data.serverTime, kinds: {} };
+    for (const k of DIAG_KINDS) {
+      const srv = new Map(((r.data.docs || {})[k] || []).map(([id, u, del]) => [id, { u: String(u), del: !!del }]));
+      const loc = await DB.getAll(k), locMap = new Map(loc.map((d) => [d.id, d]));
+      const up = [], down = []; let pending = 0;
+      for (const d of loc) {
+        if (d.dirty) pending++;
+        if (d.partial) continue;
+        const sv = srv.get(d.id);
+        if ((!sv && !d.deleted) || (sv && String(d.updatedAt) > sv.u)) up.push(d.id);
+      }
+      for (const [id, sv] of srv) { const d = locMap.get(id); if ((!d && !sv.del) || (d && !d.dirty && sv.u > String(d.updatedAt))) down.push(id); }
+      out.kinds[k] = { local: loc.filter((d) => !d.deleted).length, server: [...srv.values()].filter((x) => !x.del).length, pending, up, down };
+    }
+    return out;
+  }
+
+  /**
+   * Sube documentos concretos en tandas pequeñas (sin bajar nada). Si una tanda
+   * falla se reintenta uno por uno: un documento dañado no frena a los demás.
+   * byKind: { <kind>: [ids] } → { ok, accepted, rejected: [{kind,id,reason}], failed: [{kind,id,error}] }
+   */
+  async function forceUpload(byKind, onProgress) {
+    const cfg = await settings();
+    if (!cfg.adminKey) return { ok: false, error: 'Falta la clave admin en Ajustes' };
+    const url = cfg.syncUrl || DEFAULT_SYNC_URL;
+    const headers = { 'Content-Type': 'application/json', 'x-admin-key': cfg.adminKey };
+    if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
+    const base = { deviceId: await deviceId(), epoch: await DB.getMeta('epoch', ''), since: null, noPull: true };
+    const items = [];
+    for (const k of KINDS) for (const id of (byKind[k] || [])) {
+      const d = await DB.get(k, id);
+      if (d && !d.partial) { const c = { ...d }; delete c.dirty; delete c.dupWith; items.push([k, c]); }
+    }
+    const res = { ok: true, total: items.length, accepted: 0, rejected: [], failed: [] };
+    const send = (list) => { const push = Object.fromEntries(KINDS.map((k) => [k, []])); list.forEach(([k, d]) => push[k].push(d)); return post(url, headers, { ...base, push }); };
+    const handle = async (r, list) => {
+      for (const k of KINDS) {
+        const ok = new Set((r.data.accepted && r.data.accepted[k]) || []);
+        const mine = list.filter(([kk]) => kk === k).map(([, d]) => d);
+        res.accepted += mine.filter((d) => ok.has(d.id)).length;
+        await clearDirty(k, mine.filter((d) => ok.has(d.id)));
+      }
+      for (const x of (r.data.rejected || [])) {
+        res.rejected.push({ kind: x.kind, id: x.id, reason: x.reason });
+        // El servidor tiene otra versión: queda pendiente y la sincronización normal la fusiona
+        const l = await DB.get(x.kind, x.id); if (l && x.doc) await DB.put(x.kind, { ...l, dirty: true });
+      }
+    };
+    for (let i = 0; i < items.length; i += 20) {
+      const chunk = items.slice(i, i + 20);
+      const r = await send(chunk);
+      if (r.ok && typeof r.data.reset === 'string') return { ...res, ok: false, error: 'La oficina reinició los datos del servidor: sincroniza normalmente primero' };
+      if (r.ok) await handle(r, chunk);
+      else {
+        if (r.offline || r.error === 'Sin internet') return { ...res, ok: false, error: r.error };
+        for (const one of chunk) {
+          const r1 = await send([one]);
+          if (r1.ok) await handle(r1, [one]); else res.failed.push({ kind: one[0], id: one[1].id, error: r1.error || 'error' });
+        }
+      }
+      if (onProgress) onProgress(Math.min(items.length, i + 20), items.length);
+    }
+    return res;
+  }
+
+  /** Olvida el marcador de sincronización: la próxima vez baja todo de nuevo (no borra nada local). */
+  async function redownload() {
+    for (const m of await DB.getAll('meta')) if (/^syncCursor/.test(m.key)) await DB.remove('meta', m.key);
   }
 
   /** Llamada a una ruta de oficina (/api/pedidos/<name>) con las claves guardadas. */
@@ -459,5 +539,5 @@
     return n;
   }
 
-  global.Sync = { KINDS, isLocked, syncNow, pendingCount, hasCursor, reserveNumbers, adminCall, readerCall, report, pushCall, keysCall, myVacios, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
+  global.Sync = { KINDS, isLocked, syncNow, pendingCount, diagnose, forceUpload, redownload, hasCursor, reserveNumbers, adminCall, readerCall, report, pushCall, keysCall, myVacios, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
 })(window);

@@ -1364,6 +1364,69 @@
   // Al cambiar de pestaña se sale de cualquier detalle abierto
   window.addEventListener('hashchange', () => { U().archiveId = null; U().loadId = null; U().liqId = null; U().editQty = false; U().kxClient = null; });
 
+  /* ====================== Diagnóstico de sincronización ====================== */
+  const DG_LABEL = { orders: 'Pedidos', clients: 'Clientes', loads: 'Hojas de carga', products: 'Productos', sellers: 'Vendedores', config: 'Configuración' };
+  const dgName = (k, id) => {
+    const d = k === 'orders' ? orderById(id) : k === 'clients' ? clientById(id) : k === 'loads' ? S.loads.find((l) => l.id === id) : k === 'products' ? productById(id) : k === 'sellers' ? sellerById(id) : null;
+    if (!d) return id;
+    return k === 'orders' ? `${d.clientName || ''} · ${d.routeDate || ''}` : k === 'loads' ? Loads.labelOf(d) : (d.name || id);
+  };
+  // El estado vive en U().dg: la pantalla de Ajustes se redibuja al sincronizar
+  const dgEl = () => document.getElementById('dgOut');
+  async function runDiagnosis(upload) {
+    const el0 = dgEl(); if (el0) el0.innerHTML = '<p class="muted">Revisando…</p>';
+    await PV.runSync(true).catch(() => {});
+    const d = await Sync.diagnose();
+    if (upload) d.upload = upload;
+    U().dg = d;
+    drawDiagnosis();
+  }
+  function drawDiagnosis() {
+    const out = dgEl(), d = U().dg; if (!out || !d) return;
+    if (!d.ok) { out.innerHTML = `<div class="hint warn">✗ ${esc(d.error)}</div>`; return; }
+    const last = (PV.syncInfo() || {}).last || {};
+    const ks = Object.keys(d.kinds), sum = (f) => ks.reduce((a, k) => a + d.kinds[k][f].length, 0);
+    const up = sum('up'), down = sum('down');
+    const notes = [];
+    if (!d.keys.admin) notes.push(d.keys.supervisor ? 'Esta PC es de supervisor: puede ver, pero no sube nada.' : '⚠ Falta la clave admin: lo que hace esta PC no se sube al servidor.');
+    if (d.url !== Sync.DEFAULT_SYNC_URL) notes.push(`⚠ Esta PC usa otro servidor: ${d.url}`);
+    if (d.epochLocal !== d.epochServer) notes.push('⚠ Los datos del servidor se reiniciaron y esta PC aún no se puso al día: sincroniza.');
+    if (last && last.ok === false && last.error) notes.push('⚠ La última sincronización falló: ' + last.error);
+    if (!up && !down) notes.push('✅ Esta PC y el servidor tienen exactamente lo mismo.');
+    const u = d.upload;
+    const report = () => [
+      `DIAGNÓSTICO ${new Date().toLocaleString('es-VE')} · ${location.host}`,
+      `Claves: sync ${d.keys.sync ? 'sí' : 'NO'} · admin ${d.keys.admin ? 'sí' : 'NO'} · supervisor ${d.keys.supervisor ? 'sí' : 'no'} · servidor ${d.url}`,
+      `Época local ${d.epochLocal || '—'} · servidor ${d.epochServer || '—'} · último sync ${d.lastSyncAt || '—'} · último resultado ${last.ok === false ? 'ERROR ' + (last.error || '') : 'ok'}`,
+      ...ks.map((k) => { const x = d.kinds[k]; return `${DG_LABEL[k]}: PC ${x.local} · servidor ${x.server} · pendientes ${x.pending} · faltan en servidor ${x.up.length}${x.up.length ? ' [' + x.up.slice(0, 8).map((id) => dgName(k, id)).join(' | ') + ']' : ''} · faltan en PC ${x.down.length}`; }),
+      ...(u ? [`Subida: ${u.accepted}/${u.total} aceptados · rechazados ${u.rejected.length}${u.rejected.length ? ' [' + u.rejected.slice(0, 10).map((r) => r.kind + ' ' + dgName(r.kind, r.id) + ': ' + r.reason).join(' | ') + ']' : ''} · fallidos ${u.failed.length}${u.failed.length ? ' [' + u.failed.slice(0, 10).map((f) => f.kind + ' ' + dgName(f.kind, f.id) + ': ' + f.error).join(' | ') + ']' : ''}${u.error ? ' · ' + u.error : ''}`] : []),
+    ].join('\n');
+    const bad = u ? u.rejected.filter((r) => r.reason !== 'stale') : [];
+    out.innerHTML = `${notes.map((n) => `<div class="hint ${n.startsWith('✅') ? '' : 'warn'}">${esc(n)}</div>`).join('')}
+      ${u ? `<div class="hint ${u.failed.length || bad.length || !u.ok ? 'warn' : ''}">Subida: <b>${u.accepted} de ${u.total}</b> aceptados${u.rejected.length - bad.length ? ` · ${u.rejected.length - bad.length} con otra versión en el servidor (se fusionan al sincronizar)` : ''}${bad.length ? ` · <b>${bad.length} rechazados</b>: ${esc(bad.slice(0, 5).map((r) => dgName(r.kind, r.id) + ' (' + r.reason + ')').join('; '))}` : ''}${u.failed.length ? ` · <b>${u.failed.length} no se pudieron subir</b>: ${esc(u.failed.slice(0, 5).map((f) => dgName(f.kind, f.id) + ' (' + f.error + ')').join('; '))}` : ''}${u.error ? ' · ' + esc(u.error) : ''}</div>` : ''}
+      <div style="overflow:auto"><table class="inv"><thead><tr><th>Tipo</th><th class="n">En esta PC</th><th class="n">En el servidor</th><th class="n">Pendientes de subir</th><th class="n">Faltan en el servidor</th><th class="n">Faltan en esta PC</th></tr></thead>
+      <tbody>${ks.map((k) => { const x = d.kinds[k]; return `<tr><td>${esc(DG_LABEL[k])}</td><td class="n">${nf0.format(x.local)}</td><td class="n">${nf0.format(x.server)}</td><td class="n">${x.pending || ''}</td>
+        <td class="n ${x.up.length ? 'warn-txt' : ''}" title="${esc(x.up.slice(0, 15).map((id) => dgName(k, id)).join('\n'))}"><b>${x.up.length || ''}</b></td><td class="n ${x.down.length ? 'warn-txt' : ''}"><b>${x.down.length || ''}</b></td></tr>`; }).join('')}</tbody></table></div>
+      <div class="row wrap" style="margin-top:8px;gap:8px">
+        ${up && d.keys.admin ? `<button class="btn btn-primary" id="dgUp">⬆ Subir al servidor lo que falta (${nf0.format(up)})</button>` : ''}
+        ${down ? `<button class="btn" id="dgDown">⬇ Bajar a esta PC lo que falta (${nf0.format(down)})</button>` : ''}
+        <button class="btn" id="dgCopy">📋 Copiar informe</button></div>`;
+    $('#dgCopy', out).onclick = () => copyText(report());
+    const bu = $('#dgUp', out);
+    if (bu) bu.onclick = async () => {
+      bu.disabled = true;
+      const res = await Sync.forceUpload(Object.fromEntries(ks.map((k) => [k, d.kinds[k].up])), (n, t) => { const b = dgEl() && $('#dgUp', dgEl()); if (b) b.textContent = `Subiendo… ${n} de ${t}`; });
+      await log('sync', `Diagnóstico: subió ${res.accepted} de ${res.total} documentos${res.failed.length ? ` · ${res.failed.length} con error` : ''}`).catch(() => {});
+      await runDiagnosis(res);
+    };
+    const bd = $('#dgDown', out);
+    if (bd) bd.onclick = async () => {
+      bd.disabled = true; bd.textContent = 'Bajando…';
+      await Sync.redownload();
+      await runDiagnosis();
+    };
+  }
+
   /* ============================== ENVASES ============================== */
   // Fase 2 · E4: kardex de vacíos. Vive en el servidor (no se edita ni se borra):
   // esta pantalla necesita internet. Los despachos los escribe la liquidación.
@@ -2216,6 +2279,11 @@
             <button class="btn btn-primary" id="hBackup">⇩ Descargar respaldo del servidor</button></div>
           <div id="hOut" class="muted" style="margin-top:10px"></div></section>
 
+        <section class="card card-pad" id="dgCard"><h3>🩺 Diagnóstico de sincronización</h3>
+          <p class="muted">Compara lo que tiene esta PC con lo que tiene el servidor. Úsalo cuando dos PCs no muestran lo mismo: en la PC que tiene los datos completos, «Subir»; en la que le faltan, «Bajar».</p>
+          <div class="row wrap"><button class="btn btn-primary" id="dgRun">🩺 Revisar esta PC</button></div>
+          <div id="dgOut" style="margin-top:10px"></div></section>
+
         <section class="card card-pad"><h3>⚠ Reiniciar datos (empezar de cero)</h3>
           <p class="muted">Para borrar los datos de prueba antes de empezar a trabajar en serio. Se borra en el servidor y en <b>todos</b> los equipos (oficina, vendedores y supervisor) en su próxima sincronización, incluido lo que tenían sin enviar de antes del reinicio (lo que un vendedor sin señal haga después se conserva). No se puede deshacer: descarga antes el respaldo.</p>
           <label style="display:flex;gap:8px;align-items:flex-start;margin-top:6px"><input type="radio" name="rsMode" value="pedidos" checked> Pedidos, hojas de carga, historial, kardex de vacíos y numeración (se conservan catálogo, clientes, vendedores y ajustes)</label>
@@ -2383,6 +2451,8 @@
       await PV.runSync(true); renderSettings(root);
     };
     $('#bImp').onclick = importStarter;
+    $('#dgRun').onclick = () => runDiagnosis();
+    drawDiagnosis();
     const KIND_LABEL = { orders: 'Pedidos', clients: 'Clientes', products: 'Productos', sellers: 'Vendedores', loads: 'Hojas de carga', config: 'Configuración', events: 'Historial' };
     $('#hCheck').onclick = async () => {
       const out = $('#hOut'); out.textContent = 'Consultando…';

@@ -1693,7 +1693,7 @@
     S, $, $$, esc, nf2, nf0, usd, bs, int, dec, norm, slug, today, fmtDate, fmtStock, hasStock, productSort, productLabel, rubroIcon,
     toast, openSheet, copyText, saveFile, saveBinary, pickFile, brandHeader, creditFooter,
     clientFixSheet, searchSheet, imgSrc, hasPhoto,
-    syncInfo: () => ({ idle: isIdle(), every: syncEvery() }), _idleSince: (ms) => { lastInput = Date.now() - ms; },
+    syncInfo: () => ({ idle: isIdle(), every: syncEvery(), last: lastSyncResult }), _idleSince: (ms) => { lastInput = Date.now() - ms; },
     loadAll, saveDocs, saveOrder, saveSettings, setSession, msgThreadHTML, rememberOffice, forgetOffice, PERSIST_HINT, runSync, updateSyncPill, render, refreshAfterRemote, updateBell, beep, logEvent, isSupervisor,
     notifSheet, refreshPush,
     productById, sellerById, orderById, clientById, rubros, orderLinesHTML, groupLines, groupedRows,
