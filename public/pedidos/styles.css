@@ -510,3 +510,11 @@ details.sr mark { background: var(--accent); color: #111; border-radius: 4px; pa
 .pause-card .pause-ico { font-size: 34px; line-height: 1; }
 .pause-card p { margin: 6px 0; }
 table.lines tr.grp-row td { padding: 8px 6px 4px; font-weight: 800; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); border-bottom: 1px solid var(--line); }
+/* Hoja de carga y liquidación: el recuadro usa el alto de la pantalla y abajo solo
+   queda fija la fila de totales por cliente (el resto del pie se ve al final). */
+.table-wrap:has(> table.grid) { max-height: calc(100vh - 120px - var(--aviso-h, 0px)); max-height: calc(100dvh - 120px - var(--aviso-h, 0px)); }
+table.grid tfoot { position: static; }
+table.grid tfoot tr.stick td { position: sticky; bottom: 0; z-index: 5; box-shadow: 0 -6px 10px rgba(0,0,0,.45); }
+table.grid tfoot tr.stick td.sticky-col, table.grid tfoot tr.stick td.tot, table.grid tfoot tr.stick td.lq-usd { z-index: 7; }
+table.grid.sheet-grid td:has(> .cell-in) { padding-top: 3px; padding-bottom: 3px; }
+table.grid.sheet-grid .cell-in { min-height: 30px; }
