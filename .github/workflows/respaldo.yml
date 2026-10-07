@@ -3,7 +3,9 @@
 # Corre todos los días ~3:00 a. m. (hora de Venezuela) y también a mano (Actions →
 # «Respaldo diario» → Run workflow). Guarda un .zip CIFRADO con contraseña (AES-256):
 # aunque alguien vea la página de Actions, sin la contraseña no puede abrirlo.
-# Se conservan 30 días (el espacio gratis de GitHub en un repositorio privado es 500 MB). Si falla, GitHub envía un correo.
+# Se conservan los últimos 7 diarios + el del día 1 de cada mes por 60 días (el espacio
+# gratis de GitHub en un repositorio privado es 500 MB). Si falla, GitHub envía un correo.
+# GitHub gratis no cobra: si algún día se llenara el espacio, el respaldo falla y avisa.
 #
 # Secretos necesarios (Settings → Secrets and variables → Actions):
 #   PEDIDOS_URL          dirección de la app, ej: https://pw-apedidos.vercel.app
@@ -59,9 +61,14 @@ jobs:
           7z a -tzip -mem=AES256 -p"$RESPALDO_CLAVE" "$RUNNER_TEMP/respaldo_puerto_venado.zip" ./*.json > /dev/null
           rm -f ./*.json
           ls -la "$RUNNER_TEMP"/respaldo_puerto_venado.zip
+      - name: ¿Diario o mensual?
+        id: tipo
+        run: |
+          if [ "$(date -u +%d)" = "01" ]; then echo "dias=60" >> "$GITHUB_OUTPUT"; echo "nombre=mensual" >> "$GITHUB_OUTPUT";
+          else echo "dias=7" >> "$GITHUB_OUTPUT"; echo "nombre=diario" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/upload-artifact@v4
         with:
-          name: respaldo-puerto-venado-${{ github.run_number }}
+          name: respaldo-${{ steps.tipo.outputs.nombre }}-puerto-venado-${{ github.run_number }}
           path: ${{ runner.temp }}/respaldo_puerto_venado.zip
-          retention-days: 30
+          retention-days: ${{ steps.tipo.outputs.dias }}
           compression-level: 0

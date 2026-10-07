@@ -2,7 +2,7 @@
 
 Todos los días a las ~3:00 a. m. (hora de Venezuela) GitHub baja **todos** los datos de la app
 (pedidos, hojas, liquidaciones, clientes, catálogo con fotos, vendedores, ajustes, historial y
-kardex de vacíos) y los guarda en un **.zip cifrado con contraseña** durante **30 días**.
+kardex de vacíos) y los guarda en un **.zip cifrado con contraseña**: los **últimos 7 días** y el del **día 1 de cada mes por 60 días**.
 Es el mismo archivo del botón «Respaldo del servidor»: se restaura con **Oficina → Ajustes →
 Cargar paquete**. Si un día falla, GitHub te manda un correo.
 
@@ -22,7 +22,7 @@ Cargar paquete**. Si un día falla, GitHub te manda un correo.
 
 ## Bajar y abrir un respaldo
 
-1. **Actions** → **Respaldo diario** → abre la corrida del día que quieres → abajo, en **Artifacts**, descarga `respaldo-puerto-venado-N`.
+1. **Actions** → **Respaldo diario** → abre la corrida del día que quieres → abajo, en **Artifacts**, descarga `respaldo-diario-…` o `respaldo-mensual-…`.
 2. GitHub lo entrega como `.zip`; adentro está `respaldo_puerto_venado.zip`. Ábrelo con **7-Zip** (gratis, https://7-zip.org) y escribe la contraseña `RESPALDO_CLAVE`. (El Explorador de Windows no abre zips cifrados con AES-256.)
 3. Adentro está `respaldo_puerto_venado_AAAA-MM-DD.json`.
 
