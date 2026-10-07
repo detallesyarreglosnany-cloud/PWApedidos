@@ -328,15 +328,19 @@
   async function updateSyncPill() {
     const el = $('#syncPill');
     if (!el) return;
-    const pending = await Sync.pendingCount(syncScope());
+    // Oficina sin clave admin: el servidor no acepta hojas, liquidaciones ni cambios de la
+    // oficina; se quedan solo en este equipo. Se cuenta TODO lo pendiente y se avisa.
+    const noAdmin = isOffice() && !!S.settings.syncKey && !S.settings.adminKey;
+    const pending = await Sync.pendingCount(syncScope(), noAdmin);
     const online = navigator.onLine;
     const serverDown = lastSyncResult && !lastSyncResult.ok && !lastSyncResult.offline;
-    el.className = 'pill' + (!online || serverDown ? ' offline' : '') + (pending ? ' pending' : '');
+    el.className = 'pill' + (!online || serverDown || noAdmin ? ' offline' : '') + (pending ? ' pending' : '');
     const r = lastSyncResult || {};
-    const label = !online ? 'Sin señal' : r.noKey ? 'Falta clave' : r.status === 401 ? 'Clave inválida' : serverDown ? 'Sin servidor' : 'En línea';
+    const label = !online ? 'Sin señal' : r.noKey ? 'Falta clave' : r.status === 401 ? 'Clave inválida' : serverDown ? 'Sin servidor' : noAdmin ? 'Falta clave admin' : 'En línea';
     el.innerHTML = '<span class="dot"></span>' + label + (online && !serverDown && isIdle() ? ' · ahorro' : '') +
       (pending ? ' · ' + pending : '');
-    el.title = lastSyncResult && lastSyncResult.error ? lastSyncResult.error : isIdle() ? 'Modo ahorro: sin uso hace un rato, se consulta el servidor con menos frecuencia. Toca para sincronizar.' : 'Tocar para sincronizar';
+    el.title = noAdmin ? 'Esta PC de oficina no tiene la clave admin: lo que hace la oficina (hojas, liquidaciones, cambios) NO se sube al servidor ni lo ven otros equipos. Escríbela en Ajustes → Conexión.'
+      : lastSyncResult && lastSyncResult.error ? lastSyncResult.error : isIdle() ? 'Modo ahorro: sin uso hace un rato, se consulta el servidor con menos frecuencia. Toca para sincronizar.' : 'Tocar para sincronizar';
   }
 
   /* ===================== Notificaciones (oficina) ===================== */
