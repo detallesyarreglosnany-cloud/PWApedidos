@@ -2298,6 +2298,8 @@
             </ol></details></section>
         <section class="card card-pad"><h3>Sincronización</h3>
           <p class="muted">La clave admin permite a este equipo publicar catálogo, clientes, precios, rutas y cargas hacia los teléfonos.</p>
+          ${st.syncKey && !st.adminKey ? '<div class="hint warn">⚠ <b>Falta la clave admin.</b> Sin ella, lo que hace esta PC (hojas de carga, pedidos movidos, liquidaciones, clientes) <b>se queda solo aquí</b>: no se sube al servidor ni lo ven las otras PCs. Escríbela y pulsa Guardar: todo lo pendiente se sube solo.</div>' : ''}
+          ${st.syncUrl && st.syncUrl.trim() !== Sync.DEFAULT_SYNC_URL ? `<div class="hint warn">⚠ Esta PC usa otro servidor: <code>${esc(st.syncUrl)}</code>. Para ver los mismos datos que las demás, deja la URL en blanco.</div>` : ''}
           <div class="grid2">
             <label class="field"><span>Clave de sync (todos)</span><input id="sKey" class="input" type="password" autocomplete="off" value="${esc(st.syncKey)}"></label>
             <label class="field"><span>Clave admin (oficina)</span><input id="sAdmin" class="input" type="password" autocomplete="off" value="${esc(st.adminKey)}"></label>

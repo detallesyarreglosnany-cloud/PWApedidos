@@ -303,9 +303,9 @@
     return toPut.length;
   }
 
-  async function pendingCount(scope) {
+  async function pendingCount(scope, all) {
     const cfg = await settings();
-    return total(await collectDirty(!!cfg.adminKey, scope && scope.sellerId || null));
+    return total(await collectDirty(!!cfg.adminKey || !!all, scope && scope.sellerId || null));
   }
 
   /** Llamada a una ruta de oficina (/api/pedidos/<name>) con las claves guardadas. */
