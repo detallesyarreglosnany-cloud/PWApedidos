@@ -146,6 +146,33 @@
     return loads.filter((l) => !l.deleted && l.id !== load.id && l.dispatcherId === load.dispatcherId && !isDone(l)).sort((a, b) => k(a).localeCompare(k(b)));
   }
 
+  /**
+   * Pasa las liquidaciones cerradas con versiones anteriores al formato nuevo (una sola vez,
+   * sin cambiar ninguna cantidad): en la foto del camión anota cuánto TRAÍA de verdad (lo
+   * que le pasaron sus hojas de origen), y el «ya lo tomó» del sobrante queda por producto.
+   * Devuelve las hojas a guardar.
+   */
+  function upgradeOld(loads) {
+    const out = new Map();
+    const cur = (l) => out.get(l.id) || l;
+    loads.forEach((l0) => {
+      if (l0.deleted || !isDone(l0) || !l0.liq.snapshot || l0.liq.snapshot.v3) return;
+      const l = cur(l0), traia = {};
+      fromList(l.liq.carryFrom).forEach((sid) => {
+        const s0 = loads.find((x) => x.id === sid); if (!s0 || !s0.liq || !s0.liq.carry) return;
+        const src = cur(s0);
+        carryKeys(src).forEach((k) => { if (usedOf(src, k) === l.id) traia[k] = (traia[k] || 0) + n0(src.liq.carry.rows[k]); });
+        if (src.liq.carryUsedBy && src.liq.carryUsedBy !== 'almacen') out.set(src.id, markUsed(src, [], null));
+      });
+      const rows = (l.liq.snapshot.rows || []).map((r) => ({ ...r, traia: r.traia !== undefined ? r.traia : traia[r.key] || 0, anterior: r.anterior || 0, destLoad: r.destLoad || '' }));
+      // Lo que traía y no quedó en la foto (producto que la hoja no mostraba): se agrega para no perderlo
+      Object.keys(traia).forEach((k) => { if (!rows.some((r) => r.key === k)) rows.push({ key: k, traia: traia[k], queda: 0, carga: 0, anterior: 0, entregado: 0, total: 0, debe: 0, dev: 0, dif: 0, motivo: 'no se registró en esta hoja', dest: 'almacen' }); });
+      const base = cur(l);
+      out.set(l.id, { ...base, liq: { ...base.liq, carryFrom: fromList(base.liq.carryFrom), snapshot: { ...base.liq.snapshot, rows, v3: true, upgradedAt: new Date().toISOString() } } });
+    });
+    return [...out.values()];
+  }
+
   /** Hojas del mismo despachador, anteriores a esta, aprobadas y aún sin liquidar (se liquidan primero). */
   function olderUnliquidated(load, loads, isClosed) {
     if (!load.dispatcherId) return [];
@@ -403,5 +430,5 @@
   /** Texto corto de la novedad de un cliente (encabezado de su columna). */
   const shortResult = (e) => ({ entregada: '', parcial: 'DEV. PARCIAL', nofact: 'NO FACTURADO', pendiente: 'SE ENTREGA DESPUÉS', anulada: 'ANULADA' })[e.result] || '';
 
-  global.Liq = { RESULTS, MOTIVOS, VAC_MOTIVOS, isDone, entry, deliveredLines, delivered, returnedAny, carryFor, pendingCarries, markUsed, destLoads, olderUnliquidated, prevRetRows, truckRows, vacRows, prevRows, problems, sheet, cuadre, cuadreLines, truckLedger, shortResult };
+  global.Liq = { RESULTS, MOTIVOS, VAC_MOTIVOS, isDone, entry, deliveredLines, delivered, returnedAny, carryFor, pendingCarries, markUsed, destLoads, upgradeOld, olderUnliquidated, prevRetRows, truckRows, vacRows, prevRows, problems, sheet, cuadre, cuadreLines, truckLedger, shortResult };
 })(window);

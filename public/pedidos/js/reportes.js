@@ -260,6 +260,7 @@
     if (st.auto || !st.data) { st.auto = false; $('#qzGo').click(); }
 
     function out(o, d, f2) {
+      if (!o || !o.isConnected) return; // la pantalla ya se redibujó (llegó tarde la respuesta)
       const t = d.totals;
       const tbl = (title, head, rows, foot) => `<div class="card" style="overflow:auto;margin-top:12px"><h3 style="padding:12px 12px 0;margin:0">${title}</h3><table class="inv">
         <thead><tr>${head.map((h) => `<th${h.n ? ' class="n"' : ''}>${esc(h.t)}</th>`).join('')}</tr></thead><tbody>${rows || `<tr><td colspan="${head.length}" class="muted">Sin datos</td></tr>`}</tbody>${foot ? `<tfoot>${foot}</tfoot>` : ''}</table></div>`;
@@ -363,6 +364,8 @@
       <p class="muted" style="padding:0 12px">Venía + Ajustes + Cargado + Dev. anteriores − Entregado − Volvió a almacén − Diferencia − Corte = Queda en el camión. Faltante a cobrar = diferencias que faltan + lo que faltó en el corte.</p>
       ${L.length ? L.map((d) => `<div style="padding:0 12px 12px"><div class="row" style="align-items:center;gap:8px"><h3 class="grow" style="margin:6px 0">${esc(d.name)}</h3>
         <b class="${d.ok ? '' : 'warn-txt'}">${d.ok ? '✓ Cuadra' : '⚠ NO CUADRA'}</b>${d.faltantes.length ? ` · <b class="warn-txt">Faltante a cobrar: ${esc(d.faltantes.map((r) => r.faltante + ' ' + ledgerName(r.key)).join(', '))}</b>` : ''}</div>
+        ${(() => { const aj = d.hojas.flatMap((h) => h.rows.filter((r) => (+r.queda || 0) !== (+r.traia || 0)).map((r) => `${global.Loads.labelOf(h.load)}: ${ledgerName(r.key)} QUEDAN ${r.queda || 0}, el camión traía ${r.traia || 0}${r.motivo ? ' (' + r.motivo + ')' : ''}`));
+          return aj.length ? `<div class="hint warn">QUEDAN escrito a mano distinto de lo que traía el camión (sale en «Ajustes de QUEDAN»): ${esc(aj.join(' · '))}</div>` : ''; })()}
         <table class="inv"><thead><tr><th>Producto</th>${LCOLS.map(([, t]) => `<th class="n">${esc(t)}</th>`).join('')}<th class="n">Faltante a cobrar</th><th>Cuadre</th></tr></thead>
         <tbody>${d.rows.map((r) => `<tr class="${r.descuadre ? 'liq-bad' : ''}"><td>${esc(ledgerName(r.key))}</td>${LCOLS.map(([k]) => `<td class="n">${r[k] ? nf0.format(r[k]) : ''}</td>`).join('')}
           <td class="n ${r.faltante ? 'warn-txt' : ''}"><b>${r.faltante || ''}</b></td><td>${r.descuadre ? `<b class="warn-txt">⚠ ${r.descuadre > 0 ? 'faltan' : 'sobran'} ${Math.abs(r.descuadre)}</b>` : '✓'}</td></tr>`).join('')}</tbody></table>
@@ -372,6 +375,8 @@
             <td class="n">${r.traia || ''}</td><td class="n">${r.queda || ''}</td><td class="n">${r.carga || ''}</td><td class="n">${r.anterior || ''}</td><td class="n">${r.entregado || ''}</td><td class="n">${r.almacen || ''}</td>
             <td class="n">${r.sigue ? r.sigue + (r.destLoad ? ' → ' + esc(loadName(r.destLoad)) : '') : ''}</td><td class="n ${r.dif ? 'warn-txt' : ''}">${r.dif || ''}</td><td>${esc(r.motivo || '')}</td></tr>`).join('')).join('')}</tbody></table></details></div>`).join('')
         : '<p class="muted" style="padding:0 12px 12px">Sin hojas liquidadas con despachador en el período.</p>'}
+      ${(() => { const sin = S.loads.filter((l) => !l.deleted && global.Liq.isDone(l) && !l.dispatcherId && String(l.date || l.liq.closedAt || '').slice(0, 10) >= from && String(l.date || l.liq.closedAt || '').slice(0, 10) <= to);
+        return sin.length ? `<div class="hint warn" style="margin:0 12px 12px">⚠ ${sin.length} hoja(s) liquidada(s) SIN despachador no entran a este cuadre: ${esc(sin.map((l) => global.Loads.labelOf(l)).join(', '))}. Asígnale el despachador en la hoja de carga.</div>` : ''; })()}
       ${L.length ? '<div class="toolbar no-print" style="padding:0 12px 12px"><button class="btn" id="tlPrint">🖨 Imprimir cuadre de despachos</button><button class="btn" id="tlXlsx">⇩ Excel cuadre de despachos</button></div>' : ''}</div>`;
     const bp = box.querySelector('#tlPrint'); if (bp) bp.onclick = () => global.Print.printTruckLedger(L, { config: S.config, from, to, name: ledgerName, cols: LCOLS, loadName });
     const bx = box.querySelector('#tlXlsx'); if (bx) bx.onclick = () => global.Exporta.save(`cuadre_despachos_${from}_a_${to}.xlsx`, [global.Exporta.table({ name: 'Cuadre despachos',

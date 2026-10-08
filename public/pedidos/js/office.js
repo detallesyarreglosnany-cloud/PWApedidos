@@ -80,7 +80,7 @@
     PV.updateSyncPill(); PV.updateBell();
     const body = $('#officeBody');
     if (!S.products.length && tab !== 'ajustes') body.insertAdjacentHTML('beforebegin', setupBanner());
-    ({ cargas: renderLoads, pedidos: renderOrders, archivo: renderArchive, envases: renderEnvases, reportes: (root) => Reportes.render(root, U().rep || (U().rep = {})), inventario: renderInventory,
+    ({ cargas: renderLoads, pedidos: renderOrders, archivo: renderArchive, envases: renderEnvases, reportes: (root) => { upgradeLiquidations(root); Reportes.render(root, U().rep || (U().rep = {})); }, inventario: renderInventory,
       clientes: renderClients, vendedores: renderSellers, historial: renderHistory, ajustes: renderSettings })[tab](body);
     const sb = $('#setupImport');
     if (sb) sb.onclick = importStarter;
@@ -1022,8 +1022,22 @@
    * del camión y los totales ENTREGADOS (clientes con entrega, bultos, monto),
    * tomados de lo que guardó cada pedido al cerrar. No cambia lo liquidado.
    */
+  /** Liquidaciones cerradas con versiones anteriores → formato nuevo del sobrante (una vez, sin cambiar cantidades). */
+  async function upgradeLiquidations(root) {
+    if (U().liqUpgrading || !S.settings.adminKey) return;
+    const docs = Liq.upgradeOld(S.loads);
+    if (!docs.length) return;
+    U().liqUpgrading = true;
+    try {
+      await saveDocs('loads', docs);
+      const n = docs.filter((l) => l.liq.snapshot && l.liq.snapshot.upgradedAt).length;
+      if (n) await log('liquidacion', `Se pasaron ${n} liquidación(es) anteriores al formato nuevo del sobrante (sin cambiar cantidades)`, {});
+      if (root && root.isConnected) PV.render();
+    } finally { U().liqUpgrading = false; }
+  }
   async function repairLiquidations(root) {
     if (U().liqFixing) return;
+    await upgradeLiquidations(root);
     const todo = S.loads.filter((l) => !l.deleted && Liq.isDone(l) && (!l.liq.snapshot || !l.liq.totals || l.liq.totals.bultos == null || !l.liq.totals.v2));
     if (!todo.length) return;
     U().liqFixing = true;
