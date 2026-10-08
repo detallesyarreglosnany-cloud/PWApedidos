@@ -896,6 +896,66 @@
   }
 
   /* ============================== ARCHIVO ============================== */
+  /** Sobrante en los camiones: lo que quedó para otra carga y ninguna hoja ha tomado todavía, por despachador. */
+  const carryName = (k) => { const [pid, um] = k.split('|'), p = productById(pid) || {}; return `${p.code || pid} ${p.name || ''} ${p.presentation || ''} ${um}`.replace(/\s+/g, ' ').trim(); };
+  function truckStock() {
+    const by = new Map();
+    Liq.pendingCarries(S.loads).forEach((x) => {
+      const id = x.load.liq.carry.dispatcherId || x.load.dispatcherId || '—';
+      const d = by.get(id) || { id, name: x.load.dispatcherName || '—', items: [], total: {} };
+      x.keys.forEach((k) => { const q = +x.load.liq.carry.rows[k] || 0; d.items.push({ load: x.load, key: k, qty: q, to: x.to[k] }); d.total[k] = (d.total[k] || 0) + q; });
+      by.set(id, d);
+    });
+    return [...by.values()];
+  }
+  function carriesHTML() {
+    const st = truckStock();
+    if (!st.length) return '';
+    const days = (l) => Math.max(0, Math.floor((Date.now() - Date.parse(l.liq.closedAt)) / 86400000));
+    return `<div class="section-title">🚚 Sobrante en camiones <span class="muted">(quedó para otra carga y ninguna liquidación lo ha tomado)</span></div>
+      ${st.map((d) => `<div class="card card-pad" style="margin-bottom:8px"><div class="row" style="align-items:center;gap:8px"><h3 class="grow" style="margin:0">${esc(d.name)}</h3>
+        <button class="btn btn-sm" data-carry-cut="${esc(d.id)}">✂ Corte · vaciar camión</button></div>
+        <div style="overflow:auto"><table class="inv"><thead><tr><th>Producto</th><th class="n">Cantidad</th><th>Viene de</th><th>Va para</th><th class="n">Días</th></tr></thead>
+        <tbody>${d.items.map((x) => `<tr class="${days(x.load) > 3 ? 'liq-bad' : ''}"><td>${esc(carryName(x.key))}</td><td class="n"><b>${nf0.format(x.qty)}</b></td>
+          <td>${esc(Loads.labelOf(x.load))} ${x.load.number ? `<span class="muted mono">${esc(Loads.loadCode(x.load))}</span>` : ''}</td>
+          <td>${x.to ? esc(Loads.labelOf(x.to)) : '<span class="muted">la próxima que se liquide</span>'}</td><td class="n">${days(x.load)}</td></tr>`).join('')}</tbody></table></div></div>`).join('')}
+      <p class="muted">Pasa solo a la siguiente liquidación de ese despachador (o a la hoja elegida). En el corte de quincena, «Vaciar camión» registra lo que llegó al almacén; lo que falte queda como faltante a cobrar al despachador.</p>`;
+  }
+  /** Corte (fin de quincena o cuando se descarga el camión): lo que llegó al almacén; lo que falta, a cobrar. */
+  function cutDialog(dispId, root) {
+    const d = truckStock().find((x) => x.id === dispId); if (!d) return;
+    const keys = Object.keys(d.total);
+    const sh = openSheet(`
+      <div class="row"><h2 class="grow">✂ Corte · vaciar camión de ${esc(d.name)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <p class="muted">Cuenta lo que se bajó del camión al almacén. Si llega menos, la diferencia queda registrada como <b>faltante a cobrar</b> al despachador.</p>
+      <table class="inv"><thead><tr><th>Producto</th><th class="n">Debe haber</th><th class="n">Llegó al almacén</th></tr></thead>
+      <tbody>${keys.map((k) => `<tr><td>${esc(carryName(k))}</td><td class="n"><b>${nf0.format(d.total[k])}</b></td><td class="n"><input class="input qin small cut-in" inputmode="numeric" data-k="${esc(k)}" value="${d.total[k]}"></td></tr>`).join('')}</tbody></table>
+      <label class="field"><span>Motivo / nota (obligatorio)</span><input class="input" id="cutMot" maxlength="160" value="Corte de quincena"></label>
+      <div class="actions"><button class="btn btn-primary" id="cutOk">Registrar corte</button></div>`);
+    $('#cutOk', sh.el).onclick = async () => {
+      const motivo = $('#cutMot', sh.el).value.trim(); if (!motivo) { toast('Escribe el motivo', 'err'); return; }
+      const got = {}; sh.el.querySelectorAll('.cut-in').forEach((i) => { got[i.dataset.k] = Math.max(0, int(i.value)); });
+      const falt = keys.filter((k) => got[k] < d.total[k]).map((k) => `${d.total[k] - got[k]} ${carryName(k)}`);
+      if (falt.length && !confirm(`Faltante a cobrar a ${d.name}:\n\n${falt.join('\n')}\n\n¿Registrar el corte?`)) return;
+      // Lo recibido se reparte del origen más viejo al más nuevo; cada hoja guarda su parte
+      const at = DB.now(), by = (S.config && S.config.adminName) || 'Oficina', left = { ...got }, saves = [];
+      const loadsBy = new Map();
+      d.items.forEach((x) => { (loadsBy.get(x.load.id) || loadsBy.set(x.load.id, { load: x.load, items: [] }).get(x.load.id)).items.push(x); });
+      [...loadsBy.values()].forEach(({ load: l, items }) => {
+        const rows = {};
+        items.forEach((x) => { const r = Math.min(x.qty, left[x.key] || 0); left[x.key] = (left[x.key] || 0) - r; rows[x.key] = { tenia: x.qty, recibido: r }; });
+        const upd = Liq.markUsed(l, items.map((x) => x.key), 'almacen');
+        upd.liq.carryCuts = [...(l.liq.carryCuts || []), { at, by, motivo, rows }];
+        saves.push(upd);
+      });
+      sh.close();
+      await saveDocs('loads', saves);
+      await log('liquidacion', `Corte · vació el camión de ${d.name}: ${keys.map((k) => `${got[k]}/${d.total[k]} ${carryName(k)}`).join(', ')}${falt.length ? ` · FALTANTE A COBRAR: ${falt.join(', ')}` : ' · completo'} · ${motivo}`, {});
+      toast(falt.length ? 'Corte registrado con faltante a cobrar' : 'Corte registrado: todo llegó al almacén', falt.length ? 'err' : 'ok');
+      renderArchive(root);
+    };
+  }
+
   function renderArchive(root) {
     if (U().liqId) { const l = S.loads.find((x) => x.id === U().liqId); if (l) return renderLiquidation(root, l); U().liqId = null; }
     if (U().archiveId) { const l = S.loads.find((x) => x.id === U().archiveId); if (l) return renderLoadDetail(root, l); U().archiveId = null; }
@@ -932,6 +992,7 @@
         <div class="kpi"><small>Venta liquidada</small><b>${usd(sum.m)}</b><small>en hojas liquidadas · lo que paga el cliente</small></div>
         <div class="kpi"><small>Venta en proceso</small><b>${usd(sum.pm)}</b><small>${sum.pn} hojas por liquidar · aún no cuenta</small></div>
       </div>
+      ${carriesHTML()}
       ${list.length ? `<div class="card" style="overflow:auto"><table class="inv">
         <thead><tr><th>Código</th><th>Fecha</th><th>Estado</th><th>Vendedor(es)</th><th>Ruta</th><th>Despachador</th><th>Clientes</th><th>Bultos</th><th>Unid.</th><th>Venta</th><th>Liquidación</th><th></th></tr></thead>
         <tbody>${list.map((l) => { const t = l.totals || {}; return `<tr>
@@ -945,6 +1006,7 @@
       : '<div class="empty card"><strong>Sin cargas cerradas</strong>con esos filtros.</div>'}`;
     $('#aFilters').onchange = (e) => { const k = e.target.dataset.f; if (k) { f[k] = e.target.value; renderArchive(root); } };
     root.onclick = (e) => {
+      const cut = e.target.closest('[data-carry-cut]'); if (cut) { cutDialog(cut.dataset.carryCut, root); return; }
       const q = e.target.closest('[data-liq]'); if (q) { U().liqId = q.dataset.liq; renderArchive(root); return; }
       const v = e.target.closest('[data-view]'); if (v) { U().archiveId = v.dataset.view; renderArchive(root); }
     };
@@ -973,7 +1035,7 @@
       os.forEach((o) => { const x = Matrix.orderTotals({ lines: o.delivery.lines || {} }); if (x.items) t.clients++; t.cajas += x.cajas; t.unidades += x.unidades; t.bultos += x.bultos; t.totalUnidades += x.totalUnidades; t.monto = Matrix.r2(t.monto + x.monto); });
       const n = (r) => os.filter((o) => o.delivery.result === r).length;
       const snap = l.liq.snapshot || { rows: liqState(l).rows.map((r) => ({ key: r.key, code: r.code, name: r.name, presentation: r.presentation, um: r.um, pedido: r.pedido, entregado: r.entregado,
-        queda: r.queda, carga: r.carga, total: r.total, debe: r.debe, dev: r.dev, dif: r.dif, motivo: r.motivo, dest: r.dest })) };
+        traia: r.traia, queda: r.queda, carga: r.carga, anterior: r.anterior, total: r.total, debe: r.debe, dev: r.dev, dif: r.dif, motivo: r.motivo, dest: r.dest })) };
       docs.push({ ...l, liq: { ...l.liq, snapshot: snap, totals: { ...(l.liq.totals || {}), ...t, parcial: n('parcial'), pendiente: n('pendiente'), anulada: n('anulada'), v2: true } } });
     });
     if (docs.length) { await saveDocs('loads', docs); if (root.isConnected) renderArchive(root); }
@@ -1005,7 +1067,15 @@
     const dis = done ? 'disabled' : '';
     const pedido$ = (o) => Matrix.orderTotals(o).monto, entregado$ = (o) => Matrix.orderTotals(Liq.delivered(o, liq)).monto;
     const totPed = os.reduce((a, o) => a + pedido$(o), 0), totEnt = os.reduce((a, o) => a + entregado$(o), 0);
-    const carrySrc = carry ? S.loads.find((l) => l.id === carry.fromId) : null;
+    const carrySrcs = carry ? carry.fromIds.map((id) => S.loads.find((l) => l.id === id)).filter(Boolean) : [];
+    const older = done ? [] : Liq.olderUnliquidated(load, S.loads, Loads.isClosed);
+    const pret = Liq.prevRetRows(liq), hasAnt = rows.some((r) => r.anterior);
+    const dLoads = Liq.destLoads(load, S.loads);
+    const lname = (l) => `${Loads.labelOf(l)}${l.number ? ' ' + Loads.loadCode(l) : ''}${l.date ? ' · ' + l.date : ''}`;
+    const destVal = (r) => (r.dest === 'siguiente' && r.destLoad ? 'L:' + r.destLoad : r.dest || '');
+    const destSel = (r) => `<select class="select sm ${r.dev > 0 && !r.dest ? 'need' : ''}" data-t="dest" ${dis}>${r.dest ? '' : '<option value="">— Elegir —</option>'}${opt([['almacen', 'Volvió a almacén'], ['siguiente', 'Siguiente carga (la próxima que se liquide)'],
+      ...dLoads.map((l) => ['L:' + l.id, '→ ' + lname(l)]), ...(r.destLoad && !dLoads.some((l) => l.id === r.destLoad) ? [['L:' + r.destLoad, '→ ' + ((S.loads.find((l) => l.id === r.destLoad) && lname(S.loads.find((l) => l.id === r.destLoad))) || 'hoja eliminada')]] : [])], destVal(r))}</select>`;
+    const fromTxt = (r) => (r.desde || []).map((id) => { const l = S.loads.find((x) => x.id === id); return l ? Loads.labelOf(l) : id; }).join(' + ');
     const opt = (arr, cur) => arr.map(([v, l]) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`).join('');
     const motivoSel = (cur, attr) => `<select class="select sm" ${attr} ${dis}><option value="">— Motivo —</option>${Liq.MOTIVOS.map((m) => `<option ${m === cur ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>`;
     const sh = Liq.sheet(os, liq, rows, vac), rate = +S.config.exchangeRate || 0;
@@ -1015,7 +1085,7 @@
       const tot = (key) => (sh.vac.find((v) => v.type === type && v.key === key) || { total: 0 }).total;
       return { type, salen: tot('DESPACHADOS'), recibidos: tot('RECIBIDOS'), anteriores: tot('PREV'), entran: tot('RECIBIDOS') + tot('PREV') };
     });
-    const counts = { parcial: 0, pendiente: 0, anulada: 0 };
+    const counts = { parcial: 0, nofact: 0, pendiente: 0, anulada: 0 };
     os.forEach((o) => { const r = Liq.entry(liq, o.id).result; if (counts[r] !== undefined) counts[r]++; });
 
     root.innerHTML = `
@@ -1030,7 +1100,7 @@
       </div>
       <div class="kpi-row">
         <div class="kpi"><small>Clientes</small><b>${os.length}</b></div>
-        <div class="kpi"><small>Devolución parcial</small><b>${counts.parcial}</b></div>
+        <div class="kpi"><small>Devolución parcial</small><b>${counts.parcial}</b>${counts.nofact ? `<small>+ ${counts.nofact} no facturado (misma nota)</small>` : ''}</div>
         <div class="kpi"><small>Se entregan después</small><b>${counts.pendiente}</b></div>
         <div class="kpi"><small>Notas anuladas</small><b>${counts.anulada}</b></div>
         <div class="kpi"><small>Entregado</small><b>${usd(totEnt)}</b><small>de ${usd(totPed)}</small></div>
@@ -1042,6 +1112,7 @@
         <thead><tr><th>#</th><th>Cliente</th><th>Nota Valery</th><th>Resultado</th><th>Nota nueva</th><th>Motivo</th><th>Entregado</th><th></th></tr></thead>
         <tbody>${os.map((o, i) => {
           const e = Liq.entry(liq, o.id), nret = Object.values(e.ret || {}).reduce((a, r) => a + (+r.cajas || 0) + (+r.unidades || 0), 0);
+          const nnf = Object.values(e.nf || {}).reduce((a, r) => a + (+r.cajas || 0) + (+r.unidades || 0), 0);
           return `<tr data-oid="${esc(o.id)}" class="${e.result !== 'entregada' ? 'liq-mark' : ''}">
             <td>${i + 1}</td>
             <td><b>${esc(o.clientName)}</b> <span class="tag">${esc(Loads.initials(o.sellerName))}</span></td>
@@ -1050,7 +1121,7 @@
             <td data-l="Nota nueva">${e.result === 'parcial' ? `<input class="input sm mono" data-q="newValery" inputmode="numeric" maxlength="20" value="${esc(e.newValery || '')}" placeholder="N° nueva" ${dis}>` : (e.result === 'anulada' ? '<span class="muted">anulada</span>' : '')}</td>
             <td data-l="Motivo">${e.result !== 'entregada' ? motivoSel(e.motivo || '', 'data-q="motivo"') : ''}</td>
             <td class="n" data-l="Entregado">${usd(entregado$(o))}${entregado$(o) !== pedido$(o) ? `<div class="muted">de ${usd(pedido$(o))}</div>` : ''}</td>
-            <td>${e.result === 'parcial' ? `<button class="btn btn-sm" data-ret="${esc(o.id)}">↩ Devolución${nret ? ' (' + nret + ')' : ''}</button>` : ''}</td></tr>`;
+            <td>${e.result === 'parcial' ? `<button class="btn btn-sm" data-ret="${esc(o.id)}">↩ Devolución${nret ? ' (' + nret + ')' : ''}</button>` : ''}${e.result === 'nofact' ? `<button class="btn btn-sm" data-nf="${esc(o.id)}">⊘ No facturado${nnf ? ' (' + nnf + ')' : ''}</button>` : ''}</td></tr>`;
         }).join('')}</tbody></table></div>
       <p class="muted">Anulada = la nota se anula en Valery en este momento. Devolución parcial = se anula la nota y se escribe la nueva de Valery que la reemplaza. «Se entrega después» deja la misma nota y el pedido vuelve a la cola para la próxima hoja.</p>
 
@@ -1075,22 +1146,33 @@
       ${vacIO.length ? `<div class="kpi-row">${vacIO.map((t) => `<div class="kpi"><small>Vacíos ${esc(t.type)} · salen / entran</small><b>${nf0.format(t.salen)} / ${nf0.format(t.entran)}</b><small>entran = ${nf0.format(t.recibidos)} recibidos + ${nf0.format(t.anteriores)} de entregas anteriores</small></div>`).join('')}</div>` : ''}
 
       <div class="section-title">3 · Cuadre del camión <span class="muted">(escribe a mano lo que quedó, lo que se cargó de verdad y lo que volvió · las celdas amarillas son tuyas)</span></div>
-      ${carry ? `<div class="hint">🚚 QUEDAN viene de la liquidación de <b>${esc(carrySrc ? Loads.labelOf(carrySrc) : carry.fromId)}</b> (mismo despachador, marcada «siguiente carga»). Puedes corregirlo.</div>` : ''}
+      ${!load.dispatcherId ? '<div class="hint warn">⚠ La hoja no tiene despachador: no se puede saber qué mercancía traía el camión de cargas anteriores.</div>'
+        : carry ? `<div class="hint">🚚 <b>QUEDAN</b> = lo que el camión de <b>${esc(load.dispatcherName || '')}</b> traía de: ${carrySrcs.map((l) => `<b>${esc(Loads.labelOf(l))}</b>${l.number ? ' ' + esc(Loads.loadCode(l)) : ''} (${esc(l.date || '')})`).join(' + ')} · ${Object.keys(carry.rows).length} producto(s). Si lo cambias, escribe el motivo.</div>`
+        : `<div class="hint">🚚 El camión de <b>${esc(load.dispatcherName || '')}</b> no traía mercancía de cargas anteriores.</div>`}
+      ${older.length ? `<div class="hint warn">⚠ Antes de esta hoja, el despachador tiene ${older.length === 1 ? 'otra hoja' : older.length + ' hojas'} sin liquidar: ${older.map((l) => `<b>${esc(Loads.labelOf(l))}</b>${l.number ? ' ' + esc(Loads.loadCode(l)) : ''} (${esc(l.date || '—')})`).join(', ')}. Liquídala primero para que lo que sobró pase a esta en orden.</div>` : ''}
+      <div class="row" style="align-items:center;gap:8px;margin-top:6px"><h3 class="grow" style="margin:0">↩ Mercancía devuelta de entregas anteriores <span class="muted" style="font-weight:400;font-size:13px">(un cliente de otra hoja devolvió productos y los trajo este camión · entran al cuadre)</span></h3>
+        ${done ? '' : '<button class="btn btn-sm" id="qRetAdd">+ Agregar</button>'}</div>
+      ${pret.length ? `<div class="card" style="overflow:auto"><table class="inv liq-pret">
+        <thead><tr><th>Cliente</th><th>Viene de</th><th>Producto</th><th>UM</th><th class="n">Cantidad</th><th>Nota / motivo</th><th></th></tr></thead>
+        <tbody>${pret.map((x) => `<tr><td><b>${esc(x.clientName)}</b></td><td>${esc(x.label || '—')}</td><td>${esc(x.code || '')} ${esc(x.name || '')}</td><td><span class="um ${x.um}">${x.um}</span></td>
+          <td class="n"><b>${nf0.format(x.qty)}</b></td><td>${esc([x.nota ? 'Nota ' + x.nota : '', x.motivo].filter(Boolean).join(' · '))}</td>
+          <td>${done ? '' : `<button class="btn btn-sm" data-pret-del="${esc(x.id)}" aria-label="Quitar">✕</button>`}</td></tr>`).join('')}</tbody></table></div>`
+        : '<p class="muted">Ninguna. Usa «+ Agregar» si el camión trajo mercancía que un cliente de otra hoja devolvió.</p>'}
       <div class="toolbar no-print"><button class="btn btn-sm" id="qAllStore" ${dis}>Todo lo que sobra → volvió a almacén</button><button class="btn btn-sm" id="qAllNext" ${dis}>Todo lo que sobra → siguiente carga</button></div>
       <div class="card" style="overflow:auto"><table class="inv liq-truck">
-        <thead><tr><th>Producto</th><th>UM</th><th class="n">Según hoja</th><th class="n">Entregado</th><th class="n in">Quedan</th><th class="n in">Carga</th><th class="n">Total</th><th class="n">Debe quedar</th><th class="n in">Devolución</th><th class="n">Diferencia</th><th class="in">Motivo si no cuadra</th><th>Lo que sobra</th></tr></thead>
+        <thead><tr><th>Producto</th><th>UM</th><th class="n">Según hoja</th><th class="n">Entregado</th><th class="n in">Quedan</th><th class="n in">Carga</th>${hasAnt ? '<th class="n">Dev. anteriores</th>' : ''}<th class="n">Total</th><th class="n">Debe quedar</th><th class="n in">Devolución</th><th class="n">Diferencia</th><th class="in">Motivo si no cuadra</th><th>Lo que sobra</th></tr></thead>
         <tbody>${rows.map((r) => `<tr data-key="${esc(r.key)}" class="${r.dev === null ? 'liq-count' : r.dif !== 0 ? 'liq-bad' : ''}">
           <td data-l="Producto"><span class="mono muted">${esc(r.code)}</span> ${esc(r.name)} <b>${esc(r.presentation)}</b></td><td><span class="um ${r.um}">${r.um}</span></td>
-          <td class="n" data-l="Según hoja">${r.pedido}</td><td class="n" data-l="Entregado"><b>${r.entregado}</b></td>
-          <td class="n in" data-l="Quedan"><input class="input qin small" inputmode="numeric" data-t="queda" value="${r.quedaMan || r.queda ? r.queda : ''}" placeholder="0" aria-label="Quedan ${esc(r.code)}" ${dis}></td>
+          <td class="n" data-l="Según hoja">${r.pedido}${r.noSalio ? `<div class="muted" style="font-size:11px">−${r.noSalio} no salió</div>` : ''}</td><td class="n" data-l="Entregado"><b>${r.entregado}</b></td>
+          <td class="n in" data-l="Quedan"><input class="input qin small" inputmode="numeric" data-t="queda" value="${r.quedaMan || r.queda ? r.queda : ''}" placeholder="0" aria-label="Quedan ${esc(r.code)}" ${dis}>${r.traia || r.quedaMan ? `<div class="muted" style="font-size:11px">${r.queda !== r.traia ? `<span class="warn-txt">traía ${r.traia}</span>` : 'traía ' + r.traia}${r.traia ? ' · de ' + esc(fromTxt(r)) : ''}</div>` : ''}</td>
           <td class="n in" data-l="Carga"><input class="input qin small" inputmode="numeric" data-t="carga" value="${r.carga}" aria-label="Carga ${esc(r.code)}" ${dis}></td>
-          <td class="n" data-l="Total">${r.total}</td><td class="n" data-l="Debe quedar"><b>${r.debe}</b></td>
+          ${hasAnt ? `<td class="n" data-l="Dev. anteriores">${r.anterior || ''}</td>` : ''}<td class="n" data-l="Total">${r.total}</td><td class="n" data-l="Debe quedar"><b>${r.debe}</b></td>
           <td class="n in" data-l="Devolución"><input class="input qin small" inputmode="numeric" data-t="dev" value="${r.dev === null ? '' : r.dev}" placeholder="contar" aria-label="Devolución ${esc(r.code)}" ${dis}></td>
           <td class="n ${r.dif ? 'warn-txt' : ''}" data-l="Diferencia"><b>${r.dif === null ? '' : r.dif}</b></td>
           <td class="in" data-l="Motivo"><input class="input sm" data-t="motivo" maxlength="80" list="liqMot" value="${esc(r.motivo)}" placeholder="${r.dif ? 'motivo' : '—'}" aria-label="Motivo ${esc(r.code)}" ${dis}></td>
-          <td data-l="Lo que sobra">${r.debe > 0 || r.dev > 0 ? `<select class="select sm" data-t="dest" ${dis}>${opt([['almacen', 'Volvió a almacén'], ['siguiente', 'Siguiente carga']], r.dest)}</select>` : ''}</td></tr>`).join('')}</tbody>
-        <tfoot><tr><td colspan="2"><b>TOTAL</b></td>${['pedido', 'entregado', 'queda', 'carga', 'total', 'debe', 'dev', 'dif'].map((k) => `<td class="n"><b>${nf0.format(rows.reduce((a, r) => a + (+r[k] || 0), 0))}</b></td>`).join('')}<td colspan="2"></td></tr></tfoot></table></div>
-      <p class="muted">Total = Quedan + Carga · Debe quedar = Total − Entregado · Diferencia = Debe quedar − Devolución. Si la diferencia no es 0, escribe el motivo. Quedan viene solo de la hoja anterior del mismo despachador; si no, escríbelo tú.</p>
+          <td data-l="Lo que sobra">${r.debe > 0 || r.dev > 0 ? destSel(r) : ''}</td></tr>`).join('')}</tbody>
+        <tfoot><tr><td colspan="2"><b>TOTAL</b></td>${['pedido', 'entregado', 'queda', 'carga', ...(hasAnt ? ['anterior'] : []), 'total', 'debe', 'dev', 'dif'].map((k) => `<td class="n"><b>${nf0.format(rows.reduce((a, r) => a + (+r[k] || 0), 0))}</b></td>`).join('')}<td colspan="2"></td></tr></tfoot></table></div>
+      <p class="muted">Total = Quedan + Carga${hasAnt ? ' + Dev. anteriores' : ''} · Debe quedar = Total − Entregado · Diferencia = Debe quedar − Devolución. Si la diferencia no es 0, escribe el motivo. Lo que sobra SIEMPRE se decide: vuelve a almacén o sigue en el camión a la siguiente carga del mismo despachador (nunca se pierde).</p>
 
       <div class="section-title">4 · Hoja de liquidación <span class="muted">(lo entregado a cada cliente; a la derecha el mismo cuadre del camión)</span></div>
       <div class="table-wrap"><table class="grid sheet-grid liq-grid">
@@ -1103,14 +1185,14 @@
         </thead>
         <tbody>${sh.rows.map((r) => `<tr data-key="${esc(r.key)}" class="${r.dev === null ? 'liq-count' : r.dif !== 0 ? 'liq-bad' : ''}">
           <td class="sticky-col"><span class="mono muted">${esc(r.code)}</span> ${esc(r.name)} <b>${esc(r.presentation)}</b> <span class="um ${r.um}">${r.um}</span></td>
-          ${r.cells.map((c) => `<td class="n ${c.del || c.ret ? '' : 'zero'}">${c.del ? nf0.format(c.del) : ''}${c.ret ? `<small class="ret" title="Devuelto">↩${c.ret}</small>` : ''}</td>`).join('')}
+          ${r.cells.map((c) => `<td class="n ${c.del || c.ret ? '' : 'zero'}">${c.del ? nf0.format(c.del) : ''}${c.ret ? (c.nf ? `<small class="ret" title="No facturado (misma nota)">⊘${c.ret}</small>` : `<small class="ret" title="Devuelto">↩${c.ret}</small>`) : ''}</td>`).join('')}
           <td class="n lq-tot">${r.entregado}</td><td class="n"><input class="cell-in" inputmode="numeric" data-t="queda" value="${r.quedaMan || r.queda ? r.queda : ''}" aria-label="Quedan ${esc(r.code)}" ${dis}></td>
           <td class="n"><input class="cell-in" inputmode="numeric" data-t="carga" value="${r.carga}" aria-label="Carga ${esc(r.code)}" ${dis}></td>
-          <td class="n">${r.total}</td><td class="n"><b>${r.debe}</b></td>
+          <td class="n">${r.total}${r.anterior ? `<small class="ret" title="Incluye devoluciones de entregas anteriores">+${r.anterior}↩ant</small>` : ''}</td><td class="n"><b>${r.debe}</b></td>
           <td class="n"><input class="cell-in" inputmode="numeric" data-t="dev" value="${r.dev === null ? '' : r.dev}" placeholder="contar" aria-label="Devolución ${esc(r.code)}" ${dis}></td>
           <td class="n"><b>${r.dif === null ? '' : r.dif}</b></td>
           <td><input class="cell-in wide" data-t="motivo" maxlength="80" list="liqMot" value="${esc(r.motivo)}" ${r.dif ? '' : 'placeholder="—"'} aria-label="Motivo ${esc(r.code)}" ${dis}></td>
-          <td>${r.debe > 0 || r.dev > 0 ? `<select class="select sm" data-t="dest" ${dis}>${opt([['almacen', 'Volvió a almacén'], ['siguiente', 'Siguiente carga']], r.dest)}</select>` : ''}</td>
+          <td>${r.debe > 0 || r.dev > 0 ? destSel(r) : ''}</td>
           <td class="n lq-usd">${usd(r.usd)}</td></tr>`).join('')}</tbody>
         <tfoot>
           <tr class="stick"><td class="sticky-col">TOTAL (cajas + unidades)</td>${sh.totals.bultos.map((v) => `<td class="n">${nf0.format(v)}</td>`).join('')}<td class="n lq-tot">${nf0.format(sh.totals.bultos.reduce((x, y) => x + y, 0))}</td><td colspan="8"></td><td></td></tr>
@@ -1141,18 +1223,22 @@
     };
     $('#qBack').onclick = () => { U().liqId = null; PV.render(); };
     $('#qXlsx').onclick = () => { const l = cur(), st = liqState(l), sh2 = Liq.sheet(st.os, st.liq, st.rows, st.vac);
-      Exporta.save(`liquidacion_${slug(Loads.labelOf(l))}_${l.date || today()}.xlsx`, [Exporta.liquidation(l, sh2, { rate: +S.config.exchangeRate || 0, productsById: byIdMap(S.products),
+      Exporta.save(`liquidacion_${slug(Loads.labelOf(l))}_${l.date || today()}.xlsx`, [Exporta.liquidation(l, sh2, { rate: +S.config.exchangeRate || 0, productsById: byIdMap(S.products), loadName: (id) => { const x = S.loads.find((y) => y.id === id); return x ? Loads.labelOf(x) : 'otra hoja'; },
         info: [`Fecha de la carga: ${l.date || '—'}`, `Pedidos del: ${Loads.orderDateRange(st.os) || '—'}`, `Ruta: ${l.route || '—'}`, `Despachador: ${l.dispatcherName || '—'}`, `Vendedor(es): ${l.sellerName || ''}`, Liq.isDone(l) ? 'LIQUIDADA' : 'BORRADOR'] })]); };
-    $('#qPrint').onclick = () => { const st = liqState(cur()); Print.printLiquidation(cur(), st, { config: S.config, products: S.products, productRank: productRank() }); };
+    $('#qPrint').onclick = () => { const st = liqState(cur()); Print.printLiquidation(cur(), st, { config: S.config, products: S.products, productRank: productRank(), loads: S.loads }); };
     const qc = $('#qClose'); if (qc) qc.onclick = () => closeLiquidation(cur(), root);
     const qr = $('#qReopen'); if (qr) qr.onclick = () => reopenLiquidation(cur(), root);
-    const setAll = (dest) => saveLiq((q) => rows.forEach((r) => { if (r.debe > 0 || r.dev > 0) q.truck[r.key] = { ...(q.truck[r.key] || {}), dest }; }));
+    const setAll = (dest) => saveLiq((q) => rows.forEach((r) => { if (r.debe > 0 || r.dev > 0) { const x = { ...(q.truck[r.key] || {}), dest }; delete x.destLoad; q.truck[r.key] = x; } }));
     const sa = $('#qAllStore'); if (sa) sa.onclick = () => setAll('almacen');
     const sn = $('#qAllNext'); if (sn) sn.onclick = () => setAll('siguiente');
 
     const pa = $('#qPrevAdd'); if (pa) pa.onclick = () => prevVacDialog(cur(), saveLiq);
+    const ra = $('#qRetAdd'); if (ra) ra.onclick = () => prevRetDialog(cur(), saveLiq);
     root.onclick = (e) => {
       const b = e.target.closest('[data-ret]'); if (b) returnsDialog(orderById(b.dataset.ret), saveLiq);
+      const nf = e.target.closest('[data-nf]'); if (nf) notBilledDialog(orderById(nf.dataset.nf), saveLiq);
+      const rd = e.target.closest('[data-pret-del]');
+      if (rd) saveLiq((q) => { q.prevRet = { ...(q.prevRet || {}) }; delete q.prevRet[rd.dataset.pretDel]; });
       const d = e.target.closest('[data-prev-del]');
       if (d) saveLiq((q) => { const en = { result: 'entregada', ...(q.orders[d.dataset.oid] || {}) }; en.prev = { ...(en.prev || {}) }; delete en.prev[d.dataset.prevDel]; q.orders[d.dataset.oid] = en; });
     };
@@ -1170,12 +1256,15 @@
         await saveLiq((q) => {
           const en = { result: 'entregada', ...(q.orders[oid] || {}) };
           en[k] = k === 'newValery' ? val.replace(/\s+/g, '').toUpperCase() : val;
-          if (k === 'result' && val === 'entregada') { delete en.ret; delete en.newValery; delete en.motivo; }
+          if (k === 'result' && val === 'entregada') { delete en.ret; delete en.nf; delete en.newValery; delete en.motivo; }
+          if (k === 'result' && val !== 'nofact') delete en.nf;
+          if (k === 'result' && val === 'nofact') { delete en.ret; delete en.newValery; }
           if (k === 'result' && val === 'anulada') delete en.newValery;
           if (k === 'result' && (val === 'pendiente' || val === 'anulada')) delete en.ret;
           q.orders[oid] = en;
         }, k === 'newValery' ? null : `tr[data-oid="${oid}"] [data-q="${k === 'result' ? (val === 'parcial' ? 'newValery' : 'result') : k}"]`);
         if (k === 'result' && val === 'parcial') returnsDialog(orderById(oid), saveLiq);
+        if (k === 'result' && val === 'nofact') notBilledDialog(orderById(oid), saveLiq);
         return;
       }
       if (t.dataset.v && tr && tr.dataset.pid) {
@@ -1192,7 +1281,9 @@
         const key = tr.dataset.key, f = t.dataset.t, raw = t.value.trim();
         await saveLiq((q) => {
           const x = { ...(q.truck[key] || {}) };
-          if (f === 'queda' || f === 'carga' || f === 'dev') { if (raw === '') delete x[f]; else x[f] = int(raw); } else x[f] = raw;
+          if (f === 'queda' || f === 'carga' || f === 'dev') { if (raw === '') delete x[f]; else x[f] = int(raw); }
+          else if (f === 'dest') { if (raw.startsWith('L:')) { x.dest = 'siguiente'; x.destLoad = raw.slice(2); } else { x.dest = raw; delete x.destLoad; } }
+          else x[f] = raw;
           q.truck[key] = x;
         }, f === 'motivo' ? null : `tr[data-key="${key}"] [data-t="${f}"]`);
       }
@@ -1266,6 +1357,110 @@
     };
   }
 
+  /**
+   * Mercancía devuelta de entregas anteriores: un cliente de OTRA hoja devolvió productos
+   * y los trajo este camión. Entran al cuadre (Total = Quedan + Carga + Dev. anteriores) y,
+   * como cualquier sobrante, vuelven a almacén o siguen a la siguiente carga.
+   */
+  function prevRetDialog(load, saveLiq) {
+    let pick = null, orders = [];
+    const sh = openSheet(`
+      <div class="row"><h2 class="grow">↩ Mercancía devuelta de entregas anteriores</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <p class="muted">Un cliente de otra hoja devolvió productos y los trajo el camión de <b>${esc(load.dispatcherName || 'esta hoja')}</b>.</p>
+      <label class="field"><span>Cliente</span><input class="input" id="prQ" placeholder="Buscar cliente…" autocomplete="off"></label><div class="suggest" id="prSug"></div>
+      <p id="prCl" class="muted">Ningún cliente elegido</p>
+      <label class="field"><span>Viene de (entrega anterior)</span><select class="select" id="prOrd"><option value="">— Elige el cliente —</option></select></label>
+      <label class="field"><span>Producto</span><select class="select" id="prProd"></select></label>
+      <div class="row" style="gap:10px;flex-wrap:wrap">
+        <label class="field"><span>UM</span><select class="select" id="prUm"><option value="CJ">Cajas</option><option value="UN">Unidades</option></select></label>
+        <label class="field"><span>Cantidad devuelta</span><input class="input" id="prQty" inputmode="numeric" placeholder="0"></label>
+        <label class="field"><span>Nota Valery (anulada / nueva)</span><input class="input mono" id="prNota" maxlength="20" placeholder="N°"></label></div>
+      <label class="field"><span>Motivo</span><select class="select" id="prMot"><option value="">— Motivo —</option>${Liq.MOTIVOS.map((m) => `<option>${esc(m)}</option>`).join('')}</select></label>
+      <div class="actions"><button class="btn btn-primary" id="prOk">Agregar</button></div>`);
+    const prodSel = $('#prProd', sh.el), ordSel = $('#prOrd', sh.el);
+    const fillProducts = () => {
+      const o = orders.find((x) => x.id === ordSel.value);
+      const lines = o ? Object.entries((o.delivery && o.delivery.lines) || o.lines || {}) : [];
+      const list = lines.length ? lines.map(([pid, l]) => [pid, `${l.code} ${l.name} ${l.presentation || ''} · entregó ${l.cajas ? l.cajas + ' cj' : ''}${l.cajas && l.unidades ? ' + ' : ''}${l.unidades ? l.unidades + ' un' : ''}`])
+        : S.products.filter((p) => !p.deleted).sort(PV.productSort()).map((p) => [p.id, `${p.code} ${p.name} ${p.presentation || ''}`]);
+      prodSel.innerHTML = '<option value="">— Producto —</option>' + list.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('');
+    };
+    fillProducts();
+    ordSel.onchange = fillProducts;
+    const qIn = $('#prQ', sh.el);
+    qIn.oninput = () => {
+      const t = norm(qIn.value).split(' ').filter(Boolean);
+      const hits = t.length ? S.clients.filter((c) => !c.deleted && t.every((x) => norm(c.name + ' ' + (c.rif || '')).includes(x))).slice(0, 12) : [];
+      $('#prSug', sh.el).innerHTML = hits.map((c) => `<button type="button" class="sug-item" data-cid="${esc(c.id)}"><b>${esc(c.name)}</b><span class="muted">${esc((sellerById(c.sellerId) || {}).name || '')}</span></button>`).join('');
+    };
+    sh.el.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-cid]'); if (!b) return;
+      const c = clientById(b.dataset.cid); if (!c) return;
+      pick = c; qIn.value = ''; $('#prSug', sh.el).innerHTML = '';
+      $('#prCl', sh.el).innerHTML = `Cliente: <b>${esc(c.name)}</b>`;
+      // Sus entregas de hojas ya liquidadas (las más recientes primero)
+      orders = S.orders.filter((o) => !o.deleted && o.clientId === c.id && o.delivery && o.delivery.at && o.loadId !== load.id)
+        .sort((a, b) => String(b.delivery.at).localeCompare(String(a.delivery.at))).slice(0, 30);
+      ordSel.innerHTML = '<option value="">— No sé / otra —</option>' + orders.map((o) => { const l = S.loads.find((x) => x.id === o.loadId);
+        return `<option value="${esc(o.id)}">${esc((l ? Loads.labelOf(l) + (l.number ? ' ' + Loads.loadCode(l) : '') : 'Sin hoja') + ' · ' + (o.delivery.date || o.routeDate || '') + ' · nota ' + (o.delivery.newValery || o.valeryNote || '—'))}</option>`; }).join('');
+      if (orders.length) ordSel.value = orders[0].id;
+      fillProducts();
+    });
+    $('#prOk', sh.el).onclick = async () => {
+      const pid = prodSel.value, qty = int($('#prQty', sh.el).value), um = $('#prUm', sh.el).value, motivo = $('#prMot', sh.el).value;
+      if (!pick) { toast('Elige el cliente', 'err'); return; }
+      if (!pid) { toast('Elige el producto', 'err'); return; }
+      if (qty <= 0) { toast('Escribe la cantidad', 'err'); return; }
+      if (!motivo) { toast('Elige el motivo', 'err'); return; }
+      const o = orders.find((x) => x.id === ordSel.value) || null, l = o ? S.loads.find((x) => x.id === o.loadId) : null;
+      const line = o ? ((o.delivery && o.delivery.lines) || o.lines || {})[pid] : null;
+      const got = line ? (um === 'CJ' ? +line.cajas || 0 : +line.unidades || 0) : null;
+      if (got !== null && qty > got && !confirm(`Ojo: en esa entrega llevó ${got} ${um === 'CJ' ? 'cajas' : 'unidades'} y estás registrando ${qty} devueltas.\n\n¿Agregar de todos modos?`)) return;
+      const p = productById(pid) || {};
+      sh.close();
+      await saveLiq((q) => {
+        q.prevRet = { ...(q.prevRet || {}) };
+        q.prevRet[DB.uid('pr')] = { clientId: pick.id, clientName: pick.name, orderId: o ? o.id : '', loadId: o ? o.loadId || '' : '', label: l ? Loads.labelOf(l) + (l.number ? ' ' + Loads.loadCode(l) : '') : '',
+          pid, code: p.code || (line && line.code) || '', name: p.name || (line && line.name) || '', um, qty, nota: $('#prNota', sh.el).value.replace(/\s+/g, '').toUpperCase(), motivo, at: DB.now() };
+      });
+      toast(`${qty} ${um} de ${p.name || pid} · ${pick.name}`, 'ok');
+    };
+  }
+
+  /**
+   * No se facturó todo (misma nota Valery): por producto, lo que SÍ salió en la nota y
+   * por qué no salió lo demás — «no había» (nunca salió del almacén: no cuenta como carga)
+   * o «va en el camión» (se cargó pero no se facturó: vuelve como sobrante).
+   * El pedido original no se toca (queda en el historial).
+   */
+  function notBilledDialog(o, saveLiq) {
+    if (!o) return;
+    const l0 = (S.loads.find((l) => l.id === o.loadId) || {}).liq || {};
+    const e = Liq.entry(l0, o.id);
+    const lines = Object.entries(o.lines || {}).filter(([, l]) => (+l.cajas || 0) || (+l.unidades || 0));
+    const whySel = (pid, cur) => `<select class="select sm nf-why" data-pid="${esc(pid)}"><option value="nohabia" ${cur !== 'camion' ? 'selected' : ''}>No había · no salió del almacén</option><option value="camion" ${cur === 'camion' ? 'selected' : ''}>Error de facturación · va en el camión</option></select>`;
+    const sh = openSheet(`
+      <div class="row"><h2 class="grow">⊘ No se facturó todo · ${esc(o.clientName)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <p class="muted">Misma nota Valery <b>${esc(o.valeryNote || '—')}</b>. Escribe lo que <b>sí salió en la nota</b>; lo demás no se le entrega al cliente.</p>
+      <table class="lines">${lines.map(([pid, l]) => { const r = (e.nf || {})[pid] || {}; return `<tr><td><b>${esc(l.name)} ${esc(l.presentation || '')}</b><div class="muted mono" style="font-size:12px">${esc(l.code)} · pedido ${l.cajas ? l.cajas + ' cj' : ''}${l.cajas && l.unidades ? ' + ' : ''}${l.unidades ? l.unidades + ' un' : ''}</div></td>
+        <td style="white-space:nowrap">${l.cajas ? `<label class="mini">CJ <input class="input mini-in" inputmode="numeric" data-pid="${esc(pid)}" data-k="cajas" data-max="${l.cajas}" value="${l.cajas - (+r.cajas || 0)}"></label>` : ''}
+          ${l.unidades ? `<label class="mini">UN <input class="input mini-in" inputmode="numeric" data-pid="${esc(pid)}" data-k="unidades" data-max="${l.unidades}" value="${l.unidades - (+r.unidades || 0)}"></label>` : ''}
+          <div style="margin-top:4px">${whySel(pid, r.why)}</div></td></tr>`; }).join('')}</table>
+      <div class="actions"><button class="btn btn-primary" id="nfOk">Guardar</button></div>`, { wide: true });
+    $('#nfOk', sh.el).onclick = async () => {
+      const nf = {}, why = {};
+      sh.el.querySelectorAll('.nf-why').forEach((s2) => { why[s2.dataset.pid] = s2.value; });
+      sh.el.querySelectorAll('.mini-in').forEach((i) => {
+        const max = +i.dataset.max || 0, salio = Math.min(max, Math.max(0, int(i.value))), falta = max - salio;
+        if (falta) { nf[i.dataset.pid] = nf[i.dataset.pid] || { why: why[i.dataset.pid] || 'nohabia' }; nf[i.dataset.pid][i.dataset.k] = falta; }
+      });
+      sh.close();
+      const anyHabia = Object.values(nf).some((x) => x.why === 'nohabia');
+      await saveLiq((q) => { const en = { ...(q.orders[o.id] || {}), result: 'nofact', nf }; delete en.ret; delete en.newValery;
+        if (!en.motivo) en.motivo = anyHabia ? 'NO HABÍA (NO SALIÓ DEL ALMACÉN)' : 'ERROR FACTURACIÓN'; q.orders[o.id] = en; });
+    };
+  }
+
   /** Qué devolvió el cliente (devolución parcial): cajas y unidades por producto. */
   function returnsDialog(o, saveLiq) {
     if (!o) return;
@@ -1296,6 +1491,8 @@
     if (probs.length) { toast('Revisa la lista «Antes de cerrar» al final de la pantalla', 'err'); return; }
     const pend = os.filter((o) => Liq.entry(liq, o.id).result === 'pendiente');
     const nextRows = rows.filter((r) => r.dest === 'siguiente' && r.dev > 0);
+    const older = Liq.olderUnliquidated(load, S.loads, Loads.isClosed);
+    if (older.length && !confirm(`⚠ ${load.dispatcherName || 'El despachador'} tiene ${older.length} hoja(s) ANTERIOR(es) sin liquidar: ${older.map((l) => Loads.labelOf(l)).join(', ')}.\n\nLo que sobró en ellas no pasará a esta hoja. ¿Cerrar esta de todos modos?`)) return;
     if (!confirm(`Cerrar la liquidación de ${Loads.labelOf(load)}:\n\n• ${os.length} clientes · entregado ${usd(os.reduce((a, o) => a + Matrix.orderTotals(Liq.delivered(o, liq)).monto, 0))}${pend.length ? `\n• ${pend.length} pedido(s) vuelven a la cola para la próxima hoja` : ''}${nextRows.length ? `\n• ${nextRows.length} producto(s) quedan en el camión para la siguiente carga de ${load.dispatcherName}` : ''}\n\n¿Continuar?`)) return;
     const at = DB.now(), by = (S.config && S.config.adminName) || 'Oficina';
     const vacBy = {};
@@ -1322,18 +1519,19 @@
       }
     });
     const carryRows = Object.fromEntries(nextRows.map((r) => [r.key, r.dev]));
-    const newLiq = { ...liq, status: 'cerrada', closedAt: at, closedBy: by, carryFrom: carry ? carry.fromId : null,
-      carry: nextRows.length ? { dispatcherId: load.dispatcherId || '', rows: carryRows } : null, carryUsedBy: liq.carryUsedBy || null,
+    const newLiq = { ...liq, status: 'cerrada', closedAt: at, closedBy: by, carryFrom: carry ? carry.fromIds : null,
+      carry: nextRows.length ? { dispatcherId: load.dispatcherId || '', rows: carryRows, to: Object.fromEntries(nextRows.filter((r) => r.destLoad).map((r) => [r.key, r.destLoad])), used: {} } : null, carryUsedBy: null,
       // Foto del camión al cierre (reportes de despachos y diferencias)
       snapshot: { rows: rows.map((r) => ({ key: r.key, code: r.code, name: r.name, presentation: r.presentation, um: r.um, pedido: r.pedido, entregado: r.entregado,
-        queda: r.queda, carga: r.carga, total: r.total, debe: r.debe, dev: r.dev, dif: r.dif, motivo: r.motivo, dest: r.dest })) },
+        traia: r.traia, queda: r.queda, carga: r.carga, anterior: r.anterior, noSalio: r.noSalio, total: r.total, debe: r.debe, dev: r.dev, dif: r.dif, motivo: r.motivo, dest: r.dest, destLoad: r.destLoad || '' })) },
       totals: { clients: updOrders.filter((o) => Matrix.orderTotals({ lines: o.delivery.lines }).items > 0).length, monto: updOrders.reduce((a, o) => a + o.delivery.monto, 0),
         v2: true, ...(() => { const t = { cajas: 0, unidades: 0, bultos: 0, totalUnidades: 0 }; updOrders.forEach((o) => { const x = Matrix.orderTotals({ lines: o.delivery.lines }); t.cajas += x.cajas; t.unidades += x.unidades; t.bultos += x.bultos; t.totalUnidades += x.totalUnidades; }); return t; })(),
-        parcial: os.filter((o) => Liq.entry(liq, o.id).result === 'parcial').length, pendiente: pend.length,
+        parcial: os.filter((o) => Liq.entry(liq, o.id).result === 'parcial').length, nofact: os.filter((o) => Liq.entry(liq, o.id).result === 'nofact').length, pendiente: pend.length,
         anulada: os.filter((o) => Liq.entry(liq, o.id).result === 'anulada').length } };
     await saveDocs('orders', updOrders.concat(clones));
     const loadsToSave = [{ ...load, liq: newLiq }];
-    if (carry) { const src = S.loads.find((l) => l.id === carry.fromId); if (src && src.liq) loadsToSave.push({ ...src, liq: { ...src.liq, carryUsedBy: load.id } }); }
+    // TODO el sobrante pendiente del despachador queda tomado por esta hoja (nada se queda olvidado)
+    if (carry) carry.sources.forEach((x) => { const src = S.loads.find((l) => l.id === x.id); if (src && src.liq) loadsToSave.push(Liq.markUsed(src, Object.keys(x.rows), load.id)); });
     await saveDocs('loads', loadsToSave);
     await log('liquidacion', `Liquidó ${Loads.labelOf(load)} (${load.dispatcherName || 'sin despachador'}) · ${os.length} clientes · ${usd(newLiq.totals.monto)}${newLiq.totals.parcial ? ` · ${newLiq.totals.parcial} devoluciones` : ''}${pend.length ? ` · ${pend.length} reprogramados` : ''}${newLiq.totals.anulada ? ` · ${newLiq.totals.anulada} anuladas` : ''}`, { loadId: load.id });
     if (U().kx) U().kx.at = 0; // el kardex se vuelve a leer al abrir Envases
@@ -1348,17 +1546,23 @@
     const clones = S.orders.filter((o) => !o.deleted && o.pendingFrom && os.some((x) => x.id === o.pendingFrom));
     const stuck = clones.filter((c) => !Loads.editable(c));
     if (stuck.length) { toast(`No se puede reabrir: ${stuck.map((c) => c.clientName).join(', ')} ya salió en otra hoja aprobada`, 'err'); return; }
-    if (load.liq && load.liq.carryUsedBy && load.liq.carryUsedBy !== load.id) {
-      const u = S.loads.find((l) => l.id === load.liq.carryUsedBy);
-      if (u && Liq.isDone(u)) { toast(`No se puede reabrir: su carga ya se usó en ${Loads.labelOf(u)}, que está liquidada`, 'err'); return; }
-    }
+    // Lo que sobró aquí ya lo tomó otra hoja liquidada (o se descargó en almacén): reabrir lo descuadraría
+    const usedBy = load.liq && load.liq.carry ? [...new Set([load.liq.carryUsedBy, ...Object.values(load.liq.carry.used || {})].filter(Boolean))] : [];
+    if (usedBy.includes('almacen')) { toast('No se puede reabrir: lo que sobró en esta hoja ya se descargó en almacén (Sobrante en camiones)', 'err'); return; }
+    const usedDone = usedBy.map((id) => S.loads.find((l) => l.id === id)).find((u) => u && u.id !== load.id && Liq.isDone(u));
+    if (usedDone) { toast(`No se puede reabrir: lo que sobró ya lo tomó ${Loads.labelOf(usedDone)}, que está liquidada. Reabre primero esa.`, 'err'); return; }
     const motivo = (prompt('Motivo para reabrir la liquidación:') || '').trim();
     if (!motivo) return;
     await saveDocs('orders', os.filter((o) => o.delivery).map((o) => ({ ...o, delivery: null }))
       .concat(clones.map((c) => ({ ...c, deleted: true, deletedBy: 'oficina', deletedAt: DB.now() }))));
     const loadsToSave = [{ ...load, liq: { ...load.liq, status: 'borrador', closedAt: null, reopenedAt: DB.now(), reopenReason: motivo } }];
-    const src = load.liq && load.liq.carryFrom ? S.loads.find((l) => l.id === load.liq.carryFrom) : null;
-    if (src && src.liq && src.liq.carryUsedBy === load.id) loadsToSave.push({ ...src, liq: { ...src.liq, carryUsedBy: null } });
+    // El sobrante que tomó vuelve a quedar pendiente en sus hojas de origen
+    const from = load.liq ? (Array.isArray(load.liq.carryFrom) ? load.liq.carryFrom : load.liq.carryFrom ? [load.liq.carryFrom] : []) : [];
+    from.forEach((id) => {
+      const src = S.loads.find((l) => l.id === id); if (!src || !src.liq || !src.liq.carry) return;
+      const mine = Object.keys(src.liq.carry.rows || {}).filter((k) => (src.liq.carryUsedBy || (src.liq.carry.used || {})[k]) === load.id);
+      if (mine.length) loadsToSave.push(Liq.markUsed(src, mine, null));
+    });
     await saveDocs('loads', loadsToSave);
     await log('liquidacion', `Reabrió la liquidación de ${Loads.labelOf(load)} · motivo: ${motivo}`, { loadId: load.id });
     if (U().kx) U().kx.at = 0;

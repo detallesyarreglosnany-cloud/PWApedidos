@@ -183,7 +183,7 @@
     const ttl = `LIQUIDACIÓN · ${L ? L.labelOf(load) : ''}${load.number && L ? ' · ' + L.loadCode(load) : ''}`;
     rows.push([{ v: ttl, s: S.title }]);
     rows.push([{ v: (meta.info || []).filter(Boolean).join('   ·   '), s: S.sub }]);
-    rows.push([{ v: 'Amarillo = lo escribes tú · Azul = se calcula solo (Total = Quedan + Carga · Debe quedar = Total − Entregado · Diferencia = Debe quedar − Devolución)', s: S.note }]);
+    rows.push([{ v: 'Amarillo = lo escribes tú · Azul = se calcula solo (Total = Quedan + Carga + devuelto de entregas anteriores · Debe quedar = Total − Entregado · Diferencia = Debe quedar − Devolución)', s: S.note }]);
     const blankR = (k) => new Array(k).fill(null);
     const lab = (t) => ({ v: t, s: { b: true, size: 9, align: 'right' } });
     rows.push([null, lab('VENDEDOR →'), null, ...sh.cols.map((c) => ({ v: L ? L.initials(c.order.sellerName) : '', s: S.ini }))]);
@@ -208,12 +208,12 @@
         { v: r.entregado, f: n ? `SUM(${a(first)}:${a(last)})` : undefined, s: kindStyle('int', { b: true, ...CALC }) },
         { v: blank0(r.queda), s: kindStyle('int', IN) },
         { v: r.carga, s: kindStyle('int', IN) },
-        { v: r.total, f: `${a(Q)}+${a(C)}`, s: kindStyle('int', CALC) },
+        { v: r.total, f: `${a(Q)}+${a(C)}${r.anterior ? '+' + r.anterior : ''}`, s: kindStyle('int', CALC) },
         { v: r.debe, f: `${a(T)}-${a(E)}`, s: kindStyle('int', { b: true, ...CALC }) },
         { v: r.dev, s: kindStyle('int', IN) },
         { v: r.dif === null ? '' : r.dif, f: `IF(${a(DV)}="","",${a(DQ)}-${a(DV)})`, s: kindStyle('int', { b: true, ...CALC, ...(bad ? { color: '#B00020' } : {}) }) },
         { v: r.motivo || null, s: cell(IN) },
-        { v: r.debe > 0 || r.dev > 0 ? (r.dest === 'siguiente' ? 'Siguiente carga' : 'Volvió a almacén') : null, s: cell({}) },
+        { v: r.debe > 0 || r.dev > 0 ? (r.dest === 'siguiente' ? (r.destLoad && meta.loadName ? '→ ' + meta.loadName(r.destLoad) : 'Siguiente carga') : r.dest === 'almacen' ? 'Volvió a almacén' : 'SIN DECIDIR') : null, s: cell({}) },
         { v: price || null, s: kindStyle('money') },
         { v: Math.round(r.entregado * price * 100) / 100, f: `${a(E)}*${a(P)}`, s: kindStyle('money', { b: true }) }]);
     });
@@ -249,7 +249,12 @@
     rows.push([]);
     { const c = Liq.cuadre(sh, meta.productsById), t = Liq.cuadreLines(c, (v) => '$' + (Math.round(v * 100) / 100).toFixed(2));
       rows.push([null, { v: 'CUADRE EN DÓLARES', s: S.tot }]);
-      t.lines.concat([t.verdict], t.extra).forEach((x) => rows.push([null, { v: x, s: S.sub }])); }
+      t.lines.concat([t.verdict], t.extra).forEach((x) => rows.push([null, { v: x, s: S.sub }]));
+      const pr = Liq.prevRetRows(load.liq);
+      if (pr.length) {
+        rows.push([null, { v: 'MERCANCÍA DEVUELTA DE ENTREGAS ANTERIORES (entra al TOTAL)', s: S.tot }]);
+        pr.forEach((x) => rows.push([null, { v: `${x.clientName} — ${x.qty} ${x.um} ${x.code || ''} ${x.name || ''}${x.label ? ' · de ' + x.label : ''}${x.nota ? ' · nota ' + x.nota : ''} · ${x.motivo || ''}`, s: S.sub }]));
+      } }
     rows.push([]);
     rows.push([null, { v: 'Despachador: ____________________     Almacén: ____________________     Liquidó (oficina): ____________________     Gerencia: ____________________', s: S.sub }]);
     const widths = [9, 34, 5, ...sh.cols.map(() => 6.5), 10, 9, 9, 9, 10, 10, 10, 22, 15, 9, 11];

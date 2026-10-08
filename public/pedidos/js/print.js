@@ -172,10 +172,10 @@
     const body = sh.rows.map((r) => {
       const first = lastCat !== null && r.category !== lastCat; lastCat = r.category;
       return `<tr class="${first ? 'grp ' : ''}${r.dif ? 'nov' : ''}"><td class="p"><span class="muted">${esc(r.code)}</span> ${esc(r.name)} <b>${esc(r.presentation)}</b> <span class="um">${r.um}</span></td>
-        ${r.cells.map((c) => `<td class="num${c.del ? ' has' : ''}">${c.del ? nf0.format(c.del) : ''}${c.ret ? `<span class="ret">↩${c.ret}</span>` : ''}</td>`).join('')}
-        <td class="num tot">${nf0.format(r.entregado)}</td><td class="num">${r.queda ? nf0.format(r.queda) : ''}</td><td class="num">${nf0.format(r.carga)}</td><td class="num">${nf0.format(r.total)}</td>
+        ${r.cells.map((c) => `<td class="num${c.del ? ' has' : ''}">${c.del ? nf0.format(c.del) : ''}${c.ret ? `<span class="ret">${c.nf ? '⊘' : '↩'}${c.ret}</span>` : ''}</td>`).join('')}
+        <td class="num tot">${nf0.format(r.entregado)}</td><td class="num">${r.queda ? nf0.format(r.queda) : ''}</td><td class="num">${nf0.format(r.carga)}</td><td class="num">${nf0.format(r.total)}${r.anterior ? `<span class="ret">+${r.anterior}↩ant</span>` : ''}</td>
         <td class="num tot">${nf0.format(r.debe)}</td><td class="num">${r.dev === null ? '' : nf0.format(r.dev)}</td><td class="num tot">${r.dif === null ? '' : nf0.format(r.dif)}</td>
-        <td class="mot">${esc(r.motivo)}</td><td class="mot">${r.debe > 0 || r.dev > 0 ? (r.dest === 'siguiente' ? 'Sig. carga' : 'Almacén') : ''}</td><td class="num usd">${nf2.format(r.usd)}</td></tr>`;
+        <td class="mot">${esc(r.motivo)}</td><td class="mot">${r.debe > 0 || r.dev > 0 ? (r.dest === 'siguiente' ? (r.destLoad ? '→ ' + esc(((ctx.loads || []).find((l) => l.id === r.destLoad) && Loads.labelOf((ctx.loads || []).find((l) => l.id === r.destLoad))) || 'otra hoja') : 'Sig. carga') : r.dest === 'almacen' ? 'Almacén' : '¿?') : ''}</td><td class="num usd">${nf2.format(r.usd)}</td></tr>`;
     }).join('');
     const foot = `<tr class="tot"><td>TOTAL (cajas + unidades)</td>${sh.totals.bultos.map((v) => `<td class="num">${nf0.format(v)}</td>`).join('')}<td class="num tot">${nf0.format(sh.totals.bultos.reduce((x, y) => x + y, 0))}</td>${blankR(R - 1)}</tr>
       <tr class="tot money"><td>TOTAL $ POR CLIENTE</td>${sh.totals.monto.map((v) => `<td class="num">${nf2.format(v)}</td>`).join('')}${blankR(R - 1)}<td class="num usd">${nf2.format(sh.totals.usd)}</td></tr>
@@ -194,6 +194,7 @@
         <div><b>Estado</b>${done ? 'Liquidada ' + esc(fdate(liq.closedAt)) : 'BORRADOR'}</div>
         <div><b>Clientes</b>${n}</div>
         <div><b>Total entregado $</b>${nf2.format(sh.totals.usd)}</div>
+        <div><b>Quedan viene de</b>${(() => { const ids = Array.isArray(liq.carryFrom) ? liq.carryFrom : liq.carryFrom ? [liq.carryFrom] : (st.carry ? st.carry.fromIds : []); const ls = (ctx.loads || []).filter((l) => ids.includes(l.id)); return ls.length ? ls.map((l) => esc(Loads.labelOf(l) + (l.number ? ' ' + Loads.loadCode(l) : ''))).join(' + ') : (ids.length ? ids.length + ' hoja(s)' : 'nada (camión vacío)'); })()}</div>
       </div>
       <table class="load liq ${n > 14 ? 'many' : ''}"><thead>
         <tr class="ini"><th style="text-align:right">VENDEDOR →</th>${sh.cols.map((c) => `<th>${esc(Loads.initials(c.order.sellerName))}</th>`).join('')}${blankR(R).replace(/td/g, 'th')}</tr>
@@ -202,11 +203,12 @@
         <tr><th style="text-align:left">PRODUCTO</th>${sh.cols.map((c, i) => `<th class="cl"><div>${i + 1}. ${esc(c.order.clientName)}</div></th>`).join('')}
           ${['ENTREGADO', 'QUEDAN', 'CARGA', 'TOTAL', 'DEBE QUEDAR', 'DEVOLUCIÓN', 'DIFERENCIA', 'MOTIVO', 'LO QUE SOBRA', 'TOTAL $'].map((x) => `<th class="cl rt"><div>${x}</div></th>`).join('')}</tr></thead>
         <tbody>${body}</tbody><tfoot>${foot}</tfoot></table>
-      ${novs.length ? `<p class="novs"><b>Novedades:</b> ${novs.map(({ c, i }) => `${i + 1}. ${esc(c.order.clientName)} — ${esc(Liq.shortResult(c.entry).toLowerCase())}${c.entry.result === 'parcial' || c.entry.result === 'anulada' ? ` · nota ${esc(c.order.valeryNote || '—')} anulada` : ''}${c.entry.newValery && c.entry.result === 'parcial' ? ` → nueva ${esc(c.entry.newValery)}` : ''}${c.entry.motivo ? ` · ${esc(c.entry.motivo)}` : ''}`).join(' &nbsp;|&nbsp; ')}</p>` : ''}
+      ${novs.length ? `<p class="novs"><b>Novedades:</b> ${novs.map(({ c, i }) => `${i + 1}. ${esc(c.order.clientName)} — ${esc(Liq.shortResult(c.entry).toLowerCase())}${c.entry.result === 'parcial' || c.entry.result === 'anulada' ? ` · nota ${esc(c.order.valeryNote || '—')} anulada` : ''}${c.entry.newValery && c.entry.result === 'parcial' ? ` → nueva ${esc(c.entry.newValery)}` : ''}${c.entry.result === 'nofact' ? ' · misma nota ' + esc(c.order.valeryNote || '—') + ': ' + Object.entries(c.entry.nf || {}).map(([pid, r]) => { const l = (c.order.lines || {})[pid] || {}; return `${[r.cajas ? r.cajas + ' cj' : '', r.unidades ? r.unidades + ' un' : ''].filter(Boolean).join('+')} ${esc(l.name || pid)} (${r.why === 'camion' ? 'en camión' : 'no salió'})`; }).join(', ') : ''}${c.entry.motivo ? ` · ${esc(c.entry.motivo)}` : ''}`).join(' &nbsp;|&nbsp; ')}</p>` : ''}
+      ${(() => { const pr = Liq.prevRetRows(liq); return pr.length ? `<p class="novs"><b>Mercancía devuelta de entregas anteriores (entra al TOTAL):</b> ${pr.map((x) => `${esc(x.clientName)} — ${x.qty} ${esc(x.um)} ${esc(x.code || '')} ${esc(x.name || '')}${x.label ? ' · de ' + esc(x.label) : ''}${x.nota ? ' · nota ' + esc(x.nota) : ''} · ${esc(x.motivo || '')}`).join(' &nbsp;|&nbsp; ')}</p>` : ''; })()}
       ${(() => { const pv = Liq.prevRows(st.os, liq); return pv.length ? `<p class="novs"><b>Vacíos de entregas anteriores (trajo el despachador):</b> ${pv.map((p) => `${esc(p.client)} — ${p.qty} ${esc(p.type)}${p.from === 'dev_asignado' ? ' (asignados)' : ''}${p.motivo ? ' · ' + esc(p.motivo) : ''}`).join(' &nbsp;|&nbsp; ')}</p>` : ''; })()}
       ${st.vac.some((v) => v.pending) ? `<p class="novs"><b>Vacíos que quedan debiendo:</b> ${st.vac.filter((v) => v.pending).map((v) => `${esc(v.client)} — ${v.pending} ${esc(v.code)} (${esc(v.motivo || (v.regime === 'prestamo' ? 'PRÉSTAMO' : 'sin motivo'))})`).join(' &nbsp;|&nbsp; ')}</p>` : ''}
       ${(() => { const c = Liq.cuadre(sh, ctx.products ? new Map(ctx.products.map((p) => [p.id, p])) : null), t = Liq.cuadreLines(c, (v) => '$' + nf2.format(v)); return `<div class="cuadre ${c.ok ? '' : 'bad'}"><b>CUADRE EN DÓLARES</b>${t.lines.map((x) => `<div>${esc(x)}</div>`).join('')}<div class="verdict">${esc(t.verdict)}</div>${t.extra.map((x) => `<div>${esc(x)}</div>`).join('')}</div>`; })()}
-      <p class="muted foot">↩ = devuelto por el cliente · Total = Quedan + Carga · Debe quedar = Total − Entregado · Diferencia = Debe quedar − Devolución · Vacíos: Despachados − Recibidos − Asignados = Quedan debiendo · Vac. anteriores = devueltos de entregas anteriores · Que entran = Recibidos + Anteriores.</p>
+      <p class="muted foot">↩ = devuelto por el cliente · ⊘ = no facturado (misma nota) · Total = Quedan + Carga (+ ↩ant = devuelto de entregas anteriores) · Debe quedar = Total − Entregado · Diferencia = Debe quedar − Devolución · Vacíos: Despachados − Recibidos − Asignados = Quedan debiendo · Vac. anteriores = devueltos de entregas anteriores · Que entran = Recibidos + Anteriores.</p>
       <div class="sign"><div>Despachador</div><div>Almacén</div><div>Liquidó (oficina)</div><div>Gerencia</div></div>
       </section>`;
   }
@@ -408,5 +410,16 @@
     printHTML('Ticket de prueba', ticketCSS(opts.width), ticketHTML(demo, { ...ctx, load: null }, opts, `PRUEBA · ${opts.width} mm`));
   }
 
-  global.Print = { printLoadSheet, printNotes, printLiquidation, printKardex, printQuincena, printTickets, printTestTicket };
+  /** Cuadre de despachos (camiones) de un período, por despachador. */
+  function printTruckLedger(L, ctx) {
+    const body = `<section class="sheet">${header(ctx.config, 'CUADRE DE DESPACHOS', ctx.from.split('-').reverse().join('/') + ' al ' + ctx.to.split('-').reverse().join('/'))}
+      <p class="muted">Venía + Ajustes de QUEDAN + Cargado + Dev. anteriores − Entregado − Volvió a almacén − Diferencia − Corte = Queda en el camión · Faltante a cobrar = diferencias que faltan + lo que faltó en el corte.</p>
+      ${L.map((d) => `<h3>${esc(d.name)} · ${d.ok ? '✓ CUADRA' : '⚠ NO CUADRA'}${d.faltantes.length ? ' · FALTANTE A COBRAR: ' + esc(d.faltantes.map((r) => r.faltante + ' ' + ctx.name(r.key)).join(', ')) : ''}</h3>
+        <table class="load wide"><thead><tr><th style="text-align:left">PRODUCTO</th>${ctx.cols.map(([, t]) => `<th>${esc(t.toUpperCase())}</th>`).join('')}<th>FALTANTE A COBRAR</th><th>CUADRE</th></tr></thead>
+        <tbody>${d.rows.map((r) => `<tr><td>${esc(ctx.name(r.key))}</td>${ctx.cols.map(([k]) => `<td class="num">${r[k] ? nf0.format(r[k]) : ''}</td>`).join('')}<td class="num tot">${r.faltante || ''}</td><td>${r.descuadre ? '⚠ ' + (r.descuadre > 0 ? 'faltan ' : 'sobran ') + Math.abs(r.descuadre) : '✓'}</td></tr>`).join('')}</tbody></table>`).join('')}
+      <div class="sign"><div>Despachador</div><div>Almacén</div><div>Oficina</div><div>Gerencia</div></div></section>`;
+    printHTML('Cuadre de despachos ' + ctx.from + ' a ' + ctx.to, LOAD_CSS + ' table.load.wide{width:100%} h3{font-size:12px;margin:10px 0 3px} @page{size:letter landscape;margin:8mm}', body);
+  }
+
+  global.Print = { printTruckLedger, printLoadSheet, printNotes, printLiquidation, printKardex, printQuincena, printTickets, printTestTicket };
 })(window);

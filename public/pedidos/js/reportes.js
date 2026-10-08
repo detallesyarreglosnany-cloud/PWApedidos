@@ -28,7 +28,7 @@
   }
 
   const MONTHS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
-  const RES = { parcial: 'Devolución parcial', pendiente: 'Se entrega después', anulada: 'Anulada', entregada: 'Entregada' };
+  const RES = { parcial: 'Devolución parcial', nofact: 'No facturado (misma nota)', pendiente: 'Se entrega después', anulada: 'Anulada', entregada: 'Entregada' };
   const titleOf = (f) => (f.mode === 'q' ? `${f.half === 1 ? '1ª' : '2ª'} quincena de ${MONTHS[f.m - 1]} ${f.y}` : 'Rango libre');
 
   /**
@@ -312,6 +312,7 @@
           <div class="muted" style="margin-top:4px">${d.pendingLoads.map((l) => `${esc(fmtDate(l.date))} · ${esc(l.label || l.code)} · ${esc(l.dispatcherName || 'sin despachador')} · ${usd(l.monto)} (${esc(l.liq)})`).join('<br>')}</div></div>` : '<div class="hint">✓ Todas las hojas del período están liquidadas.</div>'}
         ${d.sinFoto ? `<div class="hint">${d.sinFoto} hoja(s) se liquidaron antes de esta versión: no tienen el detalle de diferencias del camión.</div>` : ''}
         <div class="card card-pad no-print" id="xcBox" style="margin-bottom:12px"></div>
+        <div id="tlBox"></div>
         <div class="toolbar no-print"><button class="btn" id="qzPrint">🖨 Imprimir reporte</button><button class="btn" id="qzCsv">⇩ Excel</button></div>
         <div class="kpi-row">
           <div class="kpi"><small>Venta liquidada</small><b>${usd(t.monto)}</b><small>${nf0.format(t.clients)} clientes · ${t.hojas} hojas · lo que paga el cliente</small></div>
@@ -343,9 +344,43 @@
         ${tbl('Vacíos por vendedor del cliente', [{ t: 'Vendedor' }, { t: 'Tipo' }, N('Despachados'), N('Recibidos'), N('Asignados'), N('Quedan debiendo'), N('Devueltos entregas anteriores'), N('Total que entran')], vacPeople(d.vacios.bySeller))}
         <p class="muted">${d.detail.length} clientes entregados en el período. El detalle completo va en el Excel.</p>`;
       renderCompare($('#xcBox'), d, st);
+      renderLedger($('#tlBox'), d.from, d.to);
       $('#qzPrint').onclick = () => global.Print.printQuincena(d, { config: S.config, title: titleOf(f2), RES });
       $('#qzCsv').onclick = () => global.Exporta.save(`reporte_${d.from}_a_${d.to}.xlsx`, reportSheets(d, titleOf(f2), S.config.rubros));
     }
+  }
+
+  /* -------- Cuadre de despachos (camiones) y kardex del camión, por despachador -------- */
+  const LCOLS = [['inicio', 'Venía de antes'], ['ajuste', 'Ajustes de QUEDAN'], ['cargado', 'Cargado'], ['anterior', 'Dev. entregas anteriores'], ['entregado', 'Entregado'],
+    ['almacen', 'Volvió a almacén'], ['dif', 'Diferencia'], ['corteRec', 'Corte: llegó al almacén'], ['corteFalt', 'Corte: faltó'], ['final', 'Queda en el camión']];
+  function ledgerName(k) { const [pid, um] = k.split('|'), p = global.PV.productById(pid) || {}; return `${p.code || pid} ${p.name || ''} ${p.presentation || ''} ${um}`.replace(/\s+/g, ' ').trim(); }
+  function renderLedger(box, from, to) {
+    const { S, esc, nf0, fmtDate } = global.PV;
+    if (!box) return;
+    const L = global.Liq.truckLedger(S.loads, from, to);
+    const loadName = (id) => { const l = S.loads.find((x) => x.id === id); return l ? global.Loads.labelOf(l) : 'otra hoja'; };
+    box.innerHTML = `<div class="card" style="overflow:auto;margin-top:12px"><h3 style="padding:12px 12px 0;margin:0">🚚 Cuadre de despachos <span class="muted" style="font-weight:400;font-size:13px">(por despachador · hojas liquidadas del período)</span></h3>
+      <p class="muted" style="padding:0 12px">Venía + Ajustes + Cargado + Dev. anteriores − Entregado − Volvió a almacén − Diferencia − Corte = Queda en el camión. Faltante a cobrar = diferencias que faltan + lo que faltó en el corte.</p>
+      ${L.length ? L.map((d) => `<div style="padding:0 12px 12px"><div class="row" style="align-items:center;gap:8px"><h3 class="grow" style="margin:6px 0">${esc(d.name)}</h3>
+        <b class="${d.ok ? '' : 'warn-txt'}">${d.ok ? '✓ Cuadra' : '⚠ NO CUADRA'}</b>${d.faltantes.length ? ` · <b class="warn-txt">Faltante a cobrar: ${esc(d.faltantes.map((r) => r.faltante + ' ' + ledgerName(r.key)).join(', '))}</b>` : ''}</div>
+        <table class="inv"><thead><tr><th>Producto</th>${LCOLS.map(([, t]) => `<th class="n">${esc(t)}</th>`).join('')}<th class="n">Faltante a cobrar</th><th>Cuadre</th></tr></thead>
+        <tbody>${d.rows.map((r) => `<tr class="${r.descuadre ? 'liq-bad' : ''}"><td>${esc(ledgerName(r.key))}</td>${LCOLS.map(([k]) => `<td class="n">${r[k] ? nf0.format(r[k]) : ''}</td>`).join('')}
+          <td class="n ${r.faltante ? 'warn-txt' : ''}"><b>${r.faltante || ''}</b></td><td>${r.descuadre ? `<b class="warn-txt">⚠ ${r.descuadre > 0 ? 'faltan' : 'sobran'} ${Math.abs(r.descuadre)}</b>` : '✓'}</td></tr>`).join('')}</tbody></table>
+        <details class="sr" style="margin-top:6px"><summary>📒 Kardex del camión de ${esc(d.name)} (${d.hojas.length} hojas)</summary>
+          <table class="inv"><thead><tr><th>Hoja</th><th>Producto</th><th class="n">Traía</th><th class="n">Quedan</th><th class="n">Cargó</th><th class="n">Dev. ant.</th><th class="n">Entregó</th><th class="n">Almacén</th><th class="n">Pasó a otra carga</th><th class="n">Diferencia</th><th>Motivo</th></tr></thead>
+          <tbody>${d.hojas.map((h) => h.rows.map((r, i) => `<tr>${i === 0 ? `<td rowspan="${h.rows.length}"><b>${esc(global.Loads.labelOf(h.load))}</b><div class="muted">${esc(fmtDate(h.load.date || ''))}</div></td>` : ''}<td>${esc(ledgerName(r.key))}</td>
+            <td class="n">${r.traia || ''}</td><td class="n">${r.queda || ''}</td><td class="n">${r.carga || ''}</td><td class="n">${r.anterior || ''}</td><td class="n">${r.entregado || ''}</td><td class="n">${r.almacen || ''}</td>
+            <td class="n">${r.sigue ? r.sigue + (r.destLoad ? ' → ' + esc(loadName(r.destLoad)) : '') : ''}</td><td class="n ${r.dif ? 'warn-txt' : ''}">${r.dif || ''}</td><td>${esc(r.motivo || '')}</td></tr>`).join('')).join('')}</tbody></table></details></div>`).join('')
+        : '<p class="muted" style="padding:0 12px 12px">Sin hojas liquidadas con despachador en el período.</p>'}
+      ${L.length ? '<div class="toolbar no-print" style="padding:0 12px 12px"><button class="btn" id="tlPrint">🖨 Imprimir cuadre de despachos</button><button class="btn" id="tlXlsx">⇩ Excel cuadre de despachos</button></div>' : ''}</div>`;
+    const bp = box.querySelector('#tlPrint'); if (bp) bp.onclick = () => global.Print.printTruckLedger(L, { config: S.config, from, to, name: ledgerName, cols: LCOLS, loadName });
+    const bx = box.querySelector('#tlXlsx'); if (bx) bx.onclick = () => global.Exporta.save(`cuadre_despachos_${from}_a_${to}.xlsx`, [global.Exporta.table({ name: 'Cuadre despachos',
+      title: `CUADRE DE DESPACHOS · ${fmtDate(from)} al ${fmtDate(to)}`, subtitle: 'Venía + Ajustes + Cargado + Dev. anteriores − Entregado − Almacén − Diferencia − Corte = Queda en el camión',
+      cols: [{ h: 'DESPACHADOR', w: 18 }, { h: 'PRODUCTO', w: 34 }, ...LCOLS.map(([, t]) => ({ h: t.toUpperCase(), k: 'int', total: true })), { h: 'FALTANTE A COBRAR', k: 'int', total: true }, { h: 'CUADRE', w: 14 }],
+      rows: L.flatMap((d) => d.rows.map((r) => [d.name, ledgerName(r.key), ...LCOLS.map(([k]) => r[k]), r.faltante, r.descuadre ? `NO CUADRA (${r.descuadre})` : 'OK'])) }),
+      global.Exporta.table({ name: 'Kardex camión', title: `KARDEX DEL CAMIÓN · ${fmtDate(from)} al ${fmtDate(to)}`,
+        cols: [{ h: 'DESPACHADOR', w: 18 }, { h: 'HOJA', w: 16 }, { h: 'FECHA', w: 12, k: 'date' }, { h: 'PRODUCTO', w: 34 }, ...['TRAÍA', 'QUEDAN', 'CARGÓ', 'DEV. ANT.', 'ENTREGÓ', 'ALMACÉN', 'PASÓ A OTRA CARGA'].map((h) => ({ h, k: 'int', total: true })), { h: 'VA PARA', w: 16 }, { h: 'DIFERENCIA', k: 'int', total: true }, { h: 'MOTIVO', w: 20 }],
+        rows: L.flatMap((d) => d.hojas.flatMap((h) => h.rows.map((r) => [d.name, global.Loads.labelOf(h.load), h.load.date || '', ledgerName(r.key), r.traia, r.queda, r.carga, r.anterior || 0, r.entregado, r.almacen, r.sigue, r.sigue ? (r.destLoad ? loadName(r.destLoad) : 'la próxima') : '', +r.dif || 0, r.motivo || '']))) })]);
   }
 
   global.Reportes = { lastDay, quincena, quincenaOf, prevQuincena, render, titleOf, summaryRows, crossGrid, catGrid };
