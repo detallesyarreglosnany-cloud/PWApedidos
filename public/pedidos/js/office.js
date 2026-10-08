@@ -1069,6 +1069,9 @@
     const carry = Liq.carryFor(load, S.loads);
     const rows = Liq.truckRows(os, liq, carry, liqOpts());
     const vac = Liq.vacRows(os, liq, byIdMap(S.products));
+    // Sobrante de esta hoja que ya tomó otra hoja liquidada (o un corte): queda fijo al corregir
+    const locked = Liq.lockedCarry(load);
+    rows.forEach((r) => { if (locked[r.key]) { const u = S.loads.find((l) => l.id === locked[r.key].by); r.locked = { ...locked[r.key], label: u ? Loads.labelOf(u) : '' }; } });
     const probs = Liq.problems(os, liq, rows, vac);
     // Todo lo que se vende lo reparte un despachador: sin él no cuadra vendedor ↔ despachador
     if (!load.dispatcherId) probs.unshift('La hoja no tiene despachador: asígnalo en la hoja de carga (todo lo vendido lo reparte un despachador)');
@@ -1184,7 +1187,7 @@
           <td class="n in" data-l="Devolución"><input class="input qin small" inputmode="numeric" data-t="dev" value="${r.dev === null ? '' : r.dev}" placeholder="contar" aria-label="Devolución ${esc(r.code)}" ${dis}></td>
           <td class="n ${r.dif ? 'warn-txt' : ''}" data-l="Diferencia"><b>${r.dif === null ? '' : r.dif}</b></td>
           <td class="in" data-l="Motivo"><input class="input sm" data-t="motivo" maxlength="80" list="liqMot" value="${esc(r.motivo)}" placeholder="${r.dif ? 'motivo' : '—'}" aria-label="Motivo ${esc(r.code)}" ${dis}></td>
-          <td data-l="Lo que sobra">${r.debe > 0 || r.dev > 0 ? destSel(r) : ''}</td></tr>`).join('')}</tbody>
+          <td data-l="Lo que sobra">${r.debe > 0 || r.dev > 0 ? destSel(r) : ''}${r.locked ? `<div class="muted" style="font-size:11px">🔒 ${r.locked.qty} ya ${r.locked.by === 'almacen' ? 'se descargó en un corte' : 'lo tomó ' + esc(r.locked.label || 'otra hoja')}</div>` : ''}</td></tr>`).join('')}</tbody>
         <tfoot><tr><td colspan="2"><b>TOTAL</b></td>${['pedido', 'entregado', 'queda', 'carga', ...(hasAnt ? ['anterior'] : []), 'total', 'debe', 'dev', 'dif'].map((k) => `<td class="n"><b>${nf0.format(rows.reduce((a, r) => a + (+r[k] || 0), 0))}</b></td>`).join('')}<td colspan="2"></td></tr></tfoot></table></div>
       <p class="muted">Total = Quedan + Carga${hasAnt ? ' + Dev. anteriores' : ''} · Debe quedar = Total − Entregado · Diferencia = Debe quedar − Devolución. Si la diferencia no es 0, escribe el motivo. Lo que sobra SIEMPRE se decide: vuelve a almacén o sigue en el camión a la siguiente carga del mismo despachador (nunca se pierde).</p>
 
@@ -1534,7 +1537,9 @@
     });
     const carryRows = Object.fromEntries(nextRows.map((r) => [r.key, r.dev]));
     const newLiq = { ...liq, status: 'cerrada', closedAt: at, closedBy: by, carryFrom: carry ? carry.fromIds : null,
-      carry: nextRows.length ? { dispatcherId: load.dispatcherId || '', rows: carryRows, to: Object.fromEntries(nextRows.filter((r) => r.destLoad).map((r) => [r.key, r.destLoad])), used: {} } : null, carryUsedBy: null,
+      // Lo que ya tomó otra hoja sigue marcado como tomado (no se vuelve a pasar)
+      carry: nextRows.length ? { dispatcherId: load.dispatcherId || '', rows: carryRows, to: Object.fromEntries(nextRows.filter((r) => r.destLoad).map((r) => [r.key, r.destLoad])),
+        used: Object.fromEntries(Object.entries(Liq.lockedCarry(load)).filter(([k]) => carryRows[k]).map(([k, x]) => [k, x.by])) } : null, carryUsedBy: null,
       // Foto del camión al cierre (reportes de despachos y diferencias)
       snapshot: { rows: rows.map((r) => ({ key: r.key, code: r.code, name: r.name, presentation: r.presentation, um: r.um, pedido: r.pedido, entregado: r.entregado,
         traia: r.traia, queda: r.queda, carga: r.carga, anterior: r.anterior, noSalio: r.noSalio, total: r.total, debe: r.debe, dev: r.dev, dif: r.dif, motivo: r.motivo, dest: r.dest, destLoad: r.destLoad || '' })) },
@@ -1561,10 +1566,10 @@
     const stuck = clones.filter((c) => !Loads.editable(c));
     if (stuck.length) { toast(`No se puede reabrir: ${stuck.map((c) => c.clientName).join(', ')} ya salió en otra hoja aprobada`, 'err'); return; }
     // Lo que sobró aquí ya lo tomó otra hoja liquidada (o se descargó en almacén): reabrir lo descuadraría
-    const usedBy = load.liq && load.liq.carry ? [...new Set([load.liq.carryUsedBy, ...Object.values(load.liq.carry.used || {})].filter(Boolean))] : [];
-    if (usedBy.includes('almacen')) { toast('No se puede reabrir: lo que sobró en esta hoja ya se descargó en almacén (Sobrante en camiones)', 'err'); return; }
-    const usedDone = usedBy.map((id) => S.loads.find((l) => l.id === id)).find((u) => u && u.id !== load.id && Liq.isDone(u));
-    if (usedDone) { toast(`No se puede reabrir: lo que sobró ya lo tomó ${Loads.labelOf(usedDone)}, que está liquidada. Reabre primero esa.`, 'err'); return; }
+    // Lo que sobró y ya tomó otra hoja (o se descargó en un corte) queda FIJO: se puede corregir todo lo demás
+    const lk = Liq.lockedCarry(load);
+    const lkTxt = Object.entries(lk).map(([k, x]) => { const [pid, um] = k.split('|'), u = S.loads.find((l) => l.id === x.by); return `• ${x.qty} ${(productById(pid) || {}).name || pid} ${um} → ${x.by === 'almacen' ? 'corte (almacén)' : u ? Loads.labelOf(u) : 'otra hoja'}`; });
+    if (lkTxt.length && !confirm(`Parte de lo que sobró en esta hoja ya lo tomó otra:\n\n${lkTxt.join('\n')}\n\nEso queda FIJO (🔒). Puedes corregir todo lo demás y agregar vacíos o mercancía de entregas anteriores.\n\n¿Reabrir?`)) return;
     const motivo = (prompt('Motivo para reabrir la liquidación:') || '').trim();
     if (!motivo) return;
     await saveDocs('orders', os.filter((o) => o.delivery).map((o) => ({ ...o, delivery: null }))

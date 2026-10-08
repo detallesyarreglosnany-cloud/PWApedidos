@@ -104,7 +104,8 @@
     if (!load.dispatcherId) return null;
     const done = isDone(load), rows = {}, sources = [];
     loads.forEach((l) => {
-      if (l.deleted || l.id === load.id || !isDone(l) || !l.liq.carry) return;
+      // Una hoja de origen reabierta para corregir sigue contando para la hoja liquidada que ya la tomó
+      if (l.deleted || l.id === load.id || !l.liq || !l.liq.carry || (!done && !isDone(l))) return;
       if (!done && l.liq.carry.dispatcherId !== load.dispatcherId) return;
       const keys = carryKeys(l).filter((k) => {
         const u = usedOf(l, k);
@@ -139,6 +140,17 @@
     keys.forEach((k) => { if (value) used[k] = value; else delete used[k]; });
     return { ...src, liq: { ...src.liq, carryUsedBy: src.liq.carryUsedBy === 'almacen' ? 'almacen' : null, carry: { ...src.liq.carry, used } } };
   }
+  /**
+   * Productos del sobrante de ESTA hoja que ya tomó otra hoja (o se descargaron en un corte):
+   * { <key>: { by: <loadId>|'almacen', qty } }. Al reabrir quedan fijos: si cambian, la otra hoja se descuadra.
+   */
+  function lockedCarry(load) {
+    if (!load || !load.liq || !load.liq.carry) return {};
+    const out = {};
+    carryKeys(load).forEach((k) => { const u = usedOf(load, k); if (u && u !== load.id) out[k] = { by: u, qty: n0(load.liq.carry.rows[k]) }; });
+    return out;
+  }
+
   /** Hojas a las que puede ir el sobrante: del mismo despachador y sin liquidar. */
   function destLoads(load, loads) {
     if (!load.dispatcherId) return [];
@@ -275,6 +287,10 @@
       if (r.dev === null) out.push(`Camión · ${lbl}: falta contar lo que volvió`);
       else if (r.dif !== 0 && !r.motivo) out.push(`Camión · ${lbl}: diferencia de ${r.dif} sin motivo`);
       if (r.dev > 0 && !r.dest) out.push(`Camión · ${lbl}: sobran ${r.dev} — indica si vuelve a almacén o sigue a la siguiente carga`);
+      if (r.locked) {
+        const sigue = r.dest === 'siguiente' ? (r.dev || 0) : 0;
+        if (sigue !== r.locked.qty) out.push(`Camión · ${lbl}: ${r.locked.qty} de lo que sobró ya ${r.locked.by === 'almacen' ? 'se descargó en un corte' : 'lo tomó ' + (r.locked.label || 'otra hoja liquidada')} — aquí debe seguir quedando «siguiente carga» = ${r.locked.qty} (hay ${sigue}). Para cambiarlo, reabre primero esa hoja.`);
+      }
       if (r.quedaMan && r.queda !== r.traia && !r.motivo) out.push(`Camión · ${lbl}: QUEDAN cambiado a ${r.queda} pero el camión traía ${r.traia} de cargas anteriores — escribe el motivo`);
     });
     vac.forEach((v) => {
@@ -430,5 +446,5 @@
   /** Texto corto de la novedad de un cliente (encabezado de su columna). */
   const shortResult = (e) => ({ entregada: '', parcial: 'DEV. PARCIAL', nofact: 'NO FACTURADO', pendiente: 'SE ENTREGA DESPUÉS', anulada: 'ANULADA' })[e.result] || '';
 
-  global.Liq = { RESULTS, MOTIVOS, VAC_MOTIVOS, isDone, entry, deliveredLines, delivered, returnedAny, carryFor, pendingCarries, markUsed, destLoads, upgradeOld, olderUnliquidated, prevRetRows, truckRows, vacRows, prevRows, problems, sheet, cuadre, cuadreLines, truckLedger, shortResult };
+  global.Liq = { RESULTS, MOTIVOS, VAC_MOTIVOS, isDone, entry, deliveredLines, delivered, returnedAny, carryFor, pendingCarries, markUsed, lockedCarry, destLoads, upgradeOld, olderUnliquidated, prevRetRows, truckRows, vacRows, prevRows, problems, sheet, cuadre, cuadreLines, truckLedger, shortResult };
 })(window);
