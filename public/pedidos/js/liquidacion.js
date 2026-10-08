@@ -202,8 +202,55 @@
       totals: { bultos: cols.map((c) => c.bultos), monto: cols.map((c) => c.monto), usd: Matrix.r2(cols.reduce((a, c) => a + c.monto, 0)) } };
   }
 
+  /**
+   * Cuadre en dólares de la hoja: el camión valorado al precio de cada producto
+   * (el de la nota; si no hay, el del catálogo) contra lo que suman los clientes.
+   *   QUEDAN $ + CARGA $ = TOTAL $
+   *   TOTAL $ − DEVOLUCIÓN $ − DIFERENCIA $ = ENTREGADO $
+   *   ENTREGADO $ (según el camión) ⇔ TOTAL $ DE LOS CLIENTES (según las notas)
+   * Si no coinciden por centavos o dólares, dice cuánto y en qué productos.
+   */
+  function cuadre(sh, productsById) {
+    const r2 = (n) => Math.round(n * 100) / 100;
+    const priceOf = (r) => {
+      const fromLine = sh.cols.map((c) => (c.order.lines || {})[r.productId]).find(Boolean);
+      const src = fromLine || (productsById && productsById.get(r.productId)) || {};
+      return r.um === 'CJ' ? +src.boxPrice || 0 : +src.unitPrice || 0;
+    };
+    const t = { queda: 0, carga: 0, total: 0, entregado: 0, dev: 0, dif: 0, pend: 0 };
+    const off = [];
+    let sinContar = 0;
+    sh.rows.forEach((r) => {
+      const p = priceOf(r);
+      t.queda += r.queda * p; t.carga += r.carga * p; t.total += r.total * p; t.entregado += r.entregado * p;
+      if (r.dev === null) { sinContar++; t.pend += r.debe * p; } else { t.dev += r.dev * p; t.dif += (r.dif || 0) * p; }
+      // Clientes con otro precio en su nota: el producto no cuadra al precio de la hoja
+      const d = r2((r.usd || 0) - r.entregado * p);
+      if (Math.abs(d) >= 0.01) off.push({ code: r.code, name: r.name, presentation: r.presentation, um: r.um, diff: d });
+    });
+    Object.keys(t).forEach((k) => { t[k] = r2(t[k]); });
+    const clientes = r2(sh.totals.usd), diff = r2(clientes - t.entregado);
+    return { ...t, clientes, diff, ok: Math.abs(diff) < 0.01, off, sinContar };
+  }
+
+  /** Texto del cuadre (pantalla, impresión y Excel). */
+  function cuadreLines(c, fmt) {
+    const lines = [
+      `QUEDAN ${fmt(c.queda)} + CARGA ${fmt(c.carga)} = TOTAL ${fmt(c.total)}`,
+      `TOTAL ${fmt(c.total)} − DEVOLUCIÓN ${fmt(c.dev)} − DIFERENCIA ${fmt(c.dif)}${c.pend ? ` − SIN CONTAR ${fmt(c.pend)}` : ''} = ENTREGADO ${fmt(r2s(c.total - c.dev - c.dif - c.pend))}`,
+      `ENTREGADO SEGÚN EL CAMIÓN ${fmt(c.entregado)} · TOTAL DE LOS CLIENTES (NOTAS) ${fmt(c.clientes)}`,
+    ];
+    const verdict = c.ok ? '✓ CUADRA: el total de los clientes coincide con el total del camión'
+      : `⚠ NO CUADRA POR ${fmt(Math.abs(c.diff))} (${c.diff > 0 ? 'los clientes suman más' : 'los clientes suman menos'} que el camión)${c.off.length ? ' · precio distinto en: ' + c.off.slice(0, 6).map((o) => `${o.code} ${o.um} (${o.diff > 0 ? '+' : ''}${fmt(o.diff)})`).join(', ') : ' · redondeo'}`;
+    const extra = [];
+    if (c.dif) extra.push(`Diferencia del camión valorada: ${fmt(Math.abs(c.dif))} ${c.dif > 0 ? 'que falta' : 'que sobra'}`);
+    if (c.sinContar) extra.push(`Cuadre provisional: faltan por contar ${c.sinContar} producto(s)`);
+    return { lines, verdict, extra };
+  }
+  const r2s = (n) => Math.round(n * 100) / 100;
+
   /** Texto corto de la novedad de un cliente (encabezado de su columna). */
   const shortResult = (e) => ({ entregada: '', parcial: 'DEV. PARCIAL', pendiente: 'SE ENTREGA DESPUÉS', anulada: 'ANULADA' })[e.result] || '';
 
-  global.Liq = { RESULTS, MOTIVOS, VAC_MOTIVOS, isDone, entry, deliveredLines, delivered, returnedAny, carryFor, truckRows, vacRows, prevRows, problems, sheet, shortResult };
+  global.Liq = { RESULTS, MOTIVOS, VAC_MOTIVOS, isDone, entry, deliveredLines, delivered, returnedAny, carryFor, truckRows, vacRows, prevRows, problems, sheet, cuadre, cuadreLines, shortResult };
 })(window);
