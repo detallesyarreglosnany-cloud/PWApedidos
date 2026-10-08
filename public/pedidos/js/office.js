@@ -1118,6 +1118,11 @@
           ${rate ? `<tr><td class="sticky-col">TOTAL Bs (tasa ${nf2.format(rate)})</td>${sh.totals.monto.map((v) => `<td class="n">${nf2.format(v * rate)}</td>`).join('')}<td colspan="9"></td><td class="n lq-usd">${nf2.format(sh.totals.usd * rate)}</td></tr>` : ''}
           ${sh.vac.map((v) => `<tr class="vac-row k-${v.key}"><td class="sticky-col">${esc(v.label)}</td>${v.cells.map((x) => `<td class="n">${x === null ? '' : nf0.format(x)}</td>`).join('')}<td class="n lq-tot">${nf0.format(v.total)}</td><td colspan="9"></td></tr>`).join('')}
         </tfoot></table></div>
+      ${(() => { const c = Liq.cuadre(sh, byIdMap(S.products)), t = Liq.cuadreLines(c, usd); return `<div class="card card-pad liq-cuadre ${c.ok ? 'ok' : 'bad'}" style="margin-top:10px">
+        <div class="section-title" style="margin:0 0 6px">💲 Cuadre en dólares <span class="muted">(el camión valorado al precio de las notas)</span></div>
+        ${t.lines.map((x) => `<div class="mono">${esc(x)}</div>`).join('')}
+        <div style="margin-top:6px"><b class="${c.ok ? '' : 'warn-txt'}">${esc(t.verdict)}</b></div>
+        ${t.extra.map((x) => `<div class="muted">${esc(x)}</div>`).join('')}</div>`; })()}
       <datalist id="liqMot">${Liq.MOTIVOS.map((m) => `<option value="${esc(m)}">`).join('')}</datalist>
       <p class="muted">Total = Quedan + Carga · Debe quedar = Total − Entregado · Diferencia = Debe quedar − Devolución. «Siguiente carga» solo pasa a la próxima hoja del mismo despachador.</p>
 

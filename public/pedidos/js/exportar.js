@@ -247,6 +247,10 @@
         { v: x.total, f: n ? `SUM(${col(first)}${r2}:${col(last)}${r2})` : undefined, s: { ...S.vac, fmt: 'int', align: 'right' } }]);
     });
     rows.push([]);
+    { const c = Liq.cuadre(sh, meta.productsById), t = Liq.cuadreLines(c, (v) => '$' + (Math.round(v * 100) / 100).toFixed(2));
+      rows.push([null, { v: 'CUADRE EN DÓLARES', s: S.tot }]);
+      t.lines.concat([t.verdict], t.extra).forEach((x) => rows.push([null, { v: x, s: S.sub }])); }
+    rows.push([]);
     rows.push([null, { v: 'Despachador: ____________________     Almacén: ____________________     Liquidó (oficina): ____________________     Gerencia: ____________________', s: S.sub }]);
     const widths = [9, 34, 5, ...sh.cols.map(() => 6.5), 10, 9, 9, 9, 10, 10, 10, 22, 15, 9, 11];
     return { name: 'Liquidación', rows, widths, heights, freeze: { r: hr + 1, c: 3 }, merges: [`A1:${col(Math.max(TU, 8))}1`], landscape: true, tab: '730101' };

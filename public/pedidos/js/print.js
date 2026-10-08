@@ -205,11 +205,14 @@
       ${novs.length ? `<p class="novs"><b>Novedades:</b> ${novs.map(({ c, i }) => `${i + 1}. ${esc(c.order.clientName)} — ${esc(Liq.shortResult(c.entry).toLowerCase())}${c.entry.result === 'parcial' || c.entry.result === 'anulada' ? ` · nota ${esc(c.order.valeryNote || '—')} anulada` : ''}${c.entry.newValery && c.entry.result === 'parcial' ? ` → nueva ${esc(c.entry.newValery)}` : ''}${c.entry.motivo ? ` · ${esc(c.entry.motivo)}` : ''}`).join(' &nbsp;|&nbsp; ')}</p>` : ''}
       ${(() => { const pv = Liq.prevRows(st.os, liq); return pv.length ? `<p class="novs"><b>Vacíos de entregas anteriores (trajo el despachador):</b> ${pv.map((p) => `${esc(p.client)} — ${p.qty} ${esc(p.type)}${p.from === 'dev_asignado' ? ' (asignados)' : ''}${p.motivo ? ' · ' + esc(p.motivo) : ''}`).join(' &nbsp;|&nbsp; ')}</p>` : ''; })()}
       ${st.vac.some((v) => v.pending) ? `<p class="novs"><b>Vacíos que quedan debiendo:</b> ${st.vac.filter((v) => v.pending).map((v) => `${esc(v.client)} — ${v.pending} ${esc(v.code)} (${esc(v.motivo || (v.regime === 'prestamo' ? 'PRÉSTAMO' : 'sin motivo'))})`).join(' &nbsp;|&nbsp; ')}</p>` : ''}
+      ${(() => { const c = Liq.cuadre(sh, ctx.products ? new Map(ctx.products.map((p) => [p.id, p])) : null), t = Liq.cuadreLines(c, (v) => '$' + nf2.format(v)); return `<div class="cuadre ${c.ok ? '' : 'bad'}"><b>CUADRE EN DÓLARES</b>${t.lines.map((x) => `<div>${esc(x)}</div>`).join('')}<div class="verdict">${esc(t.verdict)}</div>${t.extra.map((x) => `<div>${esc(x)}</div>`).join('')}</div>`; })()}
       <p class="muted foot">↩ = devuelto por el cliente · Total = Quedan + Carga · Debe quedar = Total − Entregado · Diferencia = Debe quedar − Devolución · Vacíos: Despachados − Recibidos − Asignados = Quedan debiendo · Vac. anteriores = devueltos de entregas anteriores · Que entran = Recibidos + Anteriores.</p>
       <div class="sign"><div>Despachador</div><div>Almacén</div><div>Liquidó (oficina)</div><div>Gerencia</div></div>
       </section>`;
   }
-  const LIQ_CSS = LOAD_CSS + ` td.nob,th.nob{border:0 !important} table.load.liq td.mot{font-size:10px;white-space:nowrap}
+  const LIQ_CSS = LOAD_CSS + ` .cuadre{border:2px solid #000;padding:5px 8px;margin:6px 0;font-size:11px;font-family:monospace;page-break-inside:avoid}
+    .cuadre b{font-family:sans-serif} .cuadre .verdict{font-weight:900;font-family:sans-serif;margin-top:3px} .cuadre.bad{border-style:dashed}
+    td.nob,th.nob{border:0 !important} table.load.liq td.mot{font-size:10px;white-space:nowrap}
     table.load.liq .ret{display:block;font-size:9px;font-weight:bold;line-height:1} tr.nov td{font-weight:bold}
     table.load.liq th.rt div{height:90px} table.load.liq td.usd{font-weight:900;border-left:2px solid #000}
     tr.nota th{font-size:9px;font-weight:bold;white-space:nowrap} tr.novd th{font-size:8px;line-height:1;white-space:normal;max-width:40px}
