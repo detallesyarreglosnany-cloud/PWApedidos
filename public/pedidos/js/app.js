@@ -416,10 +416,11 @@
         const d = o.delivery, res = d.result || 'entregada';
         const txt = res === 'anulada' ? `${o.clientName}: se anuló la nota${d.voidedNote ? ' ' + d.voidedNote : ''}`
           : res === 'pendiente' ? `${o.clientName}: no se entregó, queda para otra carga`
+          : res === 'nofact' ? `${o.clientName}: no se facturó todo (misma nota) · entregado ${usd(d.monto)}`
           : res === 'parcial' ? `${o.clientName}: devolución parcial · entregado ${usd(d.monto)}${d.newValery ? ' · nota nueva ' + d.newValery : ''}`
           : `${o.clientName}: liquidado ${usd(d.monto)}`;
         add('liquidado', o, txt, res !== 'entregada');
-        out[out.length - 1].icon = res === 'anulada' ? '✕' : res === 'pendiente' ? '⏳' : res === 'parcial' ? '↩' : '✓';
+        out[out.length - 1].icon = res === 'anulada' ? '✕' : res === 'pendiente' ? '⏳' : res === 'parcial' ? '↩' : res === 'nofact' ? '⊘' : '✓';
       }
       if (o.deleted && !p.deleted) add('borrado', o, `La oficina eliminó el pedido de ${o.clientName}`, true);
       else if (o.status === 'despachado' && p.status !== 'despachado') add('despachado', o, `${o.clientName}${o.valeryNote ? ' · Nota ' + o.valeryNote : ''}`);

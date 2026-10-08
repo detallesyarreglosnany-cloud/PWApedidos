@@ -291,6 +291,7 @@ function orderNotice(cur: Record<string, unknown> | null, doc: Record<string, un
     const res = String(dn.result || 'entregada'), monto = '$' + (Math.round(Number(dn.monto) * 100) / 100).toFixed(2);
     if (res === 'anulada') return seller('✕ Nota anulada', `${client}: se anuló la nota${dn.voidedNote ? ' ' + dn.voidedNote : ''}`, 'liq');
     if (res === 'pendiente') return seller('⏳ Se entrega después', `${client}: no se entregó, queda para otra carga`, 'liq');
+    if (res === 'nofact') return seller('⊘ No se facturó todo', `${client}: misma nota · entregado ${monto}`, 'liq');
     if (res === 'parcial') return seller('↩ Devolución parcial', `${client}: entregado ${monto}${dn.newValery ? ' · nota nueva ' + dn.newValery : ''}`, 'liq');
     return seller('✓ Pedido liquidado', `${client}: ${monto}`, 'liq');
   }
