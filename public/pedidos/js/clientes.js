@@ -1,7 +1,7 @@
 /* =========================================================================
  * clientes.js — Ficha completa del cliente (oficina y vendedor, mismo formulario).
  *
- *   Persona natural:  nombres + apellidos (mínimo 3 palabras: 2+1 o 1+2; lo ideal 2+2)
+ *   Persona natural:  nombres + apellidos (al menos 1 nombre y 1 apellido; pueden ser 2 y 2)
  *   Persona jurídica: razón social tal como aparece en el RIF
  *   + nombre del negocio, RIF / C.I., teléfonos, correo, dirección, punto de
  *   referencia, ruta, observaciones, fecha de ingreso y quién lo registró.
@@ -38,7 +38,7 @@
   function missing(c) {
     const out = [];
     const k = kindOf(c);
-    if (k === 'natural' ? words(c.name).length < 3 : words(c.name).length < 2) out.push(k === 'natural' ? 'nombre y apellido completos' : 'razón social completa');
+    if (words(c.name).length < 2) out.push(k === 'natural' ? 'nombre y apellido completos' : 'razón social completa');
     if (digits(c.rif).length < 6) out.push('RIF / C.I.');
     if (digits(c.phone).length < 10) out.push('teléfono');
     if (String(c.address || '').trim().length < 8) out.push('dirección');
@@ -76,8 +76,8 @@
           <button type="button" data-k="natural" class="${kind === 'natural' ? 'active' : ''}">👤 Persona natural</button>
           <button type="button" data-k="juridica" class="${kind === 'juridica' ? 'active' : ''}">🏢 Empresa (jurídica)</button></div></div>
         <div class="grid2" data-for="natural">
-          <label class="field"><span>Nombres * <small class="muted">(lo ideal: 2)</small></span><input name="firstNames" class="input" maxlength="60" value="${esc(fn)}" placeholder="Ej: JOSÉ LUIS"></label>
-          <label class="field"><span>Apellidos * <small class="muted">(lo ideal: 2)</small></span><input name="lastNames" class="input" maxlength="60" value="${esc(ln)}" placeholder="Ej: PÉREZ GÓMEZ"></label></div>
+          <label class="field"><span>Nombres * <small class="muted">(1 o 2)</small></span><input name="firstNames" class="input" maxlength="60" value="${esc(fn)}" placeholder="Ej: JOSÉ LUIS"></label>
+          <label class="field"><span>Apellidos * <small class="muted">(1 o 2)</small></span><input name="lastNames" class="input" maxlength="60" value="${esc(ln)}" placeholder="Ej: PÉREZ GÓMEZ"></label></div>
         <label class="field" data-for="juridica"><span>Razón social * <small class="muted">(tal como aparece en el RIF)</small></span><input name="legalName" class="input" maxlength="80" value="${esc(legal)}" placeholder="Ej: INVERSIONES LA ESQUINA, C.A."></label>
         <label class="field"><span>Nombre del negocio <small class="muted">(como lo conocen: bodega, abasto…)</small></span><input name="tradeName" class="input" maxlength="80" value="${esc(c.tradeName || '')}" placeholder="Ej: BODEGA LA ESQUINA"></label>
         <div class="grid2"><label class="field"><span>Documento *</span><div class="row" style="gap:6px"><select name="docType" class="select" style="max-width:76px">${DOC_TYPES.map((t) => `<option ${t === doc.type ? 'selected' : ''}>${t}</option>`).join('')}</select>
@@ -125,8 +125,7 @@
       const phone = f.phone.value.trim(), address = f.address.value.replace(/\s+/g, ' ').trim();
       if (k === 'natural') {
         const a = words(firstNames).length, b = words(lastNames).length;
-        if (!a || !b || a + b < 3) errs.push('Nombre incompleto: escribe al menos 2 nombres y 1 apellido, o 1 nombre y 2 apellidos.');
-        else if (a + b < 4) warns.push('Lo ideal son 2 nombres y 2 apellidos.');
+        if (!a || !b) errs.push('Escribe al menos 1 nombre y 1 apellido.');
         if (docType === 'J' || docType === 'G') warns.push('Una persona natural normalmente tiene cédula o RIF V / E.');
       } else {
         if (words(legalName).length < 2) errs.push('Escribe la razón social completa, como aparece en el RIF.');
