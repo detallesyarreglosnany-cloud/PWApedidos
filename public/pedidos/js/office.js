@@ -237,13 +237,15 @@
     const held = S.orders.filter((o) => o.status === 'en_espera' && (!sid || o.sellerId === sid));
     const open = S.orders.filter((o) => o.status === 'abierto' && o.routeDate === today() && Matrix.orderTotals(o).items && (!sid || o.sellerId === sid));
     const L = Loads.limits(S.config);
-    const groups = Loads.statuses(S.config).filter((st) => !st.closing).map((st) => ({ st, list: active.filter((l) => Loads.statusOf(l, S.config).id === st.id) }));
+    // Hojas de carga (despacho) y hojas de RETIRO POR OFICINA: nunca se mezclan
+    const desp = active.filter((l) => !Loads.isRetiro(l)), retiros = active.filter((l) => Loads.isRetiro(l));
+    const groups = Loads.statuses(S.config).filter((st) => !st.closing).map((st) => ({ st, list: desp.filter((l) => Loads.statusOf(l, S.config).id === st.id) }));
     const card = (l) => {
       const u = Loads.usage(l, ordersById, S.config);
       const st = Loads.statusOf(l, S.config);
-      return `<button class="load-card ${u.over ? 'over' : u.full ? 'full' : ''} ${st.locked ? 'locked' : ''}" data-lid="${esc(l.id)}">
-        <div class="row"><b class="grow">${esc(Loads.labelOf(l))} ${l.number ? `<span class="muted mono">${esc(Loads.loadCode(l))}</span>` : ''}</b>${sellerTags(l)}</div>
-        <div class="muted">${esc(l.sellerName)} · Ruta ${esc(l.route || '—')}</div>
+      return `<button class="load-card ${u.over ? 'over' : u.full ? 'full' : ''} ${st.locked ? 'locked' : ''} ${Loads.isRetiro(l) ? 'retiro' : ''}" data-lid="${esc(l.id)}">
+        <div class="row"><b class="grow">${Loads.isRetiro(l) ? '🏢 ' : ''}${esc(Loads.labelOf(l))} ${l.number ? `<span class="muted mono">${esc(Loads.loadCode(l))}</span>` : ''}</b>${sellerTags(l)}</div>
+        <div class="muted">${esc(l.sellerName)} · ${Loads.isRetiro(l) ? '<b>RETIRO POR OFICINA</b>' : 'Ruta ' + esc(l.route || '—')}</div>
         ${bar(u.pct, u.used > u.limit, `${nf0.format(u.used)} / ${nf0.format(u.limit)} ${u.measure}`)}
         ${bar(u.pctClients, u.clients > u.maxClients, `${u.clients} / ${u.maxClients} clientes`)}
         <div class="row"><span class="status ${st.locked ? 'locked' : 'espera'}">${st.locked ? '🔒 ' : ''}${esc(st.name)}</span>
@@ -256,7 +258,8 @@
         <label class="field"><span>Vendedor</span><select id="lSeller" class="select">
           <option value="">Todos</option>${S.sellers.map((s) => `<option value="${esc(s.id)}" ${s.id === sid ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>
         <div class="grow kpis big">
-          <span><b>${active.length}</b> hojas en curso</span>
+          <span><b>${desp.length}</b> hojas de carga</span>
+          <span><b>${retiros.length}</b> hojas de retiro</span>
           <span><b>${held.length}</b> clientes en espera</span>
           <span><b>${open.length}</b> pedidos abiertos (vendedores en ruta)</span>
         </div>
@@ -267,9 +270,12 @@
       ${S.sellers.filter(pausedUntil).map((x) => `<div class="hint warn">⏸ <b>${esc(x.name)}</b> en pausa de pedidos hasta ${esc(fmtPause(pausedUntil(x)))} · ${pendingOf(x.id).clients} clientes / ${nf0.format(pendingOf(x.id).cajas)} cajas por despachar <button type="button" class="btn btn-sm btn-ok" data-resume="${esc(x.id)}">▶ Reactivar</button></div>`).join('')}
       ${sid && !pausedUntil(sellerById(sid)) ? `<div class="row" style="justify-content:flex-end"><button type="button" class="btn btn-sm" data-pause="${esc(sid)}">⏸ Suspender pedidos de ${esc((sellerById(sid) || {}).name || '')}</button></div>` : ''}
       <p class="muted">Tope por hoja: <b>${nf0.format(L.limit)} ${L.measure}</b> o <b>${L.maxClients} clientes</b>. Los pedidos se pueden editar (vendedor y oficina) mientras la hoja esté en un estado sin 🔒.</p>
+      <h3 style="margin:14px 0 0">🚚 Hojas de carga (despacho)</h3>
       ${groups.map(({ st, list }) => `
         <div class="section-title">${st.locked ? '🔒 ' : ''}${esc(st.name)} · ${list.length}</div>
         ${list.length ? `<div class="load-grid">${list.map(card).join('')}</div>` : '<p class="muted">Ninguna.</p>'}`).join('')}
+      <h3 style="margin:18px 0 0">🏢 Retiro por oficina <span class="muted" style="font-weight:400;font-size:13px">(despachador ${esc((Loads.retiroDispatcher(S.config) || {}).name || 'sin asignar — elígelo en Ajustes')} · una hoja para todos los vendedores)</span></h3>
+      ${retiros.length ? `<div class="load-grid">${retiros.map(card).join('')}</div>` : '<p class="muted">Ninguna. Los pedidos marcados «🏢 Retira por oficina» se arman aquí solos.</p>'}
       <div class="section-title">⏸ Clientes en espera (no se pierde el pedido)</div>
       ${held.length ? `<div class="card"><table class="inv">${((dupIdx0) => held.map((o) => {
         const t = Matrix.orderTotals(o);
@@ -305,15 +311,17 @@
   }
 
   function newLoadDialog(root) {
-    const sh = openSheet(`<div class="row"><h2 class="grow">Nueva hoja de carga</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+    const sh = openSheet(`<div class="row"><h2 class="grow">Nueva hoja</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
       <p class="muted">Crea una hoja vacía y luego mueve clientes a ella (⇄ Mover) o fusiona otra hoja.</p>
+      <label class="field"><span>Tipo</span><select id="nlT" class="select"><option value="">🚚 Hoja de carga (despacho)</option><option value="retiro">🏢 Retiro por oficina</option></select></label>
       <div class="grid2"><label class="field"><span>Vendedor</span><select id="nlS" class="select">${S.sellers.filter((s) => s.active).map((s) => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('')}</select></label>
       <label class="field"><span>Ruta</span><select id="nlR" class="select">${(S.config.routes || []).map((r) => `<option>${esc(r)}</option>`).join('')}</select></label></div>
       <div class="actions"><button class="btn btn-primary" id="nlOk">Crear hoja</button></div>`);
     $('#nlOk', sh.el).onclick = async () => {
       const s = sellerById($('#nlS', sh.el).value);
-      const r = Loads.moveOrder({ id: '__tmp', sellerId: s.id, sellerName: s.name, route: $('#nlR', sh.el).value }, null, null, { sellers: S.sellers, config: S.config });
-      const l = { ...r.loads[0], orderIds: [], route: $('#nlR', sh.el).value };
+      const ret = $('#nlT', sh.el).value === 'retiro';
+      const r = Loads.moveOrder({ id: '__tmp', sellerId: s.id, sellerName: s.name, route: $('#nlR', sh.el).value, ...(ret ? { modo: 'retiro' } : {}) }, null, null, { sellers: S.sellers, config: S.config });
+      const l = { ...r.loads[0], orderIds: [], route: ret ? 'RETIRO POR OFICINA' : $('#nlR', sh.el).value };
       await saveDocs('loads', l);
       sh.close(); U().loadId = l.id; renderLoads(root); toast('Hoja creada', 'ok');
     };
@@ -410,7 +418,7 @@
     root.innerHTML = `
       <div class="toolbar no-print">
         <button class="btn" id="dBack">← ${closed ? 'Archivo' : 'Hojas de carga'}</button>
-        <div class="grow"><h2 style="margin:0">${esc(Loads.labelOf(load))} ${load.number ? `<span class="muted mono">${esc(Loads.loadCode(load))}</span>` : ''} ${sellerTags(load)}</h2>
+        <div class="grow"><h2 style="margin:0">${Loads.isRetiro(load) ? '🏢 ' : ''}${esc(Loads.labelOf(load))} ${load.number ? `<span class="muted mono">${esc(Loads.loadCode(load))}</span>` : ''} ${sellerTags(load)}${Loads.isRetiro(load) ? ' <span class="status en_espera">RETIRO POR OFICINA</span>' : ''}</h2>
           <div class="muted">${esc(load.sellerName)} · pedidos del ${esc(Loads.orderDateRange(os) || '—')}${load.closedAt ? ' · cerrada ' + esc(new Date(load.closedAt).toLocaleString('es-VE')) : ''}</div></div>
         <label class="field"><span>Estado de la carga</span><select id="dStatus" class="select status-sel ${st.locked ? 'locked' : ''}">
           ${Loads.statuses(S.config).map((x) => `<option value="${esc(x.id)}" ${x.id === st.id ? 'selected' : ''}>${x.locked ? '🔒 ' : ''}${esc(x.name)}</option>`).join('')}</select></label>
@@ -476,7 +484,7 @@
       const L = cur(), os2 = Loads.loadOrders(L, byIdMap(S.orders)), pById = byIdMap(S.products);
       const vacRows = Envases.sheetRows(m.cols.map((c) => c.order), pById);
       const extra = vacRows.some((v) => v.total) ? vacRows.map((v) => ({ label: v.label, cells: v.cells, total: v.total })) : [];
-      const sheet = Exporta.matrix(m, { sheet: 'Hoja de carga', title: `HOJA DE CARGA · ${Loads.labelOf(L)}${L.number ? ' · ' + Loads.loadCode(L) : ''}`,
+      const sheet = Exporta.matrix(m, { sheet: 'Hoja de carga', title: `${Loads.isRetiro(L) ? 'RETIRO POR OFICINA' : 'HOJA DE CARGA'} · ${Loads.labelOf(L)}${L.number ? ' · ' + Loads.loadCode(L) : ''}`,
         info: [`Fecha de la carga: ${L.date || today()}`, `Pedidos del: ${Loads.orderDateRange(os2) || '—'}`, `Ruta: ${L.route || '—'}`, `Despachador: ${L.dispatcherName || '—'}`, `Vendedor(es): ${L.sellerName || '—'}`], extra });
       await Exporta.save(`hoja_${Loads.labelOf(L)}_${L.date || today()}.xlsx`, [sheet]);
     };
@@ -653,9 +661,24 @@
           <button class="btn btn-primary" type="button" id="oeSend">Enviar</button></div></div>
       ${locked ? '' : `<label class="field" style="margin-top:12px"><span>Agregar producto</span>
         <input id="oeSearch" class="input" placeholder="Buscar por nombre o código…" autocomplete="off"></label><div id="oeResults" class="results"></div>
-        <label class="field" style="margin-top:12px"><span>Nota para despacho</span><input id="oeNotes" class="input" maxlength="300" value="${esc(o.notes || '')}"></label>`}
+        <label class="field" style="margin-top:12px"><span>Nota para despacho</span><input id="oeNotes" class="input" maxlength="300" value="${esc(o.notes || '')}"></label>
+        <div class="row wrap" style="gap:8px;align-items:center;margin-top:10px"><b>Entrega:</b>
+          <button type="button" class="chip ${o.modo === 'retiro' ? '' : 'active'}" data-oemodo="">🚚 Despacho</button><button type="button" class="chip ${o.modo === 'retiro' ? 'active' : ''}" data-oemodo="retiro">🏢 Retira por oficina</button>
+          <span class="muted" style="font-size:12px">Al cambiarlo, el pedido pasa solo a la hoja que corresponde.</span></div>`}
       <div class="actions">${o.status !== 'despachado' ? '<button class="btn btn-danger" id="oeDel">🗑 Eliminar pedido</button>' : ''}<button class="btn btn-primary" data-close>Listo</button></div>`, { wide: true });
     draw(sh);
+    sh.el.querySelectorAll('[data-oemodo]').forEach((b) => { b.onclick = async () => {
+      const cur = orderById(o.id) || o, m = b.dataset.oemodo;
+      if ((cur.modo || '') === m) return;
+      const x = { ...cur }; if (m) x.modo = m; else delete x.modo;
+      await saveOrder(x);
+      await log('pedido_modo', `${x.clientName}: ${m ? '🏢 retira por oficina' : '🚚 despacho'}`, { orderId: x.id, clientName: x.clientName });
+      await autoPack();
+      const now = orderById(o.id), l = now && now.loadId ? S.loads.find((y) => y.id === now.loadId) : null;
+      toast(`${m ? '🏢 Retira por oficina' : '🚚 Despacho'}${l ? ' · ahora en ' + Loads.labelOf(l) : ''}`, 'ok');
+      sh.el.querySelectorAll('[data-oemodo]').forEach((y) => y.classList.toggle('active', y === b));
+      if (onDone) onDone();
+    }; });
     $('#oeClient', sh.el).onclick = () => { sh.close(); PV.clientFixSheet(orderById(o.id) || o, { office: true, onDone: () => { if (onDone) onDone(); orderEditor(orderById(o.id), onDone); } }); };
     const drawMsgs = () => { $('#oeMsgs', sh.el).innerHTML = PV.msgThreadHTML(orderById(o.id) || o); };
     drawMsgs();
@@ -732,12 +755,15 @@
         <label class="field"><span>Ruta</span><select id="noRoute" class="select"><option value="">— Elige —</option>${routes.map((r) => `<option>${esc(r)}</option>`).join('')}</select></label>
       </div>
       <label class="field"><span>Fecha del pedido</span><input type="date" id="noDate" class="input" value="${esc(d.date)}"></label>
+      <div class="row wrap" style="gap:8px;align-items:center;margin-top:8px"><b>Entrega:</b>
+        <button type="button" class="chip active" data-nomodo="">🚚 Despacho</button><button type="button" class="chip" data-nomodo="retiro">🏢 Retira por oficina</button></div>
       <label class="field" style="margin-top:8px"><span>Agregar producto</span><input id="noSearch" class="input" placeholder="Buscar por nombre o código…" autocomplete="off"></label>
       <div id="noResults" class="results"></div>
       <div id="noLines"></div>
       <label class="field" style="margin-top:12px"><span>Nota para despacho</span><input id="noNotes" class="input" maxlength="300"></label>
       <div class="actions"><button class="btn" data-close>Cancelar</button><button class="btn btn-ok" id="noSend" disabled>✓ Enviar pedido</button></div>`, { wide: true });
     const el = sh.el, q = (sel) => $(sel, el);
+    el.querySelectorAll('[data-nomodo]').forEach((b) => { b.onclick = () => { d.modo = b.dataset.nomodo; el.querySelectorAll('[data-nomodo]').forEach((x) => x.classList.toggle('active', x === b)); }; });
     const clientName = () => (d.client ? d.client.name : d.newName);
     const ready = () => !!(clientName() && d.sellerId && d.route && d.date && Object.keys(d.lines).length);
     const drawClient = () => {
@@ -834,7 +860,7 @@
         clientId: client.id, clientRif: client.rif || '', clientName: client.name, clientKey: norm(client.name),
         route: d.route, routeDate: d.date, status: 'enviado', lines: d.lines, sentLines: JSON.parse(JSON.stringify(d.lines)),
         notes: d.notes, loadId: null, createdAt: at, sentAt: at, createdBy: 'oficina', createdByName: (S.config && S.config.adminName) || 'Oficina',
-        deviceId: await Sync.deviceId(), deleted: false };
+        deviceId: await Sync.deviceId(), deleted: false, ...(d.modo === 'retiro' ? { modo: 'retiro' } : {}) };
       await saveOrder(o);
       await log('pedido_oficina', `Oficina cargó el pedido de ${o.clientName} a nombre de ${seller.name} · ${tot.cajas} cj + ${tot.unidades} un · ${usd(tot.monto)}`, { orderId: o.id, clientName: o.clientName, amount: tot.monto });
       sh.close();
@@ -1036,13 +1062,14 @@
     if (U().trash) return renderTrash(root);
     if (U().liqId) { const l = S.loads.find((x) => x.id === U().liqId); if (l) return renderLiquidation(root, l); U().liqId = null; }
     if (U().archiveId) { const l = S.loads.find((x) => x.id === U().archiveId); if (l) return renderLoadDetail(root, l); U().archiveId = null; }
-    const f = U().arch || (U().arch = { from: '', to: '', seller: '', route: '', disp: '', status: '' });
+    const f = U().arch || (U().arch = { from: '', to: '', seller: '', route: '', disp: '', status: '', tipo: '' });
     repairLiquidations(root);
     const dateOf = (l) => String(l.date || l.closedAt || l.approvedAt || '').slice(0, 10);
     const list = S.loads.filter((l) => Loads.isClosed(l) &&
       (!f.from || dateOf(l) >= f.from) && (!f.to || dateOf(l) <= f.to) &&
       (!f.seller || Loads.sellerIdsOf(l).includes(f.seller)) && (!f.route || l.route === f.route) &&
-      (!f.disp || l.dispatcherId === f.disp) && (!f.status || Loads.statusOf(l, S.config).id === f.status))
+      (!f.disp || l.dispatcherId === f.disp) && (!f.status || Loads.statusOf(l, S.config).id === f.status) &&
+      (!f.tipo || (f.tipo === 'retiro') === Loads.isRetiro(l)))
       .sort((a, b) => dateOf(b).localeCompare(dateOf(a)) || (b.number || 0) - (a.number || 0));
     // Lo liquidado cuenta lo ENTREGADO; las hojas sin liquidar se suman aparte (lo despachado)
     const ent = (l) => { const t = (l.liq && l.liq.totals) || {}; return { clients: t.clients || 0, bultos: t.bultos != null ? t.bultos : null, monto: t.monto || 0 }; };
@@ -1059,6 +1086,7 @@
         <label class="field"><span>Vendedor</span><select class="select" data-f="seller"><option value="">Todos</option>${opt(S.sellers.map((s) => [s.id, s.name]), f.seller)}</select></label>
         <label class="field"><span>Ruta</span><select class="select" data-f="route"><option value="">Todas</option>${opt((S.config.routes || []).map((r) => [r, r]), f.route)}</select></label>
         <label class="field"><span>Despachador</span><select class="select" data-f="disp"><option value="">Todos</option>${opt((S.config.dispatchers || []).map((d) => [d.id, d.name]), f.disp)}</select></label>
+        <label class="field"><span>Tipo</span><select class="select" data-f="tipo">${opt([['', 'Todas'], ['despacho', '🚚 Hojas de carga'], ['retiro', '🏢 Retiro por oficina']], f.tipo || '')}</select></label>
         <label class="field"><span>Estado</span><select class="select" data-f="status"><option value="">Todos</option>${opt(Loads.statuses(S.config).filter((x) => x.closing).map((x) => [x.id, x.name]), f.status)}</select></label>
         <button class="btn" id="aCsv" ${list.length ? '' : 'disabled'}>⇩ Exportar a Excel</button>
         <button class="btn" id="aTrash">🗑 Papelera</button>
@@ -1074,7 +1102,7 @@
       ${list.length ? `<div class="card" style="overflow:auto"><table class="inv">
         <thead><tr><th>Código</th><th>Fecha</th><th>Estado</th><th>Vendedor(es)</th><th>Ruta</th><th>Despachador</th><th>Clientes</th><th>Bultos</th><th>Unid.</th><th>Venta</th><th>Liquidación</th><th></th></tr></thead>
         <tbody>${list.map((l) => { const t = l.totals || {}; return `<tr>
-          <td><b class="mono">${esc(Loads.labelOf(l))}</b><div class="muted mono">${esc(Loads.loadCode(l))}</div></td><td data-l="Fecha">${esc(dateOf(l))}</td>
+          <td>${Loads.isRetiro(l) ? '🏢 ' : ''}<b class="mono">${esc(Loads.labelOf(l))}</b><div class="muted mono">${esc(Loads.loadCode(l))}</div>${Loads.isRetiro(l) ? '<span class="status en_espera">RETIRO</span>' : ''}</td><td data-l="Fecha">${esc(dateOf(l))}</td>
           <td data-l="Estado"><span class="status aprobada">${esc(stName(l))}</span></td>
           <td data-l="Vendedor">${esc(l.sellerName)}</td><td data-l="Ruta">${esc(l.route || '')}</td><td data-l="Despachador">${esc(l.dispatcherName || '')}</td>
           <td class="n" data-l="Clientes">${Liq.isDone(l) ? ent(l).clients : t.clients || 0}</td><td class="n" data-l="Bultos">${nf0.format(Liq.isDone(l) && ent(l).bultos != null ? ent(l).bultos : t.bultos || 0)}</td><td class="n" data-l="Unid.">${nf0.format(t.totalUnidades || 0)}</td>
@@ -1147,6 +1175,7 @@
     const liq = load.liq || blankLiq();
     const carry = Liq.carryFor(load, S.loads);
     const rows = Liq.truckRows(os, liq, carry, liqOpts());
+    if (Loads.isRetiro(load)) rows.forEach((r) => { r.retiro = true; }); // retiro por oficina: lo que sobra solo vuelve al almacén
     const vac = Liq.vacRows(os, liq, byIdMap(S.products));
     // Sobrante de esta hoja que ya tomó otra hoja liquidada (o un corte): queda fijo al corregir
     const locked = Liq.lockedCarry(load);
@@ -1169,7 +1198,8 @@
     const dLoads = Liq.destLoads(load, S.loads);
     const lname = (l) => `${Loads.labelOf(l)}${l.number ? ' ' + Loads.loadCode(l) : ''}${l.date ? ' · ' + l.date : ''}`;
     const destVal = (r) => (r.dest === 'siguiente' && r.destLoad ? 'L:' + r.destLoad : r.dest || '');
-    const destSel = (r) => `<select class="select sm ${r.dev > 0 && !r.dest ? 'need' : ''}" data-t="dest" ${dis}>${r.dest ? '' : '<option value="">— Elegir —</option>'}${opt([['almacen', 'Volvió a almacén'], ['siguiente', 'Siguiente carga (la próxima que se liquide)'],
+    const isRet = Loads.isRetiro(load);
+    const destSel = (r) => isRet ? `<select class="select sm ${r.dev > 0 && !r.dest ? 'need' : ''}" data-t="dest" ${dis}>${r.dest === 'almacen' ? '' : '<option value="">— Elegir —</option>'}${opt([['almacen', 'Volvió a almacén']], r.dest)}</select>` : `<select class="select sm ${r.dev > 0 && !r.dest ? 'need' : ''}" data-t="dest" ${dis}>${r.dest ? '' : '<option value="">— Elegir —</option>'}${opt([['almacen', 'Volvió a almacén'], ['siguiente', 'Siguiente carga (la próxima que se liquide)'],
       ...dLoads.map((l) => ['L:' + l.id, '→ ' + lname(l)]), ...(r.destLoad && !dLoads.some((l) => l.id === r.destLoad) ? [['L:' + r.destLoad, '→ ' + ((S.loads.find((l) => l.id === r.destLoad) && lname(S.loads.find((l) => l.id === r.destLoad))) || 'hoja eliminada')]] : [])], destVal(r))}</select>`;
     const fromTxt = (r) => (r.desde || []).map((id) => { const l = S.loads.find((x) => x.id === id); return l ? Loads.labelOf(l) : id; }).join(' + ');
     const opt = (arr, cur) => arr.map(([v, l]) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`).join('');
@@ -1242,7 +1272,8 @@
       ${vacIO.length ? `<div class="kpi-row">${vacIO.map((t) => `<div class="kpi"><small>Vacíos ${esc(t.type)} · salen / entran</small><b>${nf0.format(t.salen)} / ${nf0.format(t.entran)}</b><small>entran = ${nf0.format(t.recibidos)} recibidos + ${nf0.format(t.anteriores)} de entregas anteriores</small></div>`).join('')}</div>` : ''}
 
       <div class="section-title">3 · Cuadre del camión <span class="muted">(escribe a mano lo que quedó, lo que se cargó de verdad y lo que volvió · las celdas amarillas son tuyas)</span></div>
-      ${!load.dispatcherId ? '<div class="hint warn">⚠ La hoja no tiene despachador: no se puede saber qué mercancía traía el camión de cargas anteriores.</div>'
+      ${isRet ? `<div class="hint">🏢 <b>Retiro por oficina</b> (${esc(load.dispatcherName || 'sin despachador')}): no hay camión ni arrastre. Lo que el cliente no se llevó vuelve al almacén.</div>`
+        : !load.dispatcherId ? '<div class="hint warn">⚠ La hoja no tiene despachador: no se puede saber qué mercancía traía el camión de cargas anteriores.</div>'
         : carry ? `<div class="hint">🚚 <b>QUEDAN</b> = lo que el camión de <b>${esc(load.dispatcherName || '')}</b> traía de: ${carrySrcs.map((l) => `<b>${esc(Loads.labelOf(l))}</b>${l.number ? ' ' + esc(Loads.loadCode(l)) : ''} (${esc(l.date || '')})`).join(' + ')} · ${Object.keys(carry.rows).length} producto(s). Si lo cambias, escribe el motivo.</div>`
         : `<div class="hint">🚚 El camión de <b>${esc(load.dispatcherName || '')}</b> no traía mercancía de cargas anteriores.</div>`}
       ${older.length ? `<div class="hint warn">⚠ Antes de esta hoja, el despachador tiene ${older.length === 1 ? 'otra hoja' : older.length + ' hojas'} sin liquidar: ${older.map((l) => `<b>${esc(Loads.labelOf(l))}</b>${l.number ? ' ' + esc(Loads.loadCode(l)) : ''} (${esc(l.date || '—')})`).join(', ')}. Liquídala primero para que lo que sobró pase a esta en orden.</div>` : ''}
@@ -1254,7 +1285,7 @@
           <td class="n"><b>${nf0.format(x.qty)}</b></td><td>${esc([x.nota ? 'Nota ' + x.nota : '', x.motivo].filter(Boolean).join(' · '))}</td>
           <td>${done ? '' : `<button class="btn btn-sm" data-pret-del="${esc(x.id)}" aria-label="Quitar">✕</button>`}</td></tr>`).join('')}</tbody></table></div>`
         : '<p class="muted">Ninguna. Usa «+ Agregar» si el camión trajo mercancía que un cliente de otra hoja devolvió.</p>'}
-      <div class="toolbar no-print"><button class="btn btn-sm" id="qAllStore" ${dis}>Todo lo que sobra → volvió a almacén</button><button class="btn btn-sm" id="qAllNext" ${dis}>Todo lo que sobra → siguiente carga</button></div>
+      <div class="toolbar no-print"><button class="btn btn-sm" id="qAllStore" ${dis}>Todo lo que sobra → volvió a almacén</button>${isRet ? '' : `<button class="btn btn-sm" id="qAllNext" ${dis}>Todo lo que sobra → siguiente carga</button>`}</div>
       <div class="card" style="overflow:auto"><table class="inv liq-truck">
         <thead><tr><th>Producto</th><th>UM</th><th class="n">Según hoja</th><th class="n">Entregado</th><th class="n in">Quedan</th><th class="n in">Carga</th>${hasAnt ? '<th class="n">Dev. anteriores</th>' : ''}<th class="n">Total</th><th class="n">Debe quedar</th><th class="n in">Devolución</th><th class="n">Diferencia</th><th class="in">Motivo si no cuadra</th><th>Lo que sobra</th></tr></thead>
         <tbody>${rows.map((r) => `<tr data-key="${esc(r.key)}" class="${r.dev === null ? 'liq-count' : r.dif !== 0 ? 'liq-bad' : ''}">
@@ -1603,7 +1634,8 @@
       const lines = e.result === 'retiro' ? { ...(o.lines || {}) } : truck;
       updOrders.push({ ...o, delivery: {
         loadId: load.id, result: e.result, lines, monto: Matrix.orderTotals({ lines }).monto, motivo: e.motivo || '',
-        ...(e.result === 'retiro' ? { viaOficina: true, retiroNote: String(e.retiroNote || '').trim() || (o.valeryNote || ''), truckLines: {} } : {}),
+        ...(e.result === 'retiro' ? { viaOficina: true, retiroNote: String(e.retiroNote || '').trim() || (o.valeryNote || ''), truckLines: {},
+          oficinaDispatcherId: (Loads.retiroDispatcher(S.config) || {}).id || '', oficinaDispatcherName: (Loads.retiroDispatcher(S.config) || {}).name || 'Retiro en oficina' } : {}),
         voidedNote: e.result === 'parcial' || e.result === 'anulada' ? (o.valeryNote || '') : '',
         newValery: e.result === 'parcial' ? String(e.newValery || '').trim() : '',
         vac: vacBy[o.id] || {}, prevVac: Liq.prevRows([o], liq).map((p) => ({ type: p.type, from: p.from, qty: p.qty, motivo: p.motivo })),
@@ -2628,7 +2660,9 @@
           </div></section>
 
         <section class="card card-pad"><h3>Rutas</h3>${listEditor('routesEd', c.routes || [], 'Nueva ruta')}</section>
-        <section class="card card-pad"><h3>Despachadores</h3>${listEditor('dispEd', (c.dispatchers || []).map((d) => d.name), 'Nuevo despachador')}</section>
+        <section class="card card-pad"><h3>Despachadores</h3>${listEditor('dispEd', (c.dispatchers || []).map((d) => d.name), 'Nuevo despachador')}
+          <label class="field" style="margin-top:10px"><span>🏢 Despachador de los RETIROS POR OFICINA</span><select id="retDisp" class="select"><option value="">— Elegir —</option>${(c.dispatchers || []).map((d) => `<option value="${esc(d.id)}" ${(Loads.retiroDispatcher(c) || {}).id === d.id ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}</select></label>
+          <p class="muted">Se asigna solo a cada hoja de retiro por oficina y recibe las ventas «Cliente retiró por oficina».</p></section>
         <section class="card card-pad"><h3>Categorías (orden del catálogo y de la hoja de carga)</h3>
           <p class="muted">Para ordenar también los productos dentro de cada categoría usa Inventario → ↕ Ordenar catálogo.</p>
           ${listEditor('rubEd', c.rubros || [], 'Nueva categoría')}</section>
@@ -2732,6 +2766,7 @@
     };
     bindList($('#routesEd'), () => S.config.routes || [], (arr) => saveCfg({ routes: arr }));
     bindList($('#rubEd'), () => S.config.rubros || [], (arr) => saveCfg({ rubros: arr }));
+    $('#retDisp').onchange = (e) => saveCfg({ retiroDispatcherId: e.target.value });
     bindList($('#dispEd'), () => (S.config.dispatchers || []).map((d) => d.name), (names) => {
       const prev = S.config.dispatchers || [];
       return saveCfg({ dispatchers: names.map((n) => prev.find((d) => d.name === n) || { id: DB.uid('d'), name: n }) });

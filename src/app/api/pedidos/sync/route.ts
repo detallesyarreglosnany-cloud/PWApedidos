@@ -256,7 +256,7 @@ async function dupNotices(ids: string[]): Promise<Notice[]> {
 // Lo que ve un vendedor de una hoja de carga: estado, número, fecha, ruta y
 // despachador. Nunca montos, notas ni pedidos de otros vendedores (hojas fusionadas).
 const SELLER_LOAD_FIELDS = ['id', 'label', 'number', 'status', 'route', 'date', 'createdAt', 'closedAt', 'dispatcherId', 'dispatcherName',
-  'firstNote', 'lastNote', 'sellerId', 'sellerIds', 'deleted', 'updatedAt'];
+  'firstNote', 'lastNote', 'sellerId', 'sellerIds', 'deleted', 'updatedAt', 'tipo'];
 function sellerLoadView(d: Doc): Doc {
   return { ...Object.fromEntries(SELLER_LOAD_FIELDS.filter((f) => f in d).map((f) => [f, d[f]])), id: d.id, updatedAt: d.updatedAt, partial: true };
 }

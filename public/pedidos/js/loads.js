@@ -18,6 +18,11 @@
  *
  * Una hoja agrupa pedidos de uno o varios vendedores (hojas fusionadas) y una
  * ruta, hasta config.load.limit bultos o config.load.maxClients clientes.
+ *
+ * Tipo: order.modo = 'retiro' (el cliente retira en la oficina) va a hojas
+ * load.tipo = 'retiro' («RETIRO POR OFICINA»): una para todos los vendedores, con
+ * el despachador de retiros (Ajustes) y el mismo tope. Nunca se arman mezcladas
+ * con las de despacho; mover/fusionar entre ambas sí se puede (cambia el modo).
  * ========================================================================= */
 (function (global) {
   'use strict';
@@ -50,6 +55,12 @@
   }
   const isOpen = (load, cfg) => !load.deleted && !statusOf(load, cfg).locked;
   const isClosed = (load) => !!(load.closedAt || load.status === 'aprobada');
+  const isRetiro = (x) => !!x && (x.tipo === 'retiro' || x.modo === 'retiro');
+  /** Despachador de los retiros por oficina (Ajustes; si no, el que se llame «Douglas T.»). */
+  function retiroDispatcher(cfg) {
+    const ds = (cfg && cfg.dispatchers) || [];
+    return ds.find((d) => d.id === (cfg && cfg.retiroDispatcherId)) || ds.find((d) => /douglas\s*t/i.test(d.name || '')) || null;
+  }
 
   function limits(cfg) {
     const l = (cfg && cfg.load) || {};
@@ -94,6 +105,7 @@
   function autoLabel(load) {
     const d = String(load.date || load.createdAt || '').slice(0, 10);
     const [, m, day] = d.split('-');
+    if (isRetiro(load)) return (MESES[(+m || 1) - 1] || '') + (day || '') + '-RETIRO';
     const route = String(load.route || 'GEN').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z ]/g, '')
       .split(' ').filter(Boolean).map((w, i, a) => (a.length > 1 ? w.slice(0, 2) : w.slice(0, 4))).join('');
     return (MESES[(+m || 1) - 1] || '') + (day || '') + '-' + route;
@@ -116,12 +128,13 @@
     return (s && s.routes && s.routes[0]) || '';
   }
 
-  function newLoad(sellerId, sellerName, route, cfg, id) {
+  function newLoad(sellerId, sellerName, route, cfg, id, tipo) {
     const list = statuses(cfg);
+    const ret = tipo === 'retiro', rd = ret ? retiroDispatcher(cfg) : null;
     return {
       id: id || DB.uid('l'), status: (list.find((x) => !x.locked) || list[0]).id, number: null, label: '',
-      sellerId, sellerIds: [sellerId], sellerName, route, dispatcherId: '', dispatcherName: '',
-      date: '', orderIds: [], createdAt: DB.now(), closedAt: null, notes: '', deleted: false,
+      sellerId, sellerIds: [sellerId], sellerName, route: ret ? 'RETIRO POR OFICINA' : route, dispatcherId: rd ? rd.id : '', dispatcherName: rd ? rd.name : '',
+      date: '', orderIds: [], createdAt: DB.now(), closedAt: null, notes: '', deleted: false, ...(ret ? { tipo: 'retiro' } : {}),
     };
   }
 
@@ -179,17 +192,29 @@
     const ordersById = new Map(orders.map((o) => [o.id, o]));
     const sellersById = new Map(sellers.map((s) => [s.id, s]));
     const changedLoads = new Map(), changedOrders = [];
+    // Pedidos cuyo tipo (despacho/retiro) ya no es el de su hoja editable: se vuelven a ubicar
+    const loadById = new Map(loads.filter((l) => !l.deleted).map((l) => [l.id, l]));
+    const misplaced = orders.filter((o) => {
+      if (o.deleted || o.status !== 'en_carga' || !o.loadId) return false;
+      const l = loadById.get(o.loadId);
+      return l && isOpen(l, config) && !isClosed(l) && isRetiro(o) !== isRetiro(l);
+    });
+    misplaced.forEach((o) => {
+      const l = changedLoads.get(o.loadId) || loadById.get(o.loadId);
+      changedLoads.set(l.id, { ...l, orderIds: (l.orderIds || []).filter((id) => id !== o.id) });
+    });
+    const misIds = new Set(misplaced.map((o) => o.id));
     const queue = orders
-      .filter((o) => !o.deleted && o.status === 'enviado' && !o.loadId && Matrix.orderTotals(o).items > 0)
+      .filter((o) => !o.deleted && ((o.status === 'enviado' && !o.loadId) || misIds.has(o.id)) && Matrix.orderTotals(o).items > 0)
       .sort((a, b) => String(a.sentAt || a.updatedAt).localeCompare(String(b.sentAt || b.updatedAt)));
     if (!queue.length) return { loads: [], orders: [] };
     // Más vieja primero; a igual hora decide el id (todos los equipos eligen la misma)
-    const open = loads.filter((l) => isOpen(l, config) && !isClosed(l))
+    const open = loads.filter((l) => isOpen(l, config) && !isClosed(l)).map((l) => changedLoads.get(l.id) || l)
       .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)) || String(a.id).localeCompare(String(b.id)));
     const taken = new Set(loads.filter((l) => !l.deleted).map((l) => l.id));
     // Un pedido que ya figura en una hoja abierta no se vuelve a ubicar (evita duplicados)
     const placed = new Map();
-    open.forEach((l) => (l.orderIds || []).forEach((id) => placed.set(id, l)));
+    open.forEach((l) => (l.orderIds || []).forEach((id) => { if (!misIds.has(id)) placed.set(id, l); }));
     queue.forEach((o) => {
       const already = placed.get(o.id);
       if (already) {
@@ -198,8 +223,10 @@
       }
       const route = routeOf(o, sellersById);
       const m = measure(o, config);
-      // Solo la hoja más reciente de ese vendedor y ruta (las nuevas se agregan al final de open)
-      const mine = open.filter((l) => sellerIdsOf(l).includes(o.sellerId) && (l.route || '') === route);
+      const ret = isRetiro(o);
+      // Despacho: la hoja más reciente de ese vendedor y ruta. Retiro: la hoja de retiro más
+      // reciente (una para todos los vendedores). Nunca se mezclan.
+      const mine = open.filter((l) => (ret ? isRetiro(l) : !isRetiro(l) && sellerIdsOf(l).includes(o.sellerId) && (l.route || '') === route));
       let target = mine.length ? mine[mine.length - 1] : null;
       if (target) {
         const u = usage(target, ordersById, config);
@@ -212,10 +239,12 @@
         let id = 'l_auto_' + o.id, n = 1;
         while (taken.has(id)) id = 'l_auto_' + o.id + '_' + (++n);
         taken.add(id);
-        target = newLoad(o.sellerId, s ? s.name : o.sellerName, route, config, id);
+        target = newLoad(o.sellerId, s ? s.name : o.sellerName, route, config, id, ret ? 'retiro' : '');
         open.push(target);
       }
-      target.orderIds = (target.orderIds || []).concat(o.id);
+      target.orderIds = (target.orderIds || []).filter((id) => id !== o.id).concat(o.id);
+      if (ret && !sellerIdsOf(target).includes(o.sellerId)) Object.assign(target, withSellers(target, [o], state));
+      const ti = open.indexOf(target); if (ti < 0) open.push(target);
       changedLoads.set(target.id, target);
       const upd = { ...o, loadId: target.id, status: 'en_carga', route, locked: false, loadStatusName: statusOf(target, config).name };
       ordersById.set(o.id, upd);
@@ -241,10 +270,13 @@
     const out = { loads: [] };
     if (from) out.loads.push({ ...from, orderIds: from.orderIds.filter((id) => id !== order.id) });
     let t = target;
-    if (!t) { const s = sellersById.get(order.sellerId); t = newLoad(order.sellerId, s ? s.name : order.sellerName, order.route || (from && from.route) || '', state.config); }
+    if (!t) { const s = sellersById.get(order.sellerId); t = newLoad(order.sellerId, s ? s.name : order.sellerName, order.route || (from && !isRetiro(from) && from.route) || '', state.config, null, isRetiro(order) ? 'retiro' : ''); }
     t = withSellers({ ...t, orderIds: (t.orderIds || []).filter((id) => id !== order.id).concat(order.id) }, [order], state);
     out.loads.push(t);
-    out.order = { ...order, loadId: t.id, status: 'en_carga', locked: false, loadStatusName: statusOf(t, state.config).name };
+    // El cliente cambió de opinión: el pedido toma el tipo de la hoja a la que va
+    const o2 = { ...order, loadId: t.id, status: 'en_carga', locked: false, loadStatusName: statusOf(t, state.config).name };
+    if (isRetiro(t)) o2.modo = 'retiro'; else delete o2.modo;
+    out.order = o2;
     return out;
   }
 
@@ -255,7 +287,7 @@
     const t = withSellers({ ...target, orderIds: (target.orderIds || []).concat(moved.map((o) => o.id)) }, moved, state);
     return {
       target: t, source: { ...source, orderIds: [], deleted: true },
-      orders: moved.map((o) => ({ ...o, loadId: t.id, loadStatusName: statusOf(t, state.config).name })),
+      orders: moved.map((o) => { const x = { ...o, loadId: t.id, loadStatusName: statusOf(t, state.config).name }; if (isRetiro(t)) x.modo = 'retiro'; else delete x.modo; return x; }),
     };
   }
   function withSellers(load, orders, state) {
@@ -362,7 +394,7 @@
   const fmtNum = (n, w) => String(n || 0).padStart(w || 5, '0');
 
   global.Loads = {
-    DEFAULT_STATUSES, ORDER_LABEL, statuses, statusOf, isOpen, isClosed, limits, measure, usage, loadOrders,
+    DEFAULT_STATUSES, ORDER_LABEL, isRetiro, retiroDispatcher, statuses, statusOf, isOpen, isClosed, limits, measure, usage, loadOrders,
     autoPack, repair, hold, release, moveOrder, merge, setStatus, numbersNeeded, shortages, initials, sellerIdsOf, labelOf, autoLabel, orderDateRange,
     loadCode: (l) => (l.number ? 'C-' + fmtNum(l.number) : 'Borrador'),
     noteCode: (n) => 'NE-' + fmtNum(n, 6),
