@@ -321,6 +321,7 @@
 
   /** Mover un cliente a otra hoja abierta (o a una nueva). */
   function moveDialog(order, fromLoad, onDone) {
+    if ((order.delivery && order.delivery.at) || (fromLoad && fromLoad.liq)) { toast('Este pedido está en una hoja con liquidación: no se mueve. Ajusta la liquidación de esa hoja.', 'err'); return; }
     const targets = openLoads().filter((l) => !fromLoad || l.id !== fromLoad.id);
     const ordersById = byIdMap(S.orders);
     const sh = openSheet(`<div class="row"><h2 class="grow">Mover a ${esc(order.clientName)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
@@ -674,6 +675,8 @@
     if (del) del.onclick = async () => {
       const cur = orderById(o.id) || o;
       if (cur.status === 'despachado') { toast('Un pedido despachado no se puede eliminar', 'err'); return; }
+      const lq = cur.loadId ? S.loads.find((l) => l.id === cur.loadId) : null;
+      if ((cur.delivery && cur.delivery.at) || (lq && lq.liq)) { toast('Este pedido está en una hoja con liquidación: reabre/ajusta la liquidación (⊘ No facturado o ✕ Anulada) en vez de eliminarlo', 'err'); return; }
       const t = Matrix.orderTotals(cur);
       if (!confirm(`¿Eliminar el pedido de ${cur.clientName} (${cur.sellerName}) por ${usd(t.monto)}?${cur.locked ? '\n\nOjo: su hoja de carga ya está aprobada.' : ''}\n\nSale de su hoja de carga y ${cur.sellerName} recibe el aviso.`)) return;
       const load = cur.loadId ? S.loads.find((l) => l.id === cur.loadId) : null;
@@ -956,7 +959,74 @@
     };
   }
 
+  /* ============================== PAPELERA ============================== */
+  // Nada se borra de verdad: hojas y pedidos eliminados quedan marcados y se pueden recuperar.
+  function renderTrash(root) {
+    const st = U().trash;
+    // Lo eliminado no está en memoria (S.*): se lee de la base del equipo
+    if (!st.data) {
+      root.innerHTML = '<p class="muted">Abriendo la papelera…</p>';
+      Promise.all([DB.getAll('loads'), DB.getAll('orders')]).then(([ls, os]) => { st.data = { loads: ls, orders: os.filter((o) => o.deleted) }; if (root.isConnected && U().trash === st) renderTrash(root); });
+      return;
+    }
+    const q = norm(st.q || ''), allLoads = st.data.loads;
+    const when = (d) => String(d.deletedAt || d.updatedAt || '').slice(0, 16).replace('T', ' ');
+    const loadOf = (o) => allLoads.find((l) => l.id === o.loadId);
+    const ordersOfLoad = (l) => S.orders.concat(st.data.orders).filter((o) => o.loadId === l.id);
+    const loads = allLoads.filter((l) => l.deleted).filter((l) => !q || norm([Loads.labelOf(l), l.sellerName, l.dispatcherName, Loads.loadCode(l), ...ordersOfLoad(l).map((o) => o.clientName)].join(' ')).includes(q))
+      .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+    const orders = st.data.orders.filter((o) => !q || norm([o.clientName, o.sellerName, o.valeryNote, (loadOf(o) && Loads.labelOf(loadOf(o))) || ''].join(' ')).includes(q))
+      .sort((a, b) => String(b.deletedAt || b.updatedAt).localeCompare(String(a.deletedAt || a.updatedAt)));
+    const bult = (o) => Matrix.orderTotals(o).bultos;
+    root.innerHTML = `
+      <div class="toolbar"><button class="btn" id="tBack">← Archivo</button><h2 class="grow" style="margin:0">🗑 Papelera</h2>
+        <label class="field grow"><span>Buscar (cliente, hoja, vendedor, nota)</span><input class="input" id="tQ" value="${esc(st.q || '')}" placeholder="Ej.: gran ellas"></label></div>
+      <p class="muted">Lo eliminado no se pierde: se puede recuperar con todo lo que tenía (cantidades, liquidación y vacíos).</p>
+      <div class="section-title">Hojas de carga eliminadas (${loads.length})</div>
+      ${loads.length ? `<div class="card" style="overflow:auto"><table class="inv"><thead><tr><th>Hoja</th><th>Fecha</th><th>Despachador</th><th>Clientes</th><th class="n">Bultos</th><th>Liquidación</th><th>Eliminada</th><th></th></tr></thead>
+        <tbody>${loads.map((l) => { const os = ordersOfLoad(l); const t = l.totals || {}; return `<tr><td><b>${esc(Loads.labelOf(l))}</b> <span class="muted mono">${l.number ? esc(Loads.loadCode(l)) : ''}</span><div class="muted">${esc(l.sellerName || '')}</div></td>
+          <td>${esc(l.date || '')}</td><td>${esc(l.dispatcherName || '—')}</td><td>${esc(os.map((o) => o.clientName).slice(0, 4).join(', '))}${os.length > 4 ? '…' : ''}</td><td class="n">${nf0.format(t.bultos || os.reduce((a, o) => a + bult(o), 0))}</td>
+          <td>${Liq.isDone(l) ? '✓ Liquidada' : l.liq ? 'Borrador' : '—'}</td><td class="muted">${esc(when(l))}</td><td><button class="btn btn-sm btn-primary" data-rl="${esc(l.id)}">↺ Recuperar</button></td></tr>`; }).join('')}</tbody></table></div>`
+        : '<p class="muted">Ninguna.</p>'}
+      <div class="section-title">Pedidos eliminados (${orders.length})</div>
+      ${orders.length ? `<div class="card" style="overflow:auto"><table class="inv"><thead><tr><th>Cliente</th><th>Vendedor</th><th>Fecha</th><th>Hoja</th><th class="n">Bultos</th><th class="n">Monto</th><th>Eliminado</th><th></th></tr></thead>
+        <tbody>${orders.slice(0, 200).map((o) => { const l = loadOf(o); return `<tr><td><b>${esc(o.clientName)}</b>${o.delivery && o.delivery.at ? ' <span class="tag">liquidado</span>' : ''}<div class="muted mono">${esc(o.valeryNote ? 'Nota ' + o.valeryNote : '')}</div></td>
+          <td>${esc(o.sellerName || '')}</td><td>${esc(o.routeDate || '')}</td><td>${l ? esc(Loads.labelOf(l)) + (l.deleted ? ' <span class="warn-txt">(eliminada)</span>' : '') : '—'}</td>
+          <td class="n">${nf0.format(bult(o))}</td><td class="n">${usd(Matrix.orderTotals(o).monto)}</td><td class="muted">${esc(when(o))}${o.deletedBy ? ' · ' + esc(o.deletedBy) : ''}</td>
+          <td><button class="btn btn-sm btn-primary" data-ro="${esc(o.id)}">↺ Recuperar</button></td></tr>`; }).join('')}</tbody></table></div>`
+        : '<p class="muted">Ninguno.</p>'}`;
+    $('#tBack').onclick = () => { U().trash = null; renderArchive(root); };
+    let tm; $('#tQ').oninput = (e) => { clearTimeout(tm); tm = setTimeout(() => { st.q = e.target.value; renderTrash(root); const i = $('#tQ'); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }, 250); };
+    root.onclick = async (e) => {
+      const bl = e.target.closest('[data-rl]'), bo = e.target.closest('[data-ro]');
+      if (!bl && !bo) return;
+      const at = DB.now(), undel = (o) => { const x = { ...o, deleted: false, restoredAt: at }; delete x.deletedBy; delete x.deletedAt;
+        // Con liquidación: el servidor vuelve a escribir sus renglones del kardex de vacíos
+        if (x.delivery && x.delivery.at) x.kxRev = (+x.kxRev || 0) + 1; return x; };
+      if (bl) {
+        const l = allLoads.find((x) => x.id === bl.dataset.rl); if (!l) return;
+        const os = st.data.orders.filter((o) => o.loadId === l.id);
+        if (!confirm(`Recuperar la hoja ${Loads.labelOf(l)}${os.length ? ` y ${os.length} pedido(s) eliminados que estaban en ella` : ''}?`)) return;
+        await saveDocs('loads', [{ ...l, deleted: false, restoredAt: at, orderIds: [...new Set([...(l.orderIds || []), ...os.map((o) => o.id)])] }]);
+        if (os.length) await saveDocs('orders', os.map(undel));
+        await log('recuperado', `Recuperó de la papelera la hoja ${Loads.labelOf(l)}${os.length ? ` con ${os.length} pedido(s)` : ''}`, { loadId: l.id });
+        toast('Hoja recuperada', 'ok');
+      } else {
+        const o = st.data.orders.find((x) => x.id === bo.dataset.ro); if (!o) return;
+        const l = loadOf(o);
+        if (!confirm(`Recuperar el pedido de ${o.clientName} (${nf0.format(bult(o))} bultos)${l ? ` en su hoja ${Loads.labelOf(l)}${l.deleted ? ' (también se recupera la hoja)' : ''}` : ''}?`)) return;
+        await saveDocs('orders', [undel(o)]);
+        if (l) await saveDocs('loads', [{ ...l, deleted: false, ...(l.deleted ? { restoredAt: at } : {}), orderIds: [...new Set([...(l.orderIds || []), o.id])] }]);
+        await log('recuperado', `Recuperó de la papelera el pedido de ${o.clientName}${l ? ' en la hoja ' + Loads.labelOf(l) : ''}`, { orderId: o.id, clientName: o.clientName });
+        toast('Pedido recuperado', 'ok');
+      }
+      PV.runSync(false);
+      st.data = null; renderTrash(root);
+    };
+  }
+
   function renderArchive(root) {
+    if (U().trash) return renderTrash(root);
     if (U().liqId) { const l = S.loads.find((x) => x.id === U().liqId); if (l) return renderLiquidation(root, l); U().liqId = null; }
     if (U().archiveId) { const l = S.loads.find((x) => x.id === U().archiveId); if (l) return renderLoadDetail(root, l); U().archiveId = null; }
     const f = U().arch || (U().arch = { from: '', to: '', seller: '', route: '', disp: '', status: '' });
@@ -984,6 +1054,7 @@
         <label class="field"><span>Despachador</span><select class="select" data-f="disp"><option value="">Todos</option>${opt((S.config.dispatchers || []).map((d) => [d.id, d.name]), f.disp)}</select></label>
         <label class="field"><span>Estado</span><select class="select" data-f="status"><option value="">Todos</option>${opt(Loads.statuses(S.config).filter((x) => x.closing).map((x) => [x.id, x.name]), f.status)}</select></label>
         <button class="btn" id="aCsv" ${list.length ? '' : 'disabled'}>⇩ Exportar a Excel</button>
+        <button class="btn" id="aTrash">🗑 Papelera</button>
       </div>
       <div class="kpi-row">
         <div class="kpi"><small>Cargas</small><b>${list.length}</b><small>${sum.n} liquidadas</small></div>
@@ -1004,6 +1075,7 @@
           <td data-l="Liquidación">${Liq.isDone(l) ? '<span class="status aprobada">✓ Liquidada</span>' : (l.liq ? '<span class="status en_espera">Borrador</span>' : '<span class="status abierto">Por liquidar</span>')}</td>
           <td style="white-space:nowrap"><button class="btn btn-sm" data-view="${esc(l.id)}">Ver</button> <button class="btn btn-sm btn-primary" data-liq="${esc(l.id)}">🧾 Liquidar</button></td></tr>`; }).join('')}</tbody></table></div>`
       : '<div class="empty card"><strong>Sin cargas cerradas</strong>con esos filtros.</div>'}`;
+    $('#aTrash').onclick = () => { U().trash = { q: '' }; renderArchive(root); };
     $('#aFilters').onchange = (e) => { const k = e.target.dataset.f; if (k) { f[k] = e.target.value; renderArchive(root); } };
     root.onclick = (e) => {
       const cut = e.target.closest('[data-carry-cut]'); if (cut) { cutDialog(cut.dataset.carryCut, root); return; }
