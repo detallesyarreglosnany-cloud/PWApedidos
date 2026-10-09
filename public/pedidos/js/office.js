@@ -342,7 +342,7 @@
     };
   }
 
-  function mergeDialog(load, onDone) {
+  function mergeLoadsDialog(load, onDone) {
     const ordersById = byIdMap(S.orders);
     const others = openLoads().filter((l) => l.id !== load.id);
     const sh = openSheet(`<div class="row"><h2 class="grow">Fusionar con otra hoja</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
@@ -493,7 +493,7 @@
       saveLoad({ dispatcherId: d ? d.id : '', dispatcherName: d ? d.name : '' });
     };
     const de = $('#dEdit'); if (de) de.onclick = () => { U().editQty = !U().editQty; refresh(); };
-    const dm = $('#dMerge'); if (dm) dm.onclick = () => mergeDialog(cur(), refresh);
+    const dm = $('#dMerge'); if (dm) dm.onclick = () => mergeLoadsDialog(cur(), refresh);
     const dd = $('#dDel'); if (dd) dd.onclick = async () => { await saveDocs('loads', { ...cur(), deleted: true }); U().loadId = null; PV.render(); };
     root.onclick = async (e) => {
       const tk = e.target.closest('[data-ticket]'); if (tk) { Print.printTickets([orderById(tk.dataset.ticket)].filter(Boolean), tctx(), S.settings.ticket); return; }
@@ -1214,7 +1214,7 @@
             <td><b>${esc(o.clientName)}</b> <span class="tag">${esc(Loads.initials(o.sellerName))}</span></td>
             <td data-l="Nota Valery"><input class="input sm mono valery-in" inputmode="numeric" maxlength="20" data-oid="${esc(o.id)}" value="${esc(o.valeryNote || '')}" placeholder="N°" ${dis}></td>
             <td data-l="Resultado"><select class="select sm" data-q="result" ${dis}>${opt(Liq.RESULTS, e.result)}</select></td>
-            <td data-l="Nota nueva">${e.result === 'parcial' ? `<input class="input sm mono" data-q="newValery" inputmode="numeric" maxlength="20" value="${esc(e.newValery || '')}" placeholder="N° nueva" ${dis}>` : (e.result === 'anulada' ? '<span class="muted">anulada</span>' : '')}</td>
+            <td data-l="Nota nueva">${e.result === 'parcial' ? `<input class="input sm mono" data-q="newValery" inputmode="numeric" maxlength="20" value="${esc(e.newValery || '')}" placeholder="N° nueva" ${dis}>` : (e.result === 'anulada' ? '<span class="muted">anulada</span>' : e.result === 'retiro' ? `<input class="input sm mono" data-q="retiroNote" inputmode="numeric" maxlength="20" value="${esc(e.retiroNote || '')}" placeholder="misma nota" title="Nota con la que retiró en la oficina (vacío = la misma del camión)" ${dis}>` : '')}</td>
             <td data-l="Motivo">${e.result !== 'entregada' ? motivoSel(e.motivo || '', 'data-q="motivo"') : ''}</td>
             <td class="n" data-l="Entregado">${usd(entregado$(o))}${entregado$(o) !== pedido$(o) ? `<div class="muted">de ${usd(pedido$(o))}</div>` : ''}</td>
             <td>${e.result === 'parcial' ? `<button class="btn btn-sm" data-ret="${esc(o.id)}">↩ Devolución${nret ? ' (' + nret + ')' : ''}</button>` : ''}${e.result === 'nofact' ? `<button class="btn btn-sm" data-nf="${esc(o.id)}">⊘ No facturado${nnf ? ' (' + nnf + ')' : ''}</button>` : ''}</td></tr>`;
@@ -1281,7 +1281,7 @@
         </thead>
         <tbody>${sh.rows.map((r) => `<tr data-key="${esc(r.key)}" class="${r.dev === null ? 'liq-count' : r.dif !== 0 ? 'liq-bad' : ''}">
           <td class="sticky-col"><span class="mono muted">${esc(r.code)}</span> ${esc(r.name)} <b>${esc(r.presentation)}</b> <span class="um ${r.um}">${r.um}</span></td>
-          ${r.cells.map((c) => `<td class="n ${c.del || c.ret ? '' : 'zero'}">${c.del ? nf0.format(c.del) : ''}${c.ret ? (c.nf ? `<small class="ret" title="No facturado (misma nota)">⊘${c.ret}</small>` : `<small class="ret" title="Devuelto">↩${c.ret}</small>`) : ''}</td>`).join('')}
+          ${r.cells.map((c) => `<td class="n ${c.del || c.ret ? '' : 'zero'}">${c.del ? nf0.format(c.del) : ''}${c.ret ? (c.retiro ? `<small class="ret" title="Retiró por oficina (vuelve en el camión)">🏢${c.ret}</small>` : c.nf ? `<small class="ret" title="No facturado (misma nota)">⊘${c.ret}</small>` : `<small class="ret" title="Devuelto">↩${c.ret}</small>`) : ''}</td>`).join('')}
           <td class="n lq-tot">${r.entregado}</td><td class="n"><input class="cell-in" inputmode="numeric" data-t="queda" value="${r.quedaMan || r.queda ? r.queda : ''}" aria-label="Quedan ${esc(r.code)}" ${dis}></td>
           <td class="n"><input class="cell-in" inputmode="numeric" data-t="carga" value="${r.carga}" aria-label="Carga ${esc(r.code)}" ${dis}></td>
           <td class="n">${r.total}${r.anterior ? `<small class="ret" title="Incluye devoluciones de entregas anteriores">+${r.anterior}↩ant</small>` : ''}</td><td class="n"><b>${r.debe}</b></td>
@@ -1355,6 +1355,9 @@
           if (k === 'result' && val === 'entregada') { delete en.ret; delete en.nf; delete en.newValery; delete en.motivo; }
           if (k === 'result' && val !== 'nofact') delete en.nf;
           if (k === 'result' && val === 'nofact') { delete en.ret; delete en.newValery; }
+          if (k === 'result' && val !== 'retiro') delete en.retiroNote;
+          if (k === 'result' && val === 'retiro') { delete en.ret; delete en.nf; delete en.newValery; if (!en.motivo) en.motivo = 'RETIRÓ POR OFICINA'; }
+          if (k === 'retiroNote') en.retiroNote = val.replace(/\s+/g, '').toUpperCase();
           if (k === 'result' && val === 'anulada') delete en.newValery;
           if (k === 'result' && (val === 'pendiente' || val === 'anulada')) delete en.ret;
           q.orders[oid] = en;
@@ -1595,9 +1598,12 @@
     vac.forEach((v) => { (vacBy[v.orderId] = vacBy[v.orderId] || {})[v.pid] = { code: v.code, type: v.type, regime: v.regime, boxes: v.boxes, recv: v.recv, asg: v.asg, pending: v.pending, motivo: v.motivo || (v.pending && v.regime === 'prestamo' ? 'PRÉSTAMO' : '') }; });
     const updOrders = [], clones = [];
     os.forEach((o) => {
-      const e = Liq.entry(liq, o.id), lines = Liq.deliveredLines(o, e);
+      const e = Liq.entry(liq, o.id), truck = Liq.deliveredLines(o, e);
+      // Retiró por oficina: el camión no lo entregó (vuelve), pero la venta sí se hizo
+      const lines = e.result === 'retiro' ? { ...(o.lines || {}) } : truck;
       updOrders.push({ ...o, delivery: {
         loadId: load.id, result: e.result, lines, monto: Matrix.orderTotals({ lines }).monto, motivo: e.motivo || '',
+        ...(e.result === 'retiro' ? { viaOficina: true, retiroNote: String(e.retiroNote || '').trim() || (o.valeryNote || ''), truckLines: {} } : {}),
         voidedNote: e.result === 'parcial' || e.result === 'anulada' ? (o.valeryNote || '') : '',
         newValery: e.result === 'parcial' ? String(e.newValery || '').trim() : '',
         vac: vacBy[o.id] || {}, prevVac: Liq.prevRows([o], liq).map((p) => ({ type: p.type, from: p.from, qty: p.qty, motivo: p.motivo })),

@@ -28,7 +28,7 @@
   }
 
   const MONTHS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
-  const RES = { parcial: 'Devolución parcial', nofact: 'No facturado (misma nota)', pendiente: 'Se entrega después', anulada: 'Anulada', entregada: 'Entregada' };
+  const RES = { parcial: 'Devolución parcial', nofact: 'No facturado (misma nota)', retiro: 'Retiró por oficina', pendiente: 'Se entrega después', anulada: 'Anulada', entregada: 'Entregada' };
   const titleOf = (f) => (f.mode === 'q' ? `${f.half === 1 ? '1ª' : '2ª'} quincena de ${MONTHS[f.m - 1]} ${f.y}` : 'Rango libre');
 
   /**

@@ -71,7 +71,7 @@ export async function POST(req: NextRequest) {
     });
 
     // ---- Ventas ----
-    const totals = { hojas: liquidated.size, clients: 0, cajas: 0, unidades: 0, monto: 0, pedido: 0, parcial: 0, nofact: 0, pendiente: 0, anulada: 0 };
+    const totals = { hojas: liquidated.size, clients: 0, cajas: 0, unidades: 0, monto: 0, pedido: 0, parcial: 0, nofact: 0, retiro: 0, pendiente: 0, anulada: 0 };
     const byProduct = new Map<string, { pid: string; code: string; name: string; presentation: string; category: string; cajas: number; unidades: number; monto: number }>();
     const byCategory = new Map<string, { category: string; cajas: number; unidades: number; monto: number }>();
     const bySeller = new Map<string, { sellerId: string; sellerName: string; clients: number; cajas: number; unidades: number; monto: number; novedades: number; vacDesp: number; vacRecv: number; vacAsg: number; vacDebe: number }>();
@@ -95,12 +95,14 @@ export async function POST(req: NextRequest) {
     }
 
     for (const o of orders) {
-      const d = o.delivery!, load = liquidated.get(d.loadId!)!;
+      const d = o.delivery!, load0 = liquidated.get(d.loadId!)!;
+      // Retiró por oficina: la venta cuenta, pero no la repartió el despachador de la hoja
+      const load: LoadDoc = (d as { viaOficina?: boolean }).viaOficina ? { ...load0, dispatcherId: '__oficina', dispatcherName: 'Retiro en oficina' } : load0;
       const pedido = Object.values(o.lines || {}).reduce((a, l) => a + lineMoney(l), 0);
       const res = d.result || 'entregada';
       // «Se entrega después» no cuenta aquí: se cuenta cuando se entregue (su copia va en otra hoja)
       if (res !== 'pendiente') totals.pedido += pedido;
-      if (res === 'parcial' || res === 'nofact' || res === 'pendiente' || res === 'anulada') {
+      if (res === 'parcial' || res === 'nofact' || res === 'retiro' || res === 'pendiente' || res === 'anulada') {
         totals[res]++;
         novedades.push({ date: loadDay(load), load: loadCode(load), dispatcherName: load.dispatcherName || '', clientName: o.clientName, sellerName: o.sellerName,
           result: res, valeryNote: d.voidedNote || o.valeryNote || '', newValery: d.newValery || '', motivo: d.motivo || '', pedido: r2(pedido), entregado: r2(num(d.monto)) });
@@ -128,7 +130,7 @@ export async function POST(req: NextRequest) {
       totals.clients++; totals.cajas += cajas; totals.unidades += unidades; totals.monto += monto;
       s.clients++; s.cajas += cajas; s.unidades += unidades; s.monto += monto;
       const cx = crossOf(o, load); cx.clients++; cx.cajas += cajas; cx.monto += monto;
-      const dd = byDispatcher.get(load.dispatcherId || '—')!;
+      const dd = bump(byDispatcher, load.dispatcherId || '—', () => ({ dispatcherId: load.dispatcherId || '—', dispatcherName: load.dispatcherName || '—', hojas: 0, clients: 0, cajas: 0, unidades: 0, monto: 0, diferencias: 0, vacDesp: 0, vacRecv: 0, vacAsg: 0, vacDebe: 0 }));
       dd.clients++; dd.cajas += cajas; dd.unidades += unidades; dd.monto += monto;
       detail.push({ date: loadDay(load), load: loadCode(load), clientName: o.clientName, sellerName: o.sellerName, dispatcherName: load.dispatcherName || '',
         valeryNote: d.newValery || o.valeryNote || '', result: res, cajas, unidades, monto: r2(monto) });
