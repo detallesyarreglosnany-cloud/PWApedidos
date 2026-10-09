@@ -983,10 +983,11 @@
         <label class="field grow"><span>Buscar (cliente, hoja, vendedor, nota)</span><input class="input" id="tQ" value="${esc(st.q || '')}" placeholder="Ej.: gran ellas"></label></div>
       <p class="muted">Lo eliminado no se pierde: se puede recuperar con todo lo que tenía (cantidades, liquidación y vacíos).</p>
       <div class="section-title">Hojas de carga eliminadas (${loads.length})</div>
-      ${loads.length ? `<div class="card" style="overflow:auto"><table class="inv"><thead><tr><th>Hoja</th><th>Fecha</th><th>Despachador</th><th>Clientes</th><th class="n">Bultos</th><th>Liquidación</th><th>Eliminada</th><th></th></tr></thead>
+      ${loads.length ? `<div class="card" style="overflow:auto"><table class="inv"><thead><tr><th>Hoja</th><th>Fecha</th><th>Despachador</th><th>Clientes</th><th class="n">Bultos</th><th>Estado</th><th>Eliminada</th><th></th></tr></thead>
         <tbody>${loads.map((l) => { const os = ordersOfLoad(l); const t = l.totals || {}; return `<tr><td><b>${esc(Loads.labelOf(l))}</b> <span class="muted mono">${l.number ? esc(Loads.loadCode(l)) : ''}</span><div class="muted">${esc(l.sellerName || '')}</div></td>
           <td>${esc(l.date || '')}</td><td>${esc(l.dispatcherName || '—')}</td><td>${esc(os.map((o) => o.clientName).slice(0, 4).join(', '))}${os.length > 4 ? '…' : ''}</td><td class="n">${nf0.format(t.bultos || os.reduce((a, o) => a + bult(o), 0))}</td>
-          <td>${Liq.isDone(l) ? '✓ Liquidada' : l.liq ? 'Borrador' : '—'}</td><td class="muted">${esc(when(l))}</td><td><button class="btn btn-sm btn-primary" data-rl="${esc(l.id)}">↺ Recuperar</button></td></tr>`; }).join('')}</tbody></table></div>`
+          <td>${esc(Loads.statusOf(l, S.config).name)}${Liq.isDone(l) ? '<div>✓ Liquidada</div>' : l.liq ? '<div>Liquidación en borrador</div>' : ''}<div class="muted">aparece en ${Loads.isClosed(l) ? 'Archivo' : 'Cargas'}</div>
+            ${os.length ? '' : `<div class="warn-txt" style="font-size:12px">Sin pedidos: se fusionó con otra hoja o se movieron. Búscalos con 🔍 (dice en qué hoja están).</div>`}</td><td class="muted">${esc(when(l))}</td><td><button class="btn btn-sm btn-primary" data-rl="${esc(l.id)}">↺ Recuperar</button></td></tr>`; }).join('')}</tbody></table></div>`
         : '<p class="muted">Ninguna.</p>'}
       <div class="section-title">Pedidos eliminados (${orders.length})</div>
       ${orders.length ? `<div class="card" style="overflow:auto"><table class="inv"><thead><tr><th>Cliente</th><th>Vendedor</th><th>Fecha</th><th>Hoja</th><th class="n">Bultos</th><th class="n">Monto</th><th>Eliminado</th><th></th></tr></thead>
@@ -1010,7 +1011,13 @@
         await saveDocs('loads', [{ ...l, deleted: false, restoredAt: at, orderIds: [...new Set([...(l.orderIds || []), ...os.map((o) => o.id)])] }]);
         if (os.length) await saveDocs('orders', os.map(undel));
         await log('recuperado', `Recuperó de la papelera la hoja ${Loads.labelOf(l)}${os.length ? ` con ${os.length} pedido(s)` : ''}`, { loadId: l.id });
-        toast('Hoja recuperada', 'ok');
+        PV.runSync(false);
+        // Llevar a la hoja recuperada (en Archivo si está aprobada/cerrada; si no, en Cargas)
+        const closed = Loads.isClosed(l);
+        toast(`Hoja recuperada · está en ${closed ? 'Archivo' : 'Cargas'}${Loads.loadOrders({ ...l, deleted: false }, byIdMap(S.orders)).length ? '' : ' (sin pedidos)'}`, 'ok');
+        U().trash = null;
+        if (closed) { U().archiveId = l.id; PV.render(); } else { location.hash = '#/oficina/cargas'; setTimeout(() => { U().loadId = l.id; PV.render(); }, 80); }
+        return;
       } else {
         const o = st.data.orders.find((x) => x.id === bo.dataset.ro); if (!o) return;
         const l = loadOf(o);
