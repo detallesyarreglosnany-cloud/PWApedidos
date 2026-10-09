@@ -97,7 +97,8 @@ export async function POST(req: NextRequest) {
     for (const o of orders) {
       const d = o.delivery!, load0 = liquidated.get(d.loadId!)!;
       // Retiró por oficina: la venta cuenta, pero no la repartió el despachador de la hoja
-      const load: LoadDoc = (d as { viaOficina?: boolean }).viaOficina ? { ...load0, dispatcherId: '__oficina', dispatcherName: 'Retiro en oficina' } : load0;
+      const vo = d as { viaOficina?: boolean; oficinaDispatcherId?: string; oficinaDispatcherName?: string };
+      const load: LoadDoc = vo.viaOficina ? { ...load0, dispatcherId: vo.oficinaDispatcherId || '__oficina', dispatcherName: vo.oficinaDispatcherName || 'Retiro en oficina' } : load0;
       const pedido = Object.values(o.lines || {}).reduce((a, l) => a + lineMoney(l), 0);
       const res = d.result || 'entregada';
       // «Se entrega después» no cuenta aquí: se cuenta cuando se entregue (su copia va en otra hoja)

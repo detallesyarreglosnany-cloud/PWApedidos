@@ -1129,6 +1129,9 @@
       ${o.officeEdited ? '<div class="hint warn">La oficina ajustó cantidades de este pedido.</div>' : ''}
       ${orderLinesHTML(o)}
       ${vacAskHTML(o, locked)}
+      <div class="row wrap modo-box" style="gap:8px;align-items:center;margin-top:14px"><span><b>Entrega:</b></span>
+        <button type="button" class="chip ${o.modo === 'retiro' ? '' : 'active'}" data-modo="" ${locked ? 'disabled' : ''}>🚚 Despacho</button>
+        <button type="button" class="chip ${o.modo === 'retiro' ? 'active' : ''}" data-modo="retiro" ${locked ? 'disabled' : ''}>🏢 Retira por oficina</button></div>
       <label class="field" style="margin-top:14px"><span>Nota para despacho</span>
         <textarea id="notes" class="input" maxlength="300" placeholder="Ej: entregar antes de las 10am, cobrar en divisas…" ${locked ? 'disabled' : ''}>${esc(o.notes || '')}</textarea></label>
       <div class="actions">
@@ -1140,6 +1143,15 @@
     notes.onchange = async () => { o.notes = notes.value.slice(0, 300); await saveOrder(o); };
     $('#fixClient', sh.el).onclick = () => { sh.close(); clientFixSheet(orderById(o.id) || o, { onDone: () => renderSeller() }); };
     bindVacAsk(sh, o);
+    // Despacho o retiro por oficina: decide la hoja a la que va (se puede cambiar mientras la hoja no esté aprobada)
+    sh.el.querySelectorAll('[data-modo]').forEach((b) => { b.onclick = async () => {
+      const m = b.dataset.modo; if ((o.modo || '') === m) return;
+      if (m) o.modo = m; else delete o.modo;
+      await saveOrder(o);
+      sh.el.querySelectorAll('[data-modo]').forEach((x) => x.classList.toggle('active', x.dataset.modo === m));
+      toast(m ? '🏢 Retira por oficina: va a la hoja RETIRO POR OFICINA' : '🚚 Despacho: va a la hoja de carga de su ruta', 'ok');
+      if (o.status !== 'abierto') runSync(false);
+    }; });
     const send = $('#sendOrder', sh.el);
     if (send) send.onclick = async () => {
       if (suspension()) { toast('Pausa de la oficina: tu pedido queda guardado sin enviar hasta que te reactiven', 'err'); return; }
@@ -1378,7 +1390,7 @@
   const loadOf = (o) => (o.loadId ? S.loads.find((l) => l.id === o.loadId) : null);
   // Pedido liquidado: la oficina cerró la liquidación de su hoja (delivery solo existe mientras está cerrada)
   const isLiquidated = (o) => !!(o && o.delivery && o.delivery.at);
-  const LIQ_TEXT = { entregada: '✓ Liquidado', parcial: '↩ Devolución parcial', pendiente: '⏳ Se entrega después', anulada: '✕ Nota anulada' };
+  const LIQ_TEXT = { entregada: '✓ Liquidado', parcial: '↩ Devolución parcial', nofact: '⊘ No se facturó todo', retiro: '🏢 Retiró por oficina', pendiente: '⏳ Se entrega después', anulada: '✕ Nota anulada' };
   const liqBadge = (d) => `<span class="status ${d.result === 'entregada' ? 'aprobada' : d.result === 'anulada' ? 'over' : 'en_espera'}">${esc(LIQ_TEXT[d.result] || 'Liquidado')}</span>${d.newValery ? ` <span class="muted" style="font-size:12px">nota nueva ${esc(d.newValery)}</span>` : ''}`;
   const qty = (l) => (l ? [l.cajas ? l.cajas + ' cj' : '', l.unidades ? l.unidades + ' un' : ''].filter(Boolean).join(' + ') || '—' : '—');
 
@@ -1423,7 +1435,7 @@
       const del = o.status === 'abierto' ? `<button type="button" class="btn btn-sm btn-danger" data-delopen="${esc(o.id)}" title="Eliminar este pedido sin enviar">🗑</button>` : '';
       return `<tr data-myo="${esc(o.id)}" style="cursor:pointer">
         <td><b>${esc(o.clientName)}</b><div class="muted" style="font-size:12px">${esc(fmtDate(o.routeDate))}${l ? ' · ' + esc(Loads.labelOf(l)) + (l.number ? ' · ' + esc(Loads.loadCode(l)) : '') : ''}${o.valeryNote ? ' · Nota ' + esc(o.valeryNote) : ''}${(o.officeMsgs || []).length ? ' · 💬 ' + o.officeMsgs.length : ''}</div>
-          ${d ? liqBadge(d) : `<span class="status ${g === 'aprobados' ? 'en_carga' : o.status}">${esc(GROUP_TEXT[g])}</span>`}${o.createdBy === 'oficina' ? ' <span class="status aprobada">🏢 cargado por oficina</span>' : ''}${o.officeEdited ? ' <span class="status en_espera">ajustado por oficina</span>' : ''}${(o.dupWith || []).some((d) => !d.extra) ? ' <span class="status over">⚠ posible duplicado</span>' : ''}</td>
+          ${d ? liqBadge(d) : `<span class="status ${g === 'aprobados' ? 'en_carga' : o.status}">${esc(GROUP_TEXT[g])}</span>`}${o.modo === 'retiro' ? ' <span class="status en_espera">🏢 Retira por oficina</span>' : ''}${o.createdBy === 'oficina' ? ' <span class="status aprobada">🏢 cargado por oficina</span>' : ''}${o.officeEdited ? ' <span class="status en_espera">ajustado por oficina</span>' : ''}${(o.dupWith || []).some((d) => !d.extra) ? ' <span class="status over">⚠ posible duplicado</span>' : ''}</td>
         <td class="n" data-l="Monto">${d ? `${usd(d.monto)}${Math.abs(d.monto - t.monto) > 0.004 ? `<div class="muted" style="font-size:12px;text-decoration:line-through">${usd(t.monto)}</div>` : ''}` : usd(t.monto)} ${del}</td></tr>`;
     };
     app.innerHTML = `
@@ -1436,7 +1448,7 @@
           <div class="kpi"><small>Venta en proceso</small><b>${usd(sum(sent))}</b><small>${sent.length} pedidos · aún no cuenta (${porLiq.length} despachados sin liquidar)</small></div>
         </div>
         <p class="muted" style="margin-top:-4px"><b>Venta liquidada</b> = lo que el cliente recibió y paga de verdad, ya sin devoluciones ni notas anuladas. <b>Venta en proceso</b> = enviados, aprobados y despachados que todavía no se liquidan: puede cambiar.</p>
-        <div class="chips" id="myTab">${chip('pedidos', f.tab, '🧾 Mis pedidos', 'data-t')}${chip('hojas', f.tab, '🚚 Hojas de carga', 'data-t')}${chip('vacios', f.tab, '♻ Vacíos', 'data-t')}<a class="chip" href="#/ruta/clientes">👥 Mis clientes</a></div>
+        <div class="chips" id="myTab">${chip('pedidos', f.tab, '🧾 Mis pedidos', 'data-t')}${chip('hojas', f.tab, '🚚 Hojas de carga y 🏢 retiro', 'data-t')}${chip('vacios', f.tab, '♻ Vacíos', 'data-t')}<a class="chip" href="#/ruta/clientes">👥 Mis clientes</a></div>
         ${f.tab === 'vacios' ? '<div id="myVac"></div>' : f.tab === 'pedidos' ? `
           <div class="chips" id="myGroup">${MY_GROUPS.map(([k, l]) => chip(k, f.g, `${l} <span class="badge">${count(k)}</span>`, 'data-g')).join('')}</div>
           ${list.length ? `<div class="card" style="overflow:auto"><table class="inv"><tbody>${list.map(orderRow).join('')}</tbody></table></div>`
@@ -1445,7 +1457,7 @@
             const os = S.orders.filter((o) => o.sellerId === sid && o.loadId === l.id);
             const st = Loads.statusOf(l, S.config);
             return `<div class="card card-pad" style="margin-bottom:10px">
-              <div class="row"><h3 class="grow" style="margin:0">${esc(Loads.labelOf(l))} ${l.number ? '<span class="mono muted">' + esc(Loads.loadCode(l)) + '</span>' : ''}</h3>
+              <div class="row"><h3 class="grow" style="margin:0">${Loads.isRetiro(l) ? '🏢 ' : '🚚 '}${esc(Loads.labelOf(l))} ${l.number ? '<span class="mono muted">' + esc(Loads.loadCode(l)) + '</span>' : ''}${Loads.isRetiro(l) ? ' <span class="status en_espera">RETIRO POR OFICINA</span>' : ''}</h3>
                 <span class="status ${st.locked ? 'en_carga' : 'enviado'}">${st.locked ? '🔒 ' : ''}${esc(st.name)}</span></div>
               <div class="muted" style="margin:4px 0 8px">📅 ${esc(fmtDate(l.date || String(l.closedAt || l.createdAt).slice(0, 10)))} · Ruta ${esc(l.route || '—')} · Despachador: <b>${esc(l.dispatcherName || 'sin asignar')}</b></div>
               ${os.length ? `<table class="inv"><tbody>${os.map(orderRow).join('')}</tbody></table>

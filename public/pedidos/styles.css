@@ -521,3 +521,4 @@ table.grid.sheet-grid .cell-in { min-height: 30px; }
 .liq-cuadre.ok { border-color: #53d68e; }
 .liq-cuadre.bad { border-color: var(--warn); }
 .select.need { border-color: var(--warn); box-shadow: 0 0 0 2px rgba(255,180,0,.25); }
+.load-card.retiro { border-color: #5aa9ff; box-shadow: inset 4px 0 0 #5aa9ff; }

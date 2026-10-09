@@ -103,12 +103,14 @@
    * MISMO despachador. Lo que se mandó a una hoja concreta solo aparece en esa hoja;
    * lo demás, en la próxima que se liquide. Si hay varias hojas de origen, se suman.
    */
+  const retiroLoad = (l) => !!l && l.tipo === 'retiro';
   function carryFor(load, loads) {
-    if (!load.dispatcherId) return null;
+    // Retiro por oficina: no hay camión, no hay arrastre
+    if (!load.dispatcherId || retiroLoad(load)) return null;
     const done = isDone(load), rows = {}, sources = [];
     loads.forEach((l) => {
       // Una hoja de origen reabierta para corregir sigue contando para la hoja liquidada que ya la tomó
-      if (l.deleted || l.id === load.id || !l.liq || !l.liq.carry || (!done && !isDone(l))) return;
+      if (l.deleted || l.id === load.id || !l.liq || !l.liq.carry || (!done && !isDone(l)) || retiroLoad(l)) return;
       if (!done && l.liq.carry.dispatcherId !== load.dispatcherId) return;
       const keys = carryKeys(l).filter((k) => {
         const u = usedOf(l, k);
@@ -156,9 +158,9 @@
 
   /** Hojas a las que puede ir el sobrante: del mismo despachador y sin liquidar. */
   function destLoads(load, loads) {
-    if (!load.dispatcherId) return [];
+    if (!load.dispatcherId || retiroLoad(load)) return [];
     const k = (l) => `${l.date || '9999'}|${String(l.number || 0).padStart(8, '0')}`;
-    return loads.filter((l) => !l.deleted && l.id !== load.id && l.dispatcherId === load.dispatcherId && !isDone(l)).sort((a, b) => k(a).localeCompare(k(b)));
+    return loads.filter((l) => !l.deleted && l.id !== load.id && l.dispatcherId === load.dispatcherId && !isDone(l) && !retiroLoad(l)).sort((a, b) => k(a).localeCompare(k(b)));
   }
 
   /**
@@ -190,9 +192,9 @@
 
   /** Hojas del mismo despachador, anteriores a esta, aprobadas y aún sin liquidar (se liquidan primero). */
   function olderUnliquidated(load, loads, isClosed) {
-    if (!load.dispatcherId) return [];
+    if (!load.dispatcherId || retiroLoad(load)) return [];
     const k = (l) => `${l.date || ''}|${String(l.number || 0).padStart(8, '0')}`;
-    return loads.filter((l) => !l.deleted && l.id !== load.id && l.dispatcherId === load.dispatcherId && isClosed(l) && !isDone(l) && k(l) < k(load));
+    return loads.filter((l) => !l.deleted && l.id !== load.id && l.dispatcherId === load.dispatcherId && isClosed(l) && !isDone(l) && !retiroLoad(l) && k(l) < k(load));
   }
 
   /** Mercancía devuelta de entregas anteriores (por producto y UM). */
@@ -289,6 +291,7 @@
       const lbl = `${r.code} ${r.name} ${r.um}`;
       if (r.dev === null) out.push(`Camión · ${lbl}: falta contar lo que volvió`);
       else if (r.dif !== 0 && !r.motivo) out.push(`Camión · ${lbl}: diferencia de ${r.dif} sin motivo`);
+      if (r.retiro && r.dest === 'siguiente') out.push(`${lbl}: en una hoja de retiro por oficina lo que sobra vuelve al almacén`);
       if (r.dev > 0 && !r.dest) out.push(`Camión · ${lbl}: sobran ${r.dev} — indica si vuelve a almacén o sigue a la siguiente carga`);
       if (r.locked) {
         const sigue = r.dest === 'siguiente' ? (r.dev || 0) : 0;

@@ -180,7 +180,7 @@
     const n = sh.cols.length, first = 3, last = first + n - 1;
     const E = first + n, Q = E + 1, C = E + 2, T = E + 3, DQ = E + 4, DV = E + 5, DF = E + 6, M = E + 7, LS = E + 8, P = E + 9, TU = E + 10;
     const L = global.Loads, rows = [], heights = {};
-    const ttl = `LIQUIDACIÓN · ${L ? L.labelOf(load) : ''}${load.number && L ? ' · ' + L.loadCode(load) : ''}`;
+    const ttl = `LIQUIDACIÓN${L && L.isRetiro(load) ? ' RETIRO POR OFICINA' : ''} · ${L ? L.labelOf(load) : ''}${load.number && L ? ' · ' + L.loadCode(load) : ''}`;
     rows.push([{ v: ttl, s: S.title }]);
     rows.push([{ v: (meta.info || []).filter(Boolean).join('   ·   '), s: S.sub }]);
     rows.push([{ v: 'Amarillo = lo escribes tú · Azul = se calcula solo (Total = Quedan + Carga + devuelto de entregas anteriores · Debe quedar = Total − Entregado · Diferencia = Debe quedar − Devolución)', s: S.note }]);

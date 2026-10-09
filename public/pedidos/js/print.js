@@ -109,11 +109,12 @@
     const [yy, mm, dd] = fecha.split('-');
     return `
       <section class="sheet">
-      ${header(cfg, 'HOJA DE CARGA · ' + code, Loads.labelOf(load))}
+      ${header(cfg, (Loads.isRetiro(load) ? 'RETIRO POR OFICINA · ' : 'HOJA DE CARGA · ') + code, Loads.labelOf(load))}
+      ${Loads.isRetiro(load) ? '<div class="retban">RETIRO POR OFICINA · NO VA EN EL CAMIÓN · el cliente retira en la oficina</div>' : ''}
       <div class="meta">
-        <div><b>Fecha de la carga</b>${esc(dd + '/' + mm + '/' + yy)}</div>
+        <div><b>${Loads.isRetiro(load) ? 'Fecha' : 'Fecha de la carga'}</b>${esc(dd + '/' + mm + '/' + yy)}</div>
         <div><b>Pedidos del</b>${esc(Loads.orderDateRange(orders) || '—')}</div>
-        <div><b>Ruta</b>${esc(load.route || '—')}</div>
+        <div><b>${Loads.isRetiro(load) ? 'Entrega' : 'Ruta'}</b>${esc(Loads.isRetiro(load) ? 'Retiro por oficina' : load.route || '—')}</div>
         <div><b>Despachador</b>${esc(load.dispatcherName || '—')}</div>
         <div><b>Vendedor(es)</b>${esc(load.sellerName)}</div>
         <div><b>Estado</b>${esc(ctx.statusName || '')}</div>
@@ -126,7 +127,7 @@
         ${extra.map((x) => `<th class="cl"><div>${esc(x)}</div></th>`).join('')}</tr></thead>
         <tbody>${rows}</tbody><tfoot>${foot}</tfoot></table>
       <p class="muted foot">CJ = cajas · UN = unidades sueltas. Clientes: ${m.cols.map((c, i) => `${i + 1}. ${esc(c.client)} (${esc(Loads.initials(c.order.sellerName))})`).join(' · ')}</p>
-      <div class="sign"><div>Despachador</div><div>Almacén</div><div>Vendedor</div><div>Control / Oficina</div></div>
+      <div class="sign">${Loads.isRetiro(load) ? '<div>Entregó (oficina)</div><div>Almacén</div><div>Vendedor</div><div>Control / Oficina</div>' : '<div>Despachador</div><div>Almacén</div><div>Vendedor</div><div>Control / Oficina</div>'}</div>
       </section>`;
   }
 
@@ -134,7 +135,7 @@
   // y totales a 14. La tabla toma solo el ancho que necesita: con pocos clientes
   // las columnas quedan pegadas al producto. Los nombres de clientes se reparten
   // en 2-3 líneas en vez de estirarse hacia arriba.
-  const LOAD_CSS = `@page{size:letter landscape;margin:8mm} .sheet+.sheet{page-break-before:always}
+  const LOAD_CSS = `@page{size:letter landscape;margin:8mm} .retban{border:2px solid #000;text-align:center;font-weight:900;font-size:14px;letter-spacing:.06em;padding:4px;margin:4px 0} .sheet+.sheet{page-break-before:always}
     .sheet,.sheet *{color:#000 !important;background:transparent !important;-webkit-print-color-adjust:economy;print-color-adjust:economy}
     .sheet .head{border-bottom:2px solid #000;padding-bottom:3px;margin-bottom:4px} .sheet .head img{height:40px} .sheet .doc{border-color:#000;padding:3px 8px}
     .sheet .meta{grid-template-columns:repeat(8,auto);gap:0 10px;margin-bottom:4px} .sheet .meta div{padding:1px 0}
@@ -184,7 +185,7 @@
     const novs = sh.cols.map((c, i) => ({ c, i })).filter(({ c }) => c.entry.result !== 'entregada');
     const done = Liq.isDone(load);
     return `<section class="sheet">
-      ${header(cfg, 'LIQUIDACIÓN · ' + (load.number ? Loads.loadCode(load) : 'BORRADOR'), Loads.labelOf(load))}
+      ${header(cfg, (Loads.isRetiro(load) ? 'LIQUIDACIÓN RETIRO POR OFICINA · ' : 'LIQUIDACIÓN · ') + (load.number ? Loads.loadCode(load) : 'BORRADOR'), Loads.labelOf(load))}
       <div class="meta">
         <div><b>Fecha de la carga</b>${esc(load.date || '—')}</div>
         <div><b>Pedidos del</b>${esc(Loads.orderDateRange(st.os) || '—')}</div>
@@ -361,7 +362,7 @@
       <div class="c big">${esc(co.name || 'Distribuidora')}</div>
       <div class="c">${esc([co.rif && 'RIF ' + co.rif, co.phone && 'Tel. ' + co.phone].filter(Boolean).join(' · '))}</div>
       ${co.address ? `<div class="c sm">${esc(co.address)}</div>` : ''}
-      <div class="title">NOTA DE DESPACHO</div>
+      <div class="title">${(load && Loads.isRetiro(load)) || order.modo === 'retiro' ? 'RETIRO POR OFICINA' : 'NOTA DE DESPACHO'}</div>
       ${row('Hoja:', load ? [Loads.labelOf(load), load.number ? Loads.loadCode(load) : ''].filter(Boolean).join(' · ') : '')}
       ${row('Nota Valery:', order.valeryNote || '')}
       ${row('Fecha:', fdate((load && load.date ? load.date + 'T12:00:00' : '') || order.dispatchedAt || new Date().toISOString()))}
