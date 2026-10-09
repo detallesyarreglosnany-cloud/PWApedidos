@@ -999,11 +999,9 @@
     $('#viewOrder').onclick = orderSheet;
   }
 
-  async function setQty(pid, kind, value) {
-    const o = activeOrder();
-    if (!o) { toast('Primero escribe el nombre del cliente', 'err'); $('#clientInput').focus(); return; }
-    if (!editable(o)) { toast('Pedido bloqueado (' + Loads.orderLabel(o) + '): ya no se puede modificar', 'err'); return; }
-    const p = productById(pid); if (!p) return;
+  /** Cambia la cantidad de un producto en un pedido (mismas reglas desde el catálogo y desde «Mis pedidos»). */
+  function applyQty(o, pid, kind, value) {
+    const p = productById(pid); if (!p) return false;
     value = Math.max(0, Math.min(99999, int(value)));
     const line = o.lines[pid] || {
       // Snapshot: el pedido conserva precio y descripción del momento de la venta
@@ -1021,6 +1019,14 @@
       if (o.sentLines) { o.sentLines = { ...o.sentLines }; if (o.lines[pid]) o.sentLines[pid] = { ...o.lines[pid] }; else delete o.sentLines[pid]; }
       logEvent('pedido_modificado', `Modificó el pedido de ${o.clientName} (ya estaba en hoja de carga)`, { orderId: o.id, clientName: o.clientName }, { onceKey: 'mod:' + o.id });
     }
+    return true;
+  }
+  async function setQty(pid, kind, value) {
+    const o = activeOrder();
+    if (!o) { toast('Primero escribe el nombre del cliente', 'err'); $('#clientInput').focus(); return; }
+    if (!editable(o)) { toast('Pedido bloqueado (' + Loads.orderLabel(o) + '): ya no se puede modificar', 'err'); return; }
+    const p = productById(pid); if (!p) return;
+    if (!applyQty(o, pid, kind, value)) return;
     await saveOrder(o);
     const card = $(`#plist [data-pid="${CSS.escape(pid)}"]`);
     if (card) {
@@ -1432,7 +1438,8 @@
     const chip = (key, cur, label, data) => `<button class="chip ${key === cur ? 'active' : ''}" ${data}="${key}">${label}</button>`;
     const orderRow = (o) => {
       const t = Matrix.orderTotals(o), l = loadOf(o), g = groupOf(o), d = isLiquidated(o) ? o.delivery : null;
-      const del = o.status === 'abierto' ? `<button type="button" class="btn btn-sm btn-danger" data-delopen="${esc(o.id)}" title="Eliminar este pedido sin enviar">🗑</button>` : '';
+      const del = (editable(o) && !isLiquidated(o) ? `<button type="button" class="btn btn-sm" data-qedit="${esc(o.id)}" title="Editar este pedido aquí mismo">✎ Editar</button> ` : '')
+        + (o.status === 'abierto' ? `<button type="button" class="btn btn-sm btn-danger" data-delopen="${esc(o.id)}" title="Eliminar este pedido sin enviar">🗑</button>` : '');
       return `<tr data-myo="${esc(o.id)}" style="cursor:pointer">
         <td><b>${esc(o.clientName)}</b><div class="muted" style="font-size:12px">${esc(fmtDate(o.routeDate))}${l ? ' · ' + esc(Loads.labelOf(l)) + (l.number ? ' · ' + esc(Loads.loadCode(l)) : '') : ''}${o.valeryNote ? ' · Nota ' + esc(o.valeryNote) : ''}${(o.officeMsgs || []).length ? ' · 💬 ' + o.officeMsgs.length : ''}</div>
           ${d ? liqBadge(d) : `<span class="status ${g === 'aprobados' ? 'en_carga' : o.status}">${esc(GROUP_TEXT[g])}</span>`}${o.modo === 'retiro' ? ' <span class="status en_espera">🏢 Retira por oficina</span>' : ''}${o.createdBy === 'oficina' ? ' <span class="status aprobada">🏢 cargado por oficina</span>' : ''}${o.officeEdited ? ' <span class="status en_espera">ajustado por oficina</span>' : ''}${(o.dupWith || []).some((d) => !d.extra) ? ' <span class="status over">⚠ posible duplicado</span>' : ''}</td>
@@ -1474,7 +1481,7 @@
     $('#myTab').onclick = (e) => { const b = e.target.closest('[data-t]'); if (b) { f.tab = b.dataset.t; renderSellerOrders(); } };
     if (f.tab === 'vacios') renderMyVacios($('#myVac'), sid);
     const mg = $('#myGroup'); if (mg) mg.onclick = (e) => { const b = e.target.closest('[data-g]'); if (b) { f.g = b.dataset.g; renderSellerOrders(); } };
-    app.querySelectorAll('[data-myo]').forEach((tr) => { tr.onclick = (e) => { const d = e.target.closest('[data-delopen]'); if (d) { deleteUnsent(orderById(d.dataset.delopen), renderSellerOrders); return; } myOrderSheet(orderById(tr.dataset.myo)); }; });
+    app.querySelectorAll('[data-myo]').forEach((tr) => { tr.onclick = (e) => { const q = e.target.closest('[data-qedit]'); if (q) { quickEditSheet(q.dataset.qedit, renderSellerOrders); return; } const d = e.target.closest('[data-delopen]'); if (d) { deleteUnsent(orderById(d.dataset.delopen), renderSellerOrders); return; } myOrderSheet(orderById(tr.dataset.myo)); }; });
   }
 
   /* ---------- ♻ Vacíos de mis clientes (E6): saldo y movimientos, solo lectura ---------- */
@@ -1526,6 +1533,80 @@
       <p class="muted">Las devoluciones de vacíos las registra la oficina.</p>`, { wide: true });
   }
 
+  /**
+   * Editar un pedido directo desde «Mis pedidos» (como en la oficina): cambiar cantidades,
+   * quitar o agregar productos, nota y tipo de entrega, sin buscar al cliente ni pasar por
+   * el catálogo. Mismas reglas que el catálogo (un pedido enviado vuelve a «sin enviar»).
+   */
+  function quickEditSheet(id, after) {
+    const o0 = orderById(id); if (!o0) return;
+    if (!editable(o0)) { toast('Pedido bloqueado (' + Loads.orderLabel(o0) + '): ya no se puede modificar', 'err'); return; }
+    const sh = openSheet(`
+      <div class="row"><div class="grow"><h2>✎ ${esc(o0.clientName)}</h2><div class="muted" id="qeSt"></div></div><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <div id="qeBody"></div>
+      <label class="field" style="margin-top:12px"><span>Agregar producto</span><input id="qeSearch" class="input" placeholder="Buscar por nombre o código…" autocomplete="off"></label>
+      <div id="qeRes" class="results"></div>
+      <div class="row wrap" style="gap:8px;align-items:center;margin-top:12px"><b>Entrega:</b>
+        <button type="button" class="chip" data-qemodo="">🚚 Despacho</button><button type="button" class="chip" data-qemodo="retiro">🏢 Retira por oficina</button></div>
+      <label class="field" style="margin-top:12px"><span>Nota para despacho</span><input id="qeNotes" class="input" maxlength="300" value="${esc(o0.notes || '')}"></label>
+      <div class="actions" id="qeAct"></div>`, { wide: true });
+    const cur = () => orderById(id);
+    const draw = () => {
+      const o = cur(); if (!o) { sh.close(); return; }
+      const lines = Object.entries(o.lines || {}).map(([pid, l]) => ({ pid, l, t: Matrix.lineTotals(l), p: productById(pid) }));
+      const tot = Matrix.orderTotals(o);
+      $('#qeSt', sh.el).innerHTML = `<span class="status ${o.status}">${esc(Loads.orderLabel(o))}</span>${o.status === 'abierto' ? ' · <b>sin enviar</b>' : ''}`
+        + (o.status === 'abierto' && o.sentAt ? '<div class="hint warn" style="margin-top:6px">⚠ Lo modificaste antes de que entrara a una hoja: quedó <b>sin enviar</b>. Al terminar pulsa <b>✓ Enviar pedido</b> para que vuelva a la oficina.</div>' : '');
+      $('#qeBody', sh.el).innerHTML = lines.length ? `<table class="lines">${groupedRows(lines, 3, ({ pid, l, t, p }) => {
+        const sb = p ? p.sellBy : (l.boxPrice ? (l.unitPrice ? 'ambos' : 'caja') : 'unidad');
+        return `<tr><td><b>${esc(l.name)} ${esc(l.presentation || '')}</b><div class="muted mono" style="font-size:12px">${esc(l.code)} · ${usd(t.monto)}</div></td>
+          <td style="white-space:nowrap">${sb !== 'unidad' ? `<label class="mini">CJ <input class="input mini-in" inputmode="numeric" data-pid="${esc(pid)}" data-kind="cajas" value="${t.cajas || ''}"></label>` : ''}
+            ${sb !== 'caja' ? `<label class="mini">UN <input class="input mini-in" inputmode="numeric" data-pid="${esc(pid)}" data-kind="unidades" value="${t.unidades || ''}"></label>` : ''}</td>
+          <td><button type="button" class="icon-btn" data-qedel="${esc(pid)}" aria-label="Quitar ${esc(l.name)}" title="Quitar">✕</button></td></tr>`; })}
+        <tr class="total-row"><td><b>TOTAL</b> · ${tot.cajas} cj + ${tot.unidades} un</td><td></td><td class="num">${usd(tot.monto)}</td></tr></table>`
+        : '<div class="empty"><strong>Pedido vacío</strong>Busca y agrega productos.</div>';
+      sh.el.querySelectorAll('[data-qemodo]').forEach((b) => b.classList.toggle('active', (o.modo || '') === b.dataset.qemodo));
+      $('#qeAct', sh.el).innerHTML = o.status === 'abierto'
+        ? `<button class="btn btn-ok" id="qeSend" ${Object.keys(o.lines || {}).length ? '' : 'disabled'}>✓ Enviar pedido</button>`
+        : '<button class="btn btn-primary" data-close>✓ Listo (cambios guardados)</button>';
+      const sd = $('#qeSend', sh.el);
+      if (sd) sd.onclick = async () => {
+        if (suspension()) { toast('Pausa de la oficina: tu pedido queda guardado sin enviar hasta que te reactiven', 'err'); return; }
+        const x = cur(); x.status = 'enviado'; x.sentAt = DB.now(); x.sentLines = JSON.parse(JSON.stringify(x.lines));
+        await saveOrder(x);
+        await logEvent('pedido_enviado', `Envió el pedido de ${x.clientName} · ${orderSummary(x)}`, { orderId: x.id, clientName: x.clientName, amount: Matrix.orderTotals(x).monto });
+        sh.close(); toast('Pedido enviado. ' + (navigator.onLine ? 'Subiendo…' : 'Se subirá al tener señal.'), 'ok'); runSync(false); if (after) after();
+      };
+    };
+    const change = async (pid, kind, value) => {
+      const o = cur();
+      if (!editable(o)) { toast('La oficina aprobó la hoja: ya no se puede modificar', 'err'); sh.close(); return; }
+      if (!applyQty(o, pid, kind, value)) return;
+      await saveOrder(o); draw(); if (after) after();
+    };
+    sh.el.addEventListener('change', async (e) => {
+      const i = e.target.closest('.mini-in'); if (i) { await change(i.dataset.pid, i.dataset.kind, i.value); return; }
+      if (e.target.id === 'qeNotes') { const o = cur(); o.notes = e.target.value.slice(0, 300); await saveOrder(o); if (after) after(); }
+    });
+    sh.el.addEventListener('click', async (e) => {
+      const d = e.target.closest('[data-qedel]');
+      if (d) { const o = cur(), pid = d.dataset.qedel; if (!o.lines[pid]) return; await change(pid, 'cajas', 0); if (cur().lines[pid]) await change(pid, 'unidades', 0); return; }
+      const a = e.target.closest('[data-qeadd]');
+      if (a) { const p = productById(a.dataset.qeadd), o = cur(); const kind = p.sellBy === 'unidad' ? 'unidades' : 'cajas';
+        await change(p.id, kind, ((o.lines[p.id] || {})[kind] || 0) + 1); $('#qeSearch', sh.el).value = ''; $('#qeRes', sh.el).innerHTML = ''; return; }
+      const m = e.target.closest('[data-qemodo]');
+      if (m) { const o = cur(), v = m.dataset.qemodo; if ((o.modo || '') === v) return; if (v) o.modo = v; else delete o.modo; await saveOrder(o); draw(); if (after) after();
+        toast(v ? '🏢 Retira por oficina: va a la hoja RETIRO POR OFICINA' : '🚚 Despacho: va a la hoja de carga de su ruta', 'ok'); if (o.status !== 'abierto') runSync(false); }
+    });
+    const sIn = $('#qeSearch', sh.el);
+    sIn.oninput = () => {
+      const tokens = norm(sIn.value).split(' ').filter(Boolean);
+      const res = tokens.length ? S.products.filter((p) => p.active && !p.deleted && tokens.every((t) => norm(p.code + ' ' + p.name + ' ' + p.presentation).includes(t))).slice(0, 8) : [];
+      $('#qeRes', sh.el).innerHTML = res.map((p) => `<button class="result" data-qeadd="${esc(p.id)}"><b>${esc(p.name)}</b> ${esc(p.presentation || '')} <span class="muted mono">${esc(p.code)}</span></button>`).join('');
+    };
+    draw();
+  }
+
   /** Detalle de un pedido para el vendedor: lo que pidió contra lo que queda/salió, hoja, despachador y nota. */
   function myOrderSheet(o) {
     if (!o) return;
@@ -1560,9 +1641,10 @@
       ...(isLiquidated(o) ? [['Liquidación', LIQ_TEXT[o.delivery.result] || 'Liquidado'], ['Entregado', usd(o.delivery.monto)],
         ...(o.delivery.newValery ? [['Nota que la reemplaza', o.delivery.newValery]] : []), ...(o.delivery.motivo ? [['Motivo', o.delivery.motivo]] : [])] : []),
     ];
-    openSheet(`
+    const shM = openSheet(`
       <div class="row"><h2 class="grow">${esc(o.clientName)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
       <div class="grid2" style="margin:8px 0 12px">${info.map(([k, v]) => `<div><small class="muted">${esc(k)}</small><div><b>${esc(v)}</b></div></div>`).join('')}</div>
+      ${editable(o) && !liqd ? `<div class="row" style="margin-bottom:8px"><button type="button" class="btn btn-primary" id="mosEdit">✎ Editar este pedido</button></div>` : ''}
       ${o.createdBy === 'oficina' ? '<div class="hint">🏢 Este pedido lo cargó la oficina a tu nombre.</div>' : ''}
       ${o.dupWith && o.dupWith.length ? dupHint(o) : ''}
       ${o.officeEdited ? `<div class="hint warn">✏️ La oficina ajustó este pedido${sentL ? ': las filas marcadas cambiaron respecto a lo que enviaste.' : '.'}</div>` : ''}
@@ -1572,6 +1654,8 @@
       ${vacBlock}
       <div class="section-title" style="margin:14px 0 6px">💬 Notas y mensajes</div>
       ${msgThreadHTML(o)}`, { cls: 'sheet-order' });
+    const me = $('#mosEdit', shM.el);
+    if (me) me.onclick = () => { shM.close(); quickEditSheet(o.id, () => { if (location.hash.startsWith('#/ruta/pedidos')) renderSellerOrders(); }); };
   }
 
   function sellerMenu() {
