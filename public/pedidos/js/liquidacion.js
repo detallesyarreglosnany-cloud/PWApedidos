@@ -9,6 +9,7 @@
  *   orders: { <orderId>: {
  *     result: 'entregada' | 'parcial' | 'pendiente' | 'anulada',
  *     ret:    { <productId>: { cajas, unidades } }   devuelto (solo 'parcial')
+ *     retiroNote: 'N°'  (solo 'retiro') nota con la que el cliente retiró en la oficina; vacía = la misma nota del camión
  *     nf:     { <productId>: { cajas, unidades, why } }  lo que NO se facturó en la misma nota (solo 'nofact')
  *             why 'nohabia' = no salió del almacén (no cuenta como carga) · 'camion' = iba en el camión y vuelve
  *     newValery: 'N°'   nota Valery que reemplaza (parcial)
@@ -38,12 +39,13 @@
     ['entregada', '✓ Entregada'],
     ['parcial', '↩ Devolución parcial · nota nueva'],
     ['nofact', '⊘ No se facturó todo · misma nota'],
+    ['retiro', '🏢 Cliente retiró por oficina (vuelve en el camión)'],
     ['pendiente', '⏳ No entregado · se entrega después (misma nota)'],
     ['anulada', '✕ No entregado · nota anulada'],
   ];
   // Por qué un cliente queda debiendo vacíos (va al kardex)
   const VAC_MOTIVOS = ['PRÉSTAMO', 'LOS ENTREGA EN LA PRÓXIMA', 'SIN VACÍOS', 'NEGOCIO CERRADO', 'OTRO'];
-  const MOTIVOS = ['NO HABÍA (NO SALIÓ DEL ALMACÉN)', 'ERROR FACTURACIÓN', 'DEVOLUCIÓN', 'CAMBIO', 'SIN VACÍOS', 'NEGOCIO CERRADO', 'RECHAZO', 'AJUSTE PRECIO', 'ROTURA', 'OTRO'];
+  const MOTIVOS = ['RETIRÓ POR OFICINA', 'NO HABÍA (NO SALIÓ DEL ALMACÉN)', 'ERROR FACTURACIÓN', 'DEVOLUCIÓN', 'CAMBIO', 'SIN VACÍOS', 'NEGOCIO CERRADO', 'RECHAZO', 'AJUSTE PRECIO', 'ROTURA', 'OTRO'];
   const n0 = (v) => Math.max(0, Math.round(+v || 0));
 
   const isDone = (load) => !!(load && load.liq && load.liq.status === 'cerrada');
@@ -51,7 +53,8 @@
 
   /** Líneas entregadas de un pedido según su resultado. */
   function deliveredLines(o, e) {
-    if (e.result === 'pendiente' || e.result === 'anulada') return {};
+    // Retiró por oficina: el camión no lo entrega (todo vuelve); la venta se hizo en la oficina
+    if (e.result === 'pendiente' || e.result === 'anulada' || e.result === 'retiro') return {};
     if (e.result !== 'parcial' && e.result !== 'nofact') return { ...(o.lines || {}) };
     const out = {};
     Object.entries(o.lines || {}).forEach(([pid, l]) => {
@@ -313,7 +316,7 @@
     const qty = (l, um) => (l ? (um === 'CJ' ? +l.cajas || 0 : +l.unidades || 0) : 0);
     const usdOf = (l, um) => (l ? Matrix.lineTotals(um === 'CJ' ? { ...l, unidades: 0 } : { ...l, cajas: 0 }).monto : 0);
     const mrows = rows.map((r) => {
-      const cells = cols.map((c) => { const ped = qty((c.order.lines || {})[r.productId], r.um), del = qty(c.lines[r.productId], r.um); return { del, ret: Math.max(0, ped - del), nf: c.entry.result === 'nofact' }; });
+      const cells = cols.map((c) => { const ped = qty((c.order.lines || {})[r.productId], r.um), del = qty(c.lines[r.productId], r.um); return { del, ret: Math.max(0, ped - del), nf: c.entry.result === 'nofact', retiro: c.entry.result === 'retiro' }; });
       const usd = Matrix.r2(cols.reduce((a, c) => a + usdOf(c.lines[r.productId], r.um), 0));
       return { ...r, cells, usd };
     });
@@ -371,7 +374,9 @@
     });
     Object.keys(t).forEach((k) => { t[k] = r2(t[k]); });
     const clientes = r2(sh.totals.usd), diff = r2(clientes - t.entregado);
-    return { ...t, clientes, diff, ok: Math.abs(diff) < 0.01, off, sinContar };
+    // Retiró por oficina: venta hecha en la oficina, no la entrega el camión (aparte del cuadre)
+    const retiro = r2(sh.cols.filter((c) => c.entry.result === 'retiro').reduce((a, c) => a + Matrix.orderTotals(c.order).monto, 0));
+    return { ...t, clientes, diff, ok: Math.abs(diff) < 0.01, off, sinContar, retiro };
   }
 
   /** Texto del cuadre (pantalla, impresión y Excel). */
@@ -386,6 +391,7 @@
     const extra = [];
     if (c.dif) extra.push(`Diferencia del camión valorada: ${fmt(Math.abs(c.dif))} ${c.dif > 0 ? 'que falta' : 'que sobra'}`);
     if (c.sinContar) extra.push(`Cuadre provisional: faltan por contar ${c.sinContar} producto(s)`);
+    if (c.retiro) extra.push(`Retiró por oficina ${fmt(c.retiro)}: venta hecha en la oficina, el camión no la entregó (vuelve como devolución)`);
     return { lines, verdict, extra };
   }
   const r2s = (n) => Math.round(n * 100) / 100;
@@ -444,7 +450,7 @@
   }
 
   /** Texto corto de la novedad de un cliente (encabezado de su columna). */
-  const shortResult = (e) => ({ entregada: '', parcial: 'DEV. PARCIAL', nofact: 'NO FACTURADO', pendiente: 'SE ENTREGA DESPUÉS', anulada: 'ANULADA' })[e.result] || '';
+  const shortResult = (e) => ({ entregada: '', parcial: 'DEV. PARCIAL', nofact: 'NO FACTURADO', retiro: 'RETIRÓ OFICINA', pendiente: 'SE ENTREGA DESPUÉS', anulada: 'ANULADA' })[e.result] || '';
 
   global.Liq = { RESULTS, MOTIVOS, VAC_MOTIVOS, isDone, entry, deliveredLines, delivered, returnedAny, carryFor, pendingCarries, markUsed, lockedCarry, destLoads, upgradeOld, olderUnliquidated, prevRetRows, truckRows, vacRows, prevRows, problems, sheet, cuadre, cuadreLines, truckLedger, shortResult };
 })(window);

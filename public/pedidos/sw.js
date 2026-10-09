@@ -5,7 +5,7 @@
  *  - /api/*: siempre red (los datos viven en IndexedDB, no en caché HTTP).
  * Subir CACHE_VERSION en cada despliegue para forzar la actualización.
  * ========================================================================= */
-const CACHE_VERSION = 'pedidos-v63';
+const CACHE_VERSION = 'pedidos-v64';
 const IMG_CACHE = 'fotos-productos'; // no empieza con «pedidos-»: sobrevive a las actualizaciones
 const SHELL = [
   './index.html', './styles.css', './manifest.webmanifest',
