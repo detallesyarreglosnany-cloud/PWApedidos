@@ -23,15 +23,22 @@ type SnapRow = { key?: string; code?: string; name?: string; presentation?: stri
 type LoadDoc = {
   id: string; deleted?: boolean; number?: number; label?: string; date?: string; closedAt?: string; status?: string; route?: string;
   sellerName?: string; dispatcherId?: string; dispatcherName?: string; totals?: { clients?: number; monto?: number; bultos?: number };
-  liq?: { status?: string; closedAt?: string; totals?: { monto?: number }; snapshot?: { rows?: SnapRow[] } } | null;
+  liq?: { status?: string; closedAt?: string; totals?: { monto?: number; clients?: number }; snapshot?: { rows?: SnapRow[] } } | null;
 };
 
 const isDay = (s: unknown): s is string => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s);
-const r2 = (n: number) => Math.round(n * 100) / 100;
+const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 const num = (v: unknown) => Number(v) || 0;
-const lineMoney = (l: Line) => num(l.cajas) * num(l.boxPrice) + num(l.unidades) * num(l.unitPrice);
+// Igual que la app (Matrix.lineTotals): cada línea se redondea a centavos antes de sumar
+const lineMoney = (l: Line) => r2(num(l.cajas) * num(l.boxPrice) + num(l.unidades) * num(l.unitPrice));
 const loadDay = (l: LoadDoc) => (isDay(l.date) ? l.date : String(l.closedAt || '').slice(0, 10));
 const loadCode = (l: LoadDoc) => (l.number ? 'C-' + String(l.number).padStart(5, '0') : '');
+
+type ProdDoc = { id: string; code?: string; unitCode?: string | null; name?: string; presentation?: string; category?: string; sellBy?: string; ret?: { type?: string } | false | null };
+type SellerAgg = { sellerId: string; sellerName: string; clients: number; cajas: number; unidades: number; monto: number; pedido: number; devuelto: number; novedades: number; vacDesp: number; vacRecv: number; vacAsg: number; vacDebe: number };
+type DispAgg = { dispatcherId: string; dispatcherName: string; hojas: number; clients: number; cajas: number; unidades: number; monto: number; pedido: number; devuelto: number; diferencias: number; vacDesp: number; vacRecv: number; vacAsg: number; vacDebe: number };
+const mkSeller = (sid: string, name: string): SellerAgg => ({ sellerId: sid, sellerName: name, clients: 0, cajas: 0, unidades: 0, monto: 0, pedido: 0, devuelto: 0, novedades: 0, vacDesp: 0, vacRecv: 0, vacAsg: 0, vacDebe: 0 });
+const mkDisp = (id: string, name: string): DispAgg => ({ dispatcherId: id, dispatcherName: name, hojas: 0, clients: 0, cajas: 0, unidades: 0, monto: 0, pedido: 0, devuelto: 0, diferencias: 0, vacDesp: 0, vacRecv: 0, vacAsg: 0, vacDebe: 0 });
 
 function bump<T extends Record<string, unknown>>(m: Map<string, T>, k: string, init: () => T) {
   let x = m.get(k);
@@ -70,12 +77,23 @@ export async function POST(req: NextRequest) {
       return !o.deleted && !!d && !!l && d.at === l.liq!.closedAt;
     });
 
+    // ---- Catálogo: la categoría que vale es la ACTUAL del producto (si el producto ya no existe, la que tenía la línea) ----
+    const prodRows = await db.distDoc.findMany({ where: { kind: 'products', deleted: false }, select: { data: true } });
+    const prodById = new Map(prodRows.map((r) => JSON.parse(r.data) as ProdDoc).map((p) => [p.id, p]));
+    // Retiró por oficina (en una hoja de camión): la venta cuenta, pero a nombre del despachador de retiros
+    const effLoad = (d: Delivery, l: LoadDoc): LoadDoc => {
+      const vo = d as { viaOficina?: boolean; oficinaDispatcherId?: string; oficinaDispatcherName?: string };
+      return vo.viaOficina ? { ...l, dispatcherId: vo.oficinaDispatcherId || '__oficina', dispatcherName: vo.oficinaDispatcherName || 'Retiro en oficina' } : l;
+    };
+    const catOf = (pid: string, l: Line) => String(prodById.get(pid)?.category || l.category || 'Sin categoría');
+
     // ---- Ventas ----
-    const totals = { hojas: liquidated.size, clients: 0, cajas: 0, unidades: 0, monto: 0, pedido: 0, parcial: 0, nofact: 0, retiro: 0, pendiente: 0, anulada: 0 };
+    const totals = { hojas: liquidated.size, clients: 0, cajas: 0, unidades: 0, monto: 0, pedido: 0, devuelto: 0, parcial: 0, nofact: 0, retiro: 0, pendiente: 0, anulada: 0 };
     const byProduct = new Map<string, { pid: string; code: string; name: string; presentation: string; category: string; cajas: number; unidades: number; monto: number }>();
+    const hojasDe = new Map<string, Set<string>>(); // hojas atribuidas a cada despachador
     const byCategory = new Map<string, { category: string; cajas: number; unidades: number; monto: number }>();
-    const bySeller = new Map<string, { sellerId: string; sellerName: string; clients: number; cajas: number; unidades: number; monto: number; novedades: number; vacDesp: number; vacRecv: number; vacAsg: number; vacDebe: number }>();
-    const byDispatcher = new Map<string, { dispatcherId: string; dispatcherName: string; hojas: number; clients: number; cajas: number; unidades: number; monto: number; diferencias: number; vacDesp: number; vacRecv: number; vacAsg: number; vacDebe: number }>();
+    const bySeller = new Map<string, SellerAgg>();
+    const byDispatcher = new Map<string, DispAgg>();
     // Cuadre vendedor ↔ despachador: quién repartió lo que vendió cada vendedor
     type Cross = { sellerId: string; sellerName: string; dispatcherId: string; dispatcherName: string; clients: number; cajas: number; monto: number; vacDesp: number; vacRecv: number; vacAsg: number; vacDebe: number };
     const cross = new Map<string, Cross>();
@@ -88,17 +106,19 @@ export async function POST(req: NextRequest) {
     const catSeller = new Map<string, CatPerson>(), catDisp = new Map<string, CatPerson>();
     const novedades: unknown[] = [];
     const detail: unknown[] = [];
+    const loadSum = new Map<string, { monto: number; clients: number }>(); // lo que SÍ llegó al servidor de cada hoja
 
+    const addHoja = (did: string, lid: string) => { let st = hojasDe.get(did); if (!st) { st = new Set(); hojasDe.set(did, st); } st.add(lid); };
     for (const l of liquidated.values()) {
       const did = l.dispatcherId || '—';
-      bump(byDispatcher, did, () => ({ dispatcherId: did, dispatcherName: l.dispatcherName || 'Sin despachador', hojas: 0, clients: 0, cajas: 0, unidades: 0, monto: 0, diferencias: 0, vacDesp: 0, vacRecv: 0, vacAsg: 0, vacDebe: 0 })).hojas++;
+      bump(byDispatcher, did, () => mkDisp(did, l.dispatcherName || 'Sin despachador'));
+      addHoja(did, l.id);
     }
 
     for (const o of orders) {
       const d = o.delivery!, load0 = liquidated.get(d.loadId!)!;
       // Retiró por oficina: la venta cuenta, pero no la repartió el despachador de la hoja
-      const vo = d as { viaOficina?: boolean; oficinaDispatcherId?: string; oficinaDispatcherName?: string };
-      const load: LoadDoc = vo.viaOficina ? { ...load0, dispatcherId: vo.oficinaDispatcherId || '__oficina', dispatcherName: vo.oficinaDispatcherName || 'Retiro en oficina' } : load0;
+      const load: LoadDoc = effLoad(d, load0);
       const pedido = Object.values(o.lines || {}).reduce((a, l) => a + lineMoney(l), 0);
       const res = d.result || 'entregada';
       // «Se entrega después» no cuenta aquí: se cuenta cuando se entregue (su copia va en otra hoja)
@@ -114,24 +134,28 @@ export async function POST(req: NextRequest) {
         const c = num(l.cajas), u = num(l.unidades), m = lineMoney(l);
         if (!c && !u) continue;
         cajas += c; unidades += u; monto += m;
-        const catName = l.category || 'Sin categoría';
+        const catName = catOf(pid, l);
         for (const [map, id, name] of [[catSeller, sidC, o.sellerName || sidC], [catDisp, didC, load.dispatcherName || 'Sin despachador']] as [Map<string, CatPerson>, string, string][]) {
           const cp = bump(map, id + '\u0001' + catName, () => ({ id, name, category: catName, cajas: 0, unidades: 0, monto: 0 }));
           cp.cajas += c; cp.unidades += u; cp.monto += m;
         }
-        const p = bump(byProduct, pid, () => ({ pid, code: l.code || pid, name: l.name || '', presentation: l.presentation || '', category: l.category || 'Sin categoría', cajas: 0, unidades: 0, monto: 0 }));
+        const p = bump(byProduct, pid, () => ({ pid, code: l.code || pid, name: l.name || '', presentation: l.presentation || '', category: catName, cajas: 0, unidades: 0, monto: 0 }));
         p.cajas += c; p.unidades += u; p.monto += m;
-        const cat = bump(byCategory, l.category || 'Sin categoría', () => ({ category: l.category || 'Sin categoría', cajas: 0, unidades: 0, monto: 0 }));
+        const cat = bump(byCategory, catName, () => ({ category: catName, cajas: 0, unidades: 0, monto: 0 }));
         cat.cajas += c; cat.unidades += u; cat.monto += m;
       }
       const sid = o.sellerId || '—';
-      const s = bump(bySeller, sid, () => ({ sellerId: sid, sellerName: o.sellerName || sid, clients: 0, cajas: 0, unidades: 0, monto: 0, novedades: 0, vacDesp: 0, vacRecv: 0, vacAsg: 0, vacDebe: 0 }));
+      const s = bump(bySeller, sid, () => mkSeller(sid, o.sellerName || sid));
+      const dd = bump(byDispatcher, load.dispatcherId || '—', () => mkDisp(load.dispatcherId || '—', load.dispatcherName || '—'));
+      addHoja(load.dispatcherId || '—', load0.id);
       if (res !== 'entregada') s.novedades++;
+      // Pedido original y lo que no se entregó (devolución parcial, no facturado, anulada); «se entrega después» se cuenta cuando se entregue
+      if (res !== 'pendiente') { s.pedido += pedido; dd.pedido += pedido; s.devuelto += pedido - monto; dd.devuelto += pedido - monto; totals.devuelto += pedido - monto; }
       if (!cajas && !unidades) continue;
+      const ls = bump(loadSum, load0.id, () => ({ monto: 0, clients: 0 })); ls.monto += monto; ls.clients++;
       totals.clients++; totals.cajas += cajas; totals.unidades += unidades; totals.monto += monto;
       s.clients++; s.cajas += cajas; s.unidades += unidades; s.monto += monto;
       const cx = crossOf(o, load); cx.clients++; cx.cajas += cajas; cx.monto += monto;
-      const dd = bump(byDispatcher, load.dispatcherId || '—', () => ({ dispatcherId: load.dispatcherId || '—', dispatcherName: load.dispatcherName || '—', hojas: 0, clients: 0, cajas: 0, unidades: 0, monto: 0, diferencias: 0, vacDesp: 0, vacRecv: 0, vacAsg: 0, vacDebe: 0 }));
       dd.clients++; dd.cajas += cajas; dd.unidades += unidades; dd.monto += monto;
       detail.push({ date: loadDay(load), load: loadCode(load), clientName: o.clientName, sellerName: o.sellerName, dispatcherName: load.dispatcherName || '',
         valeryNote: d.newValery || o.valeryNote || '', result: res, cajas, unidades, monto: r2(monto) });
@@ -163,7 +187,7 @@ export async function POST(req: NextRequest) {
     for (const o of orders) {
       const d = o.delivery!, load = liquidated.get(d.loadId!)!;
       const sid2 = o.sellerId || '—';
-      const sEnt = bump(bySeller, sid2, () => ({ sellerId: sid2, sellerName: o.sellerName || sid2, clients: 0, cajas: 0, unidades: 0, monto: 0, novedades: 0, vacDesp: 0, vacRecv: 0, vacAsg: 0, vacDebe: 0 }));
+      const sEnt = bump(bySeller, sid2, () => mkSeller(sid2, o.sellerName || sid2));
       const dEnt = byDispatcher.get(load.dispatcherId || '—')!;
       for (const [pid, v] of Object.entries(d.vac || {})) {
         const debe = Math.max(0, num(v.boxes) - num(v.recv) - num(v.asg));
@@ -193,15 +217,12 @@ export async function POST(req: NextRequest) {
 
     const money = <T extends { monto: number }>(arr: T[]) => arr.map((x) => ({ ...x, monto: r2(x.monto) }));
     // ---- Datos para comparar con el Excel (E7): lo CARGADO en cada hoja liquidada (antes de devoluciones y anulaciones) y lo entregado ----
-    type ProdDoc = { id: string; code?: string; unitCode?: string | null; name?: string; presentation?: string; sellBy?: string; ret?: { type?: string } | false | null };
-    const prodRows = await db.distDoc.findMany({ where: { kind: 'products', deleted: false }, select: { data: true } });
-    const prodById = new Map(prodRows.map((r) => JSON.parse(r.data) as ProdDoc).map((p) => [p.id, p]));
     const cmpProd = new Map<string, { pid: string; code: string; unitCode: string; name: string; presentation: string; cajas: number; unidades: number; monto: number }>();
     const cmpClient = new Map<string, { clientId: string; clientName: string; sellerName: string; cargado: number; entregado: number }>();
     const cmpDisp = new Map<string, { name: string; cargado: number; entregado: number }>();
     const cmpVac: Record<string, number> = {};
     for (const o of orders) {
-      const d = o.delivery!, load = liquidated.get(d.loadId!)!;
+      const d = o.delivery!, load = effLoad(d, liquidated.get(d.loadId!)!);
       let carg = 0;
       for (const [pid, l] of Object.entries(o.lines || {})) {
         const c = num(l.cajas), u = num(l.unidades);
@@ -273,16 +294,24 @@ export async function POST(req: NextRequest) {
       bySeller: money([...procSeller.values()]), byDispatcher: money([...procDisp.values()]),
     };
 
+    // ---- Integridad: cada hoja liquidada declara su total; si el servidor tiene menos, el reporte estaría SUBESTIMADO ----
+    for (const d of byDispatcher.values()) d.hojas = hojasDe.get(d.dispatcherId)?.size || 0;
+    const integridad = [...liquidated.values()].map((l) => {
+      const declared = r2(num(l.liq?.totals?.monto)), got = r2(loadSum.get(l.id)?.monto || 0);
+      return { id: l.id, code: loadCode(l), label: l.label || '', date: loadDay(l), dispatcherName: l.dispatcherName || '', declarado: declared, servidor: got, falta: r2(declared - got) };
+    }).filter((x) => x.falta >= 0.01 && liquidated.get(x.id)?.liq?.totals?.monto != null);
+
     const byType = (arr: { type: string }[]) => [...arr].sort((a, b) => parseFloat(a.type.replace(',', '.')) - parseFloat(b.type.replace(',', '.')) || a.type.localeCompare(b.type));
     return NextResponse.json({
       from, to,
-      totals: { ...totals, monto: r2(totals.monto), pedido: r2(totals.pedido) },
+      totals: { ...totals, monto: r2(totals.monto), pedido: r2(totals.pedido), devuelto: r2(totals.devuelto) },
+      integridad,
       pendingLoads,
       pendingMonto: r2(pendingLoads.reduce((a, l) => a + l.monto, 0)),
       byProduct: money([...byProduct.values()]).sort((a, b) => a.category.localeCompare(b.category, 'es') || a.name.localeCompare(b.name, 'es') || a.code.localeCompare(b.code, 'es', { numeric: true })),
       byCategory: money([...byCategory.values()]).sort((a, b) => b.monto - a.monto),
-      bySeller: money([...bySeller.values()]).sort((a, b) => b.monto - a.monto),
-      byDispatcher: money([...byDispatcher.values()]).sort((a, b) => b.monto - a.monto),
+      bySeller: money([...bySeller.values()]).map((x) => ({ ...x, pedido: r2(x.pedido), devuelto: r2(x.devuelto) })).sort((a, b) => b.monto - a.monto),
+      byDispatcher: money([...byDispatcher.values()]).map((x) => ({ ...x, pedido: r2(x.pedido), devuelto: r2(x.devuelto) })).sort((a, b) => b.monto - a.monto),
       compare, cuadre, enProceso, novedades,
       byCategorySeller: money([...catSeller.values()]), byCategoryDispatcher: money([...catDisp.values()]), diferencias, siguiente, sinFoto,
       vacios: { byCode: byType([...vacByCode.values()]), byDispatcher: byType([...vacByDispatcher.values()]), bySeller: byType([...vacBySeller.values()]), devoluciones },
