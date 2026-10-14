@@ -39,10 +39,10 @@
     const liq = who === 'seller' ? d.bySeller : d.byDispatcher, proc = who === 'seller' ? d.enProceso.bySeller : d.enProceso.byDispatcher;
     const idOf = (x) => (who === 'seller' ? x.sellerId : x.dispatcherId), nameOf = (x) => (who === 'seller' ? x.sellerName : x.dispatcherName);
     const map = new Map();
-    liq.forEach((x) => map.set(idOf(x), { name: nameOf(x), hojas: x.hojas || 0, clients: x.clients, cajas: x.cajas, unidades: x.unidades, monto: x.monto, vacDesp: x.vacDesp, vacRecv: x.vacRecv, vacAsg: x.vacAsg, vacDebe: x.vacDebe, novedades: x.novedades || 0, diferencias: x.diferencias || 0, procMonto: 0, procClients: 0 }));
-    proc.forEach((x) => { const k = idOf(x); const r = map.get(k) || { name: nameOf(x), hojas: 0, clients: 0, cajas: 0, unidades: 0, monto: 0, vacDesp: 0, vacRecv: 0, vacAsg: 0, vacDebe: 0, novedades: 0, diferencias: 0, procMonto: 0, procClients: 0 }; r.procMonto += x.monto; r.procClients += x.clients; map.set(k, r); });
+    liq.forEach((x) => map.set(idOf(x), { name: nameOf(x), hojas: x.hojas || 0, clients: x.clients, cajas: x.cajas, unidades: x.unidades, monto: x.monto, pedido: x.pedido || 0, devuelto: x.devuelto || 0, vacDesp: x.vacDesp, vacRecv: x.vacRecv, vacAsg: x.vacAsg, vacDebe: x.vacDebe, novedades: x.novedades || 0, diferencias: x.diferencias || 0, procMonto: 0, procClients: 0 }));
+    proc.forEach((x) => { const k = idOf(x); const r = map.get(k) || { name: nameOf(x), hojas: 0, clients: 0, cajas: 0, unidades: 0, monto: 0, pedido: 0, devuelto: 0, vacDesp: 0, vacRecv: 0, vacAsg: 0, vacDebe: 0, novedades: 0, diferencias: 0, procMonto: 0, procClients: 0 }; r.procMonto += x.monto; r.procClients += x.clients; map.set(k, r); });
     const rows = [...map.values()].sort((a, b) => b.monto - a.monto || b.procMonto - a.procMonto || a.name.localeCompare(b.name, 'es'));
-    const tot = rows.reduce((a, r) => { Object.keys(a).forEach((k) => { a[k] += +r[k] || 0; }); return a; }, { hojas: 0, clients: 0, cajas: 0, unidades: 0, monto: 0, vacDesp: 0, vacRecv: 0, vacAsg: 0, vacDebe: 0, novedades: 0, diferencias: 0, procMonto: 0, procClients: 0 });
+    const tot = rows.reduce((a, r) => { Object.keys(a).forEach((k) => { a[k] += +r[k] || 0; }); return a; }, { hojas: 0, clients: 0, cajas: 0, unidades: 0, monto: 0, pedido: 0, devuelto: 0, vacDesp: 0, vacRecv: 0, vacAsg: 0, vacDebe: 0, novedades: 0, diferencias: 0, procMonto: 0, procClients: 0 });
     return { rows, tot };
   }
 
@@ -86,6 +86,60 @@
     const rows = cats.map((c) => { const cells = people.map((p) => cell.get(p.id + '|' + c) || zero()); return { category: c, cells, total: cells.reduce(add, zero()) }; });
     const cols = people.map((p, i) => rows.reduce((t, r) => add(t, r.cells[i]), zero()));
     return { people, rows, cols, total: cols.reduce(add, zero()) };
+  }
+
+  /**
+   * Total liquidado de UNA persona (vendedor o despachador, o todos) en las categorías elegidas.
+   * Sale de lo ya liquidado por el servidor (incluye lo retirado por oficina, a nombre del despachador de retiros).
+   */
+  function catSelect(d, who, id, cats) {
+    const arr = who === 'seller' ? d.byCategorySeller : d.byCategoryDispatcher, set = new Set(cats || []);
+    const rows = new Map();
+    arr.forEach((x) => {
+      if ((id && x.id !== id) || !set.has(x.category)) return;
+      const r = rows.get(x.category) || { category: x.category, cajas: 0, unidades: 0, monto: 0 };
+      r.cajas += x.cajas; r.unidades += x.unidades; r.monto += x.monto; rows.set(x.category, r);
+    });
+    const list = [...rows.values()].map((r) => ({ ...r, monto: Math.round((r.monto + Number.EPSILON) * 100) / 100 })).sort((a, b) => b.monto - a.monto);
+    const tot = list.reduce((a, r) => ({ cajas: a.cajas + r.cajas, unidades: a.unidades + r.unidades, monto: a.monto + r.monto }), { cajas: 0, unidades: 0, monto: 0 });
+    tot.monto = Math.round((tot.monto + Number.EPSILON) * 100) / 100;
+    return { rows: list, tot };
+  }
+  function catPeople(d, who) {
+    const arr = who === 'seller' ? d.byCategorySeller : d.byCategoryDispatcher, m = new Map();
+    arr.forEach((x) => m.set(x.id, x.name));
+    return [...m.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, 'es'));
+  }
+
+  function renderCatSel(box, d, st, f2) {
+    if (!box) return;
+    const { esc, nf0, usd, S } = global.PV;
+    const cs = st.cs || (st.cs = { who: 'seller', id: '', cats: null });
+    const cats = d.byCategory.map((c) => c.category);
+    if (!cs.cats) cs.cats = cats.slice();
+    cs.cats = cs.cats.filter((c) => cats.includes(c));
+    const people = catPeople(d, cs.who);
+    if (cs.id && !people.some((p) => p.id === cs.id)) cs.id = '';
+    const res = catSelect(d, cs.who, cs.id, cs.cats), who = people.find((p) => p.id === cs.id);
+    const whoLbl = cs.who === 'seller' ? 'vendedor' : 'despachador';
+    box.innerHTML = `<h3 style="margin:0 0 8px">Total liquidado por ${whoLbl} y categorías</h3>
+      <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center">
+        <select id="csWho"><option value="seller"${cs.who === 'seller' ? ' selected' : ''}>Vendedor</option><option value="dispatcher"${cs.who === 'dispatcher' ? ' selected' : ''}>Despachador</option></select>
+        <select id="csId"><option value="">— Todos —</option>${people.map((p) => `<option value="${esc(p.id)}"${p.id === cs.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
+        <button class="btn sm" id="csAll">Todas</button><button class="btn sm" id="csNone">Ninguna</button>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0">${cats.map((c) => `<label class="chip"><input type="checkbox" data-c="${esc(c)}"${cs.cats.includes(c) ? ' checked' : ''}> ${esc(c)}</label>`).join('')}</div>
+      <table class="inv"><thead><tr><th>Categoría</th><th class="n">Cajas</th><th class="n">Unidades</th><th class="n">Total liquidado</th></tr></thead><tbody>${res.rows.map((r) => `<tr><td><b>${esc(r.category)}</b></td><td class="n">${nf0.format(r.cajas)}</td><td class="n">${nf0.format(r.unidades)}</td><td class="n">${usd(r.monto)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">Sin ventas en las categorías elegidas</td></tr>'}</tbody>
+        <tfoot><tr><td>TOTAL ${esc(who ? who.name : 'TODOS')}</td><td class="n">${nf0.format(res.tot.cajas)}</td><td class="n">${nf0.format(res.tot.unidades)}</td><td class="n">${usd(res.tot.monto)}</td></tr></tfoot></table>
+      <div class="toolbar"><button class="btn" id="csPrint">🖨 Imprimir esta selección</button></div>
+      <p class="muted">Incluye solo lo liquidado (sin devoluciones ni anuladas) y las ventas retiradas por oficina a nombre del despachador de retiros. La categoría es la que tiene hoy el producto en el catálogo.</p>`;
+    const again = () => renderCatSel(box, d, st, f2);
+    box.querySelector('#csWho').onchange = (e) => { cs.who = e.target.value; cs.id = ''; again(); };
+    box.querySelector('#csId').onchange = (e) => { cs.id = e.target.value; again(); };
+    box.querySelector('#csAll').onclick = () => { cs.cats = cats.slice(); again(); };
+    box.querySelector('#csNone').onclick = () => { cs.cats = []; again(); };
+    box.querySelectorAll('input[data-c]').forEach((i) => { i.onchange = () => { const c = i.dataset.c; cs.cats = i.checked ? [...new Set([...cs.cats, c])] : cs.cats.filter((x) => x !== c); again(); }; });
+    box.querySelector('#csPrint').onclick = () => global.Print.printCatSel(d, { config: S.config, title: titleOf(f2), who: whoLbl, name: who ? who.name : 'TODOS', res });
   }
 
   /* ---------- E7 · Comparar con el libro Excel (quincena en paralelo) ---------- */
@@ -166,15 +220,16 @@
     const E = global.Exporta, t = d.totals, sub = `${title} · del ${d.from} al ${d.to} · Venta liquidada = lo entregado de verdad (hojas con la liquidación cerrada, sin devoluciones ni notas anuladas)`;
     const money = { border: true, fmt: 'money', align: 'right' }, int = { border: true, fmt: 'int', align: 'right' };
     const sv = summaryRows(d, 'seller'), sd = summaryRows(d, 'dispatcher');
-    const sumCols = (who, disp) => [{ h: who, w: 26 }, ...(disp ? [{ h: 'HOJAS', k: 'int', total: true }] : []), { h: 'CLIENTES', k: 'int', total: true }, { h: 'CAJAS', k: 'int', total: true }, { h: 'VENTA LIQUIDADA $', k: 'money', w: 17, total: true },
+    const sumCols = (who, disp) => [{ h: who, w: 26 }, ...(disp ? [{ h: 'HOJAS', k: 'int', total: true }] : []), { h: 'CLIENTES', k: 'int', total: true }, { h: 'CAJAS', k: 'int', total: true }, { h: 'PEDIDO ORIGINAL $', k: 'money', w: 17, total: true }, { h: 'DEVUELTO / ANULADO $', k: 'money', w: 17, total: true }, { h: 'VENTA LIQUIDADA $', k: 'money', w: 17, total: true },
       { h: 'VACÍOS DESPACHADOS', k: 'int', w: 14, total: true }, { h: 'VACÍOS RECIBIDOS', k: 'int', w: 14, total: true }, { h: 'VACÍOS ASIGNADOS', k: 'int', w: 14, total: true }, { h: 'QUEDAN DEBIENDO', k: 'int', w: 14, total: true },
       { h: disp ? 'DIFERENCIAS' : 'NOVEDADES', k: 'int', total: true }, { h: 'VENTA EN PROCESO $', k: 'money', w: 17, total: true }];
-    const sumRow = (r, disp) => [r.name, ...(disp ? [r.hojas] : []), r.clients, r.cajas, r.monto, r.vacDesp, r.vacRecv, r.vacAsg, r.vacDebe, disp ? r.diferencias : r.novedades, r.procMonto];
+    const sumRow = (r, disp) => [r.name, ...(disp ? [r.hojas] : []), r.clients, r.cajas, r.pedido, r.devuelto, r.monto, r.vacDesp, r.vacRecv, r.vacAsg, r.vacDebe, disp ? r.diferencias : r.novedades, r.procMonto];
     const resumen = E.blocks('Resumen', [
       { title: 'Venta liquidada y venta en proceso', cols: [{ h: 'CONCEPTO', w: 34 }, { h: 'VALOR', w: 18 }], rows: [
-        ['VENTA LIQUIDADA $ (lo que paga el cliente)', { v: t.monto, s: { ...money, b: true } }], ['Venta en proceso $ (todavía puede cambiar)', { v: d.enProceso.monto, s: money }], ['Pedido original de lo liquidado $', { v: t.pedido, s: money }],
+        ['VENTA LIQUIDADA $ (lo que paga el cliente)', { v: t.monto, s: { ...money, b: true } }], ['Venta en proceso $ (todavía puede cambiar)', { v: d.enProceso.monto, s: money }], ['Pedido original de lo liquidado $', { v: t.pedido, s: money }], ['Devuelto / anulado / no facturado $ (se descuenta, no se vende)', { v: t.devuelto, s: money }],
         ['Hojas liquidadas', { v: t.hojas, s: int }], ['Clientes atendidos', { v: t.clients, s: int }], ['Cajas liquidadas', { v: t.cajas, s: int }], ['Unidades sueltas', { v: t.unidades, s: int }],
-        ['Hojas del período sin liquidar', { v: d.pendingLoads.length, s: int }]] },
+        ['Hojas del período sin liquidar', { v: d.pendingLoads.length, s: int }],
+        ['⚠ Hojas con total incompleto en el servidor', { v: (d.integridad || []).length, s: int }]] },
       { title: 'Resumen de la quincena por vendedor', cols: sumCols('VENDEDOR', false), rows: sv.rows.map((r) => sumRow(r, false)) },
       { title: 'Resumen de la quincena por despachador', cols: sumCols('DESPACHADOR', true), rows: sd.rows.map((r) => sumRow(r, true)) },
       { title: 'Venta en proceso por etapa (no suma a la venta liquidada)', cols: [{ h: 'ETAPA', w: 34 }, { h: 'PEDIDOS', k: 'int', total: true }, { h: 'MONTO $', k: 'money', total: true }], rows: d.enProceso.stages.map((x) => [x.label, x.clients, x.monto]) },
@@ -213,7 +268,7 @@
     ], { title: 'VACÍOS DE LO LIQUIDADO', subtitle: sub });
     const detalle = E.table({ name: 'Detalle', title: 'DETALLE POR CLIENTE', subtitle: sub, cols: [{ h: 'FECHA', k: 'date', w: 12 }, { h: 'HOJA', w: 12 }, { h: 'CLIENTE', w: 38 }, { h: 'VENDEDOR', w: 18 }, { h: 'DESPACHADOR', w: 18 }, { h: 'NOTA', w: 10 }, { h: 'RESULTADO', w: 20 }, { h: 'CAJAS', k: 'int', total: true }, { h: 'UNIDADES', k: 'int', total: true }, { h: 'MONTO $', k: 'money', total: true }],
       rows: d.detail.map((x) => [x.date, x.load, x.clientName, x.sellerName, x.dispatcherName, x.valeryNote, RES[x.result] || x.result, x.cajas, x.unidades, x.monto]) });
-    return [resumen, categorias, cuadre, productos, camion, novedades, vacios, detalle];
+    return [resumen, categorias, cuadre, productos, camion, vacios, detalle, novedades];
   }
 
   /** Pantalla del reporte. Usa PV (helpers de la app). */
@@ -305,22 +360,25 @@
             ${c.sinDespachador.clients ? `<br><b>${c.sinDespachador.clients} cliente(s) · ${usd(c.sinDespachador.monto)} liquidados en hojas SIN despachador</b>: ${c.sinDespachador.loads.map((l) => esc((l.label || l.code) + ' (' + fmtDate(l.date) + ')')).join(', ')}. Asígnalo en la hoja de carga.` : ''}</div>`;
         return banner + gridTbl('Cuadre · venta liquidada: qué despachador repartió lo de cada vendedor', crossGrid(dd, 'monto'), true) + gridTbl('Cuadre · vacíos despachados por vendedor y despachador', crossGrid(dd, 'vacDesp'), false);
       };
-      const sumTable = (title, who, sm, disp) => tbl(title, [{ t: who }, ...(disp ? [N('Hojas')] : []), N('Clientes'), N('Cajas'), N('Venta liquidada'), N('Vacíos despachados'), N('Vacíos recibidos'), N('Vacíos asignados'), N('Quedan debiendo'), N(disp ? 'Diferencias' : 'Novedades'), N('Venta en proceso')],
-        sm.rows.map((r) => `<tr><td><b>${esc(r.name)}</b></td>${disp ? `<td class="n">${r.hojas}</td>` : ''}<td class="n">${r.clients}</td><td class="n">${nf0.format(r.cajas)}</td><td class="n"><b>${usd(r.monto)}</b></td><td class="n">${r.vacDesp}</td><td class="n">${r.vacRecv}</td><td class="n">${r.vacAsg}</td><td class="n ${r.vacDebe ? 'warn-txt' : ''}">${r.vacDebe}</td><td class="n">${(disp ? r.diferencias : r.novedades) || ''}</td><td class="n muted">${r.procMonto ? usd(r.procMonto) : ''}</td></tr>`).join(''),
-        `<tr><td>TOTAL</td>${disp ? `<td class="n">${sm.tot.hojas}</td>` : ''}<td class="n">${sm.tot.clients}</td><td class="n">${nf0.format(sm.tot.cajas)}</td><td class="n">${usd(sm.tot.monto)}</td><td class="n">${sm.tot.vacDesp}</td><td class="n">${sm.tot.vacRecv}</td><td class="n">${sm.tot.vacAsg}</td><td class="n">${sm.tot.vacDebe}</td><td class="n">${(disp ? sm.tot.diferencias : sm.tot.novedades) || ''}</td><td class="n">${usd(sm.tot.procMonto)}</td></tr>`);
+      const sumTable = (title, who, sm, disp) => tbl(title, [{ t: who }, ...(disp ? [N('Hojas')] : []), N('Clientes'), N('Cajas'), N('Pedido original'), N('Devuelto / anulado'), N('Venta liquidada'), N('Vacíos despachados'), N('Vacíos recibidos'), N('Vacíos asignados'), N('Quedan debiendo'), N(disp ? 'Diferencias' : 'Novedades'), N('Venta en proceso')],
+        sm.rows.map((r) => `<tr><td><b>${esc(r.name)}</b></td>${disp ? `<td class="n">${r.hojas}</td>` : ''}<td class="n">${r.clients}</td><td class="n">${nf0.format(r.cajas)}</td><td class="n muted">${usd(r.pedido)}</td><td class="n ${r.devuelto ? 'warn-txt' : ''}">${r.devuelto ? '− ' + usd(r.devuelto) : ''}</td><td class="n"><b>${usd(r.monto)}</b></td><td class="n">${r.vacDesp}</td><td class="n">${r.vacRecv}</td><td class="n">${r.vacAsg}</td><td class="n ${r.vacDebe ? 'warn-txt' : ''}">${r.vacDebe}</td><td class="n">${(disp ? r.diferencias : r.novedades) || ''}</td><td class="n muted">${r.procMonto ? usd(r.procMonto) : ''}</td></tr>`).join(''),
+        `<tr><td>TOTAL</td>${disp ? `<td class="n">${sm.tot.hojas}</td>` : ''}<td class="n">${sm.tot.clients}</td><td class="n">${nf0.format(sm.tot.cajas)}</td><td class="n">${usd(sm.tot.pedido)}</td><td class="n">${sm.tot.devuelto ? '− ' + usd(sm.tot.devuelto) : ''}</td><td class="n">${usd(sm.tot.monto)}</td><td class="n">${sm.tot.vacDesp}</td><td class="n">${sm.tot.vacRecv}</td><td class="n">${sm.tot.vacAsg}</td><td class="n">${sm.tot.vacDebe}</td><td class="n">${(disp ? sm.tot.diferencias : sm.tot.novedades) || ''}</td><td class="n">${usd(sm.tot.procMonto)}</td></tr>`);
       o.innerHTML = `
         ${d.pendingLoads.length ? `<div class="hint warn">⚠ <b>${d.pendingLoads.length} hoja${d.pendingLoads.length > 1 ? 's' : ''} del período sin liquidar</b> (${usd(d.pendingMonto)} en proceso): no se suman a la venta liquidada.
           <div class="muted" style="margin-top:4px">${d.pendingLoads.map((l) => `${esc(fmtDate(l.date))} · ${esc(l.label || l.code)} · ${esc(l.dispatcherName || 'sin despachador')} · ${usd(l.monto)} (${esc(l.liq)})`).join('<br>')}</div></div>` : '<div class="hint">✓ Todas las hojas del período están liquidadas.</div>'}
+        ${(d.integridad || []).length ? `<div class="hint warn">⚠ <b>${d.integridad.length} hoja(s) liquidada(s) con el total INCOMPLETO en el servidor</b> — el reporte estaría subestimado en ${usd(d.integridad.reduce((a, x) => a + x.falta, 0))}. Abre esa hoja en un equipo que tenga los datos y pulsa Sincronizar:
+          <div class="muted" style="margin-top:4px">${d.integridad.map((x) => `${esc(fmtDate(x.date))} · ${esc(x.label || x.code)} · ${esc(x.dispatcherName || 'sin despachador')} · declara ${usd(x.declarado)} · servidor ${usd(x.servidor)}`).join('<br>')}</div></div>` : ''}
         ${d.sinFoto ? `<div class="hint">${d.sinFoto} hoja(s) se liquidaron antes de esta versión: no tienen el detalle de diferencias del camión.</div>` : ''}
         <div class="card card-pad no-print" id="xcBox" style="margin-bottom:12px"></div>
         <div id="tlBox"></div>
+        <div class="card card-pad no-print" id="csBox" style="margin-bottom:12px"></div>
         <div class="toolbar no-print"><button class="btn" id="qzPrint">🖨 Imprimir reporte</button><button class="btn" id="qzCsv">⇩ Excel</button></div>
         <div class="kpi-row">
           <div class="kpi"><small>Venta liquidada</small><b>${usd(t.monto)}</b><small>${nf0.format(t.clients)} clientes · ${t.hojas} hojas · lo que paga el cliente</small></div>
           <div class="kpi"><small>Venta en proceso</small><b>${usd(d.enProceso.monto)}</b><small>${nf0.format(d.enProceso.clients)} pedidos · aún no cuenta</small></div>
           <div class="kpi"><small>Cajas · Unidades liquidadas</small><b>${nf0.format(t.cajas)}</b><small>${nf0.format(t.unidades)} unidades sueltas</small></div>
           <div class="kpi"><small>Vacíos despachados</small><b>${nf0.format(vt.d)}</b><small>${nf0.format(vt.r)} recibidos · ${nf0.format(vt.a)} asignados · ${nf0.format(vt.q)} quedan debiendo</small></div>
-          <div class="kpi"><small>Novedades</small><b>${t.parcial + t.pendiente + t.anulada}</b><small>${t.parcial} dev. parcial · ${t.pendiente} después · ${t.anulada} anuladas</small></div>
+          <div class="kpi"><small>Novedades</small><b>${d.novedades.length}</b><small>${t.parcial} dev. parcial · ${t.nofact} no facturado · ${t.retiro} retiro · ${t.pendiente} después · ${t.anulada} anuladas · − ${usd(t.devuelto)} descontado</small></div>
         </div>
         ${tbl('Venta en proceso <span class="muted">(todavía puede cambiar)</span>', [{ t: 'Etapa' }, N('Pedidos'), N('Monto')], d.enProceso.stages.map((x) => `<tr><td>${esc(x.label)}</td><td class="n">${x.clients}</td><td class="n">${usd(x.monto)}</td></tr>`).join(''),
           `<tr><td>TOTAL EN PROCESO</td><td class="n">${d.enProceso.clients}</td><td class="n">${usd(d.enProceso.monto)}</td></tr>`)}
@@ -337,13 +395,14 @@
           d.diferencias.map((x) => `<tr><td>${esc(fmtDate(x.date))}</td><td class="mono">${esc(x.label || x.load)}</td><td>${esc(x.dispatcherName)}</td><td><span class="mono muted">${esc(x.code)}</span> ${esc(x.name)} ${esc(x.presentation)} <span class="um ${esc(x.um)}">${esc(x.um)}</span></td><td class="n">${x.debe}</td><td class="n">${x.dev}</td><td class="n"><b>${x.dif}</b></td><td>${esc(x.motivo)}</td></tr>`).join(''))}
         ${d.siguiente.length ? tbl('Pasó a la siguiente carga (mismo despachador)', [{ t: 'Fecha' }, { t: 'Hoja' }, { t: 'Despachador' }, { t: 'Producto' }, N('Cantidad')],
           d.siguiente.map((x) => `<tr><td>${esc(fmtDate(x.date))}</td><td class="mono">${esc(x.label || x.load)}</td><td>${esc(x.dispatcherName)}</td><td><span class="mono muted">${esc(x.code)}</span> ${esc(x.name)} <span class="um ${esc(x.um)}">${esc(x.um)}</span></td><td class="n">${x.qty}</td></tr>`).join('')) : ''}
-        ${tbl('Novedades de las notas', [{ t: 'Fecha' }, { t: 'Cliente' }, { t: 'Vendedor' }, { t: 'Resultado' }, { t: 'Nota' }, { t: 'Nota nueva' }, { t: 'Motivo' }, N('Pedido'), N('Entregado')],
-          d.novedades.map((x) => `<tr><td>${esc(fmtDate(x.date))}</td><td><b>${esc(x.clientName)}</b></td><td>${esc(x.sellerName)}</td><td>${esc(RES[x.result] || x.result)}</td><td class="mono">${esc(x.valeryNote)}</td><td class="mono">${esc(x.newValery)}</td><td>${esc(x.motivo)}</td><td class="n">${usd(x.pedido)}</td><td class="n">${usd(x.entregado)}</td></tr>`).join(''))}
         ${tbl('Vacíos por código <span class="muted">(de lo liquidado en el período)</span>', [{ t: 'Código' }, { t: 'Tipo' }, N('Despachados'), N('Recibidos'), N('Asignados'), N('Quedan debiendo'), N('Devoluciones posteriores')], vacRows,
           `<tr><td colspan="2">TOTAL GENERAL</td><td class="n">${vt.d}</td><td class="n">${vt.r}</td><td class="n">${vt.a}</td><td class="n">${vt.q}</td><td class="n">${Object.values(d.vacios.devoluciones || {}).reduce((a, x) => a + x, 0) || ''}</td></tr>`)}
         ${tbl('Vacíos por despachador (los que trajo)', [{ t: 'Despachador' }, { t: 'Tipo' }, N('Despachados'), N('Recibidos'), N('Asignados'), N('Quedan debiendo'), N('Devueltos entregas anteriores'), N('Total que entran')], vacPeople(d.vacios.byDispatcher))}
         ${tbl('Vacíos por vendedor del cliente', [{ t: 'Vendedor' }, { t: 'Tipo' }, N('Despachados'), N('Recibidos'), N('Asignados'), N('Quedan debiendo'), N('Devueltos entregas anteriores'), N('Total que entran')], vacPeople(d.vacios.bySeller))}
+        ${tbl('Novedades de las notas', [{ t: 'Fecha' }, { t: 'Cliente' }, { t: 'Vendedor' }, { t: 'Resultado' }, { t: 'Nota' }, { t: 'Nota nueva' }, { t: 'Motivo' }, N('Pedido'), N('Entregado')],
+          d.novedades.map((x) => `<tr><td>${esc(fmtDate(x.date))}</td><td><b>${esc(x.clientName)}</b></td><td>${esc(x.sellerName)}</td><td>${esc(RES[x.result] || x.result)}</td><td class="mono">${esc(x.valeryNote)}</td><td class="mono">${esc(x.newValery)}</td><td>${esc(x.motivo)}</td><td class="n">${usd(x.pedido)}</td><td class="n">${usd(x.entregado)}</td></tr>`).join(''))}
         <p class="muted">${d.detail.length} clientes entregados en el período. El detalle completo va en el Excel.</p>`;
+      renderCatSel($('#csBox'), d, st, f2);
       renderCompare($('#xcBox'), d, st);
       renderLedger($('#tlBox'), d.from, d.to);
       $('#qzPrint').onclick = () => global.Print.printQuincena(d, { config: S.config, title: titleOf(f2), RES });
@@ -388,5 +447,5 @@
         rows: L.flatMap((d) => d.hojas.flatMap((h) => h.rows.map((r) => [d.name, global.Loads.labelOf(h.load), h.load.date || '', ledgerName(r.key), r.traia, r.queda, r.carga, r.anterior || 0, r.entregado, r.almacen, r.sigue, r.sigue ? (r.destLoad ? loadName(r.destLoad) : 'la próxima') : '', +r.dif || 0, r.motivo || '']))) })]);
   }
 
-  global.Reportes = { lastDay, quincena, quincenaOf, prevQuincena, render, titleOf, summaryRows, crossGrid, catGrid };
+  global.Reportes = { lastDay, quincena, quincenaOf, prevQuincena, render, titleOf, summaryRows, crossGrid, catGrid, catSelect, catPeople };
 })(window);
