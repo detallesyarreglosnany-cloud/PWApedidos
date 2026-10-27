@@ -1031,7 +1031,7 @@
     else if (!editable(o)) hint = `<div class="hint warn">🔒 Este pedido está <b>${esc(Loads.orderLabel(o))}</b>: la carga ya fue aprobada y no se puede modificar.</div>`;
     if (o && o.dupWith && o.dupWith.length) hint += dupHint(o);
     if (o && editable(o)) hint += inactivityHint(o);
-    if (o && editable(o) && window.Cobranza) hint += Cobranza.hintFor(o.clientId);
+    if (o && editable(o) && window.Cobranza) hint += Cobranza.hintFor(o.clientId, o);
     if (o && o.loadId && editable(o)) hint += `<div class="hint">✏️ Este pedido ya está en una hoja de carga (<b>${esc(Loads.orderLabel(o))}</b>). Aún puedes modificarlo; la oficina verá los cambios.</div>`;
     if (!S.products.length) {
       list.innerHTML = `<div class="empty"><strong>Catálogo vacío</strong>Toca ⟳ para sincronizar con la oficina.</div>`;
@@ -1084,7 +1084,7 @@
     const rate = +S.config.exchangeRate || 0;
     bar.innerHTML = `
       <div class="cart-info"><b>${esc(o.clientName)}</b> · ${t.cajas} cj + ${t.unidades} un${rate ? ' · ' + bs(t.monto * rate) : ''}
-        ${o.status !== 'abierto' ? ` · <span class="status ${o.status}">${esc(Loads.orderLabel(o))}</span>` : ''}${o.factura ? ' · 🧾 con factura' : ''}
+        ${o.status !== 'abierto' ? ` · <span class="status ${o.status}">${esc(Loads.orderLabel(o))}</span>` : ''}${o.factura ? ' · 🧾 con factura' : ''}${window.Cobranza ? Cobranza.barNote(o.clientId, t.monto) : ''}
         <button type="button" class="cart-x" id="closeOrder" title="Quitar este cliente de la pantalla (el pedido no se borra)" aria-label="Quitar cliente de la pantalla">✕</button></div>
       <button class="cart-btn" id="viewOrder">Ver pedido (${t.items} ítems) · ${usd(t.monto)}</button>`;
     $('#viewOrder').onclick = orderSheet;

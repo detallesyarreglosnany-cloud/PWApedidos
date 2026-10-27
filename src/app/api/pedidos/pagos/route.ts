@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import { db } from '@/lib/db';
 import { isAdminReq, isSupervisorReq, requireAdmin, syncOk } from '@/lib/keys';
 import { sellerAccessOk } from '@/lib/pin';
-import { SEGUIMIENTO, diffDays, rulesOf, tramos, vzDay } from '@/lib/cobranza';
+import { SEGUIMIENTO, credInfo, diffDays, rulesOf, tramos, vzDay, type CredInfo, type CredSetting } from '@/lib/cobranza';
 import { sendPush } from '@/lib/push';
 import { createHash } from 'crypto';
 import { METHODS, allocate, cleanPago, normRef, noteKey, notaNum, noteStatus, r2, type Pago } from '@/lib/pagos';
@@ -18,6 +18,9 @@ import { METHODS, allocate, cleanPago, normRef, noteKey, notaNum, noteStatus, r2
 //     { action: 'cuenta', clientId, sellerId }    → { notas, deuda, enEspera }  estado de cuenta: cada nota del cliente con su estado de pago
 //     { action: 'estado', notas: [{ nota, orderId, monto }] } → { byKey: { 'n:85643': { estado, texto, resta, ... } } }
 //     { action: 'cartera', sellerId? }            → { notas, alDia, hoy }  cuentas por cobrar con vencimientos (sin sellerId: todos, solo oficina)
+//     { action: 'creditos', sellerId? }           → { clientes }  récord y crédito de cada cliente (oficina o supervisor)
+//     { action: 'credito', clientId, modo, limite, nota } → { ok }  cobranza fija contado/crédito y límite (solo oficina)
+//     { action: 'importCobro', rows }             → { added }  restaurar crédito y seguimientos de un respaldo
 //     { action: 'seguir', sellerId, clientId, key, nota, estado, comentario } → { ok }  seguimiento de cobro (le llega a la oficina)
 //   Oficina / supervisor (lectura):
 //     { action: 'list', from, to, sellerId?, status? } → { pagos }
@@ -56,6 +59,84 @@ async function conflictOf(ref: string) {
   const x = p ? parse(p) : null;
   return x ? { ref, pagoId: x.id, clientName: x.clientName, sellerName: x.sellerName, date: x.date, status: x.status } : { ref };
 }
+
+type Line = { category?: string; cajas?: number; unidades?: number; boxPrice?: number; unitPrice?: number };
+type Ord = { id: string; deleted?: boolean; status?: string; clientId?: string; clientName?: string; sellerId?: string; sellerName?: string; routeDate?: string; valeryNote?: string; dispatchedAt?: string; loadId?: string | null;
+  lines?: Record<string, Line>; delivery?: { at?: string; result?: string; monto?: number; newValery?: string; lines?: Record<string, Line>; dispatcherName?: string } | null };
+type Cli = { id: string; name?: string; sellerId?: string; source?: string; createdAt?: string; deleted?: boolean };
+type Nota = ReturnType<typeof noteStatus> & { clientId: string; clientName: string; sellerId: string; sellerName: string; orderId: string; nota: string; key: string; monto: number; resta: number;
+  pagado: number; espera: number; despacho: string; vence: string; dias: number; tramos: ReturnType<typeof tramos>; liquidado: boolean; seg: unknown };
+const money = (l: Line) => r2((Number(l.cajas) || 0) * (Number(l.boxPrice) || 0) + (Number(l.unidades) || 0) * (Number(l.unitPrice) || 0));
+/** Cuentas por cobrar con vencimientos y el crédito de cada cliente (de un vendedor o de todos). */
+async function cartera(sellerId: string) {
+  const hoy = vzDay(new Date().toISOString()), since = new Date(Date.now() - 200 * 86400000).toISOString().slice(0, 10);
+  const cfgRow = await db.distDoc.findUnique({ where: { kind_id: { kind: 'config', id: 'main' } }, select: { data: true } });
+  const R = rulesOf(cfgRow ? JSON.parse(cfgRow.data) : null);
+  const prodRows = await db.distDoc.findMany({ where: { kind: 'products', deleted: false }, select: { data: true } });
+  const catOf = new Map(prodRows.map((r) => { const x = JSON.parse(r.data) as { id: string; category?: string }; return [x.id, String(x.category || '')]; }));
+  const crows = await db.distDoc.findMany({ where: { kind: 'clients', deleted: false, ...(sellerId ? { sellerId } : {}) }, select: { data: true } });
+  const clients = new Map(crows.map((r) => { const c = JSON.parse(r.data) as Cli; return [c.id, c]; }));
+  const orows = await db.distDoc.findMany({ where: { kind: 'orders', deleted: false, status: 'despachado', routeDate: { gte: since }, ...(sellerId ? { sellerId } : {}) }, select: { data: true } });
+  const orders = orows.map((r) => JSON.parse(r.data) as Ord).filter((o) => !o.deleted && o.clientId && !(o.delivery && o.delivery.at && o.delivery.result === 'anulada'));
+  const clientIds = [...new Set(orders.map((o) => String(o.clientId)))];
+  const pagos = clientIds.length ? (await db.distPago.findMany({ where: { clientId: { in: clientIds }, status: { in: LIVE } } })).map(parse) : [];
+  const ab = allocate(pagos);
+  const segRows = await db.$queryRaw<{ name: string; value: string }[]>`SELECT "name", "value" FROM "DistSetting" WHERE "name" LIKE 'seg:%'`;
+  const seg = new Map(segRows.map((r) => [r.name.slice(4), JSON.parse(r.value)]));
+  const credRows = await db.$queryRaw<{ name: string; value: string }[]>`SELECT "name", "value" FROM "DistSetting" WHERE "name" LIKE 'cred:%'`;
+  const sets = new Map(credRows.map((r) => [r.name.slice(5), JSON.parse(r.value) as CredSetting]));
+  // Por cliente: compras (para clientes nuevos), deuda, atraso y cuándo terminó de pagar cada nota
+  type Agg = { compras: { day: string; monto: number }[]; deuda: number; vencido: number; atrasoMax: number; atrasos: number[]; name: string; sellerId: string; sellerName: string };
+  const agg = new Map<string, Agg>();
+  const aggOf = (o: Ord) => { const k = String(o.clientId); let x = agg.get(k); if (!x) agg.set(k, (x = { compras: [], deuda: 0, vencido: 0, atrasoMax: 0, atrasos: [], name: String(o.clientName || ''), sellerId: String(o.sellerId || ''), sellerName: String(o.sellerName || '') })); return x; };
+  const notas: Nota[] = []; const conDeuda = new Set<string>(), pagaron = new Set<string>(), cerradas: { key: string; monto: number; vence: string; x: Agg }[] = [];
+  for (const o of orders) {
+    const d = o.delivery && o.delivery.at ? o.delivery : null;
+    const src = (d ? d.lines : o.lines) || {};
+    const lines = Object.entries(src).map(([pid, l]) => ({ category: catOf.get(pid) || String(l.category || ''), monto: money(l) })).filter((l) => l.monto > 0);
+    const monto = d ? r2(Number(d.monto) || 0) : r2(lines.reduce((a, l) => a + l.monto, 0));
+    if (!(monto > 0)) continue;
+    const start = vzDay(o.dispatchedAt || (d && d.at) || '') || String(o.routeDate || '');
+    const x = aggOf(o); x.compras.push({ day: start, monto });
+    if (start < R.desde) continue;
+    // Si lo entregado no cuadra con las líneas (redondeos), manda el monto de la nota
+    const sum = r2(lines.reduce((a, l) => a + l.monto, 0)); if (sum > 0 && Math.abs(sum - monto) > 0.01) lines.forEach((l) => { l.monto = r2((l.monto * monto) / sum); });
+    const nota = notaNum((d && d.newValery) || o.valeryNote), key = noteKey({ nota, orderId: o.id }), a = ab.get(key);
+    const tr = tramos(lines, start, R, a ? a.pagado : 0), resta = r2(tr.reduce((q, t) => q + t.resta, 0));
+    if (resta <= 0.01) { pagaron.add(String(o.clientId)); cerradas.push({ key, monto, vence: tr[tr.length - 1].vence, x }); continue; }
+    conDeuda.add(String(o.clientId));
+    const next = tr.find((t) => t.resta > 0.01)!, dias = diffDays(hoy, next.vence);
+    x.deuda += resta; if (dias < 0) { x.vencido += tr.filter((t) => t.vence < hoy).reduce((q, t) => q + t.resta, 0); x.atrasoMax = Math.max(x.atrasoMax, -dias); }
+    notas.push({ ...noteStatus(monto, a), clientId: String(o.clientId), clientName: String(o.clientName || ''), sellerId: String(o.sellerId || ''), sellerName: String(o.sellerName || ''), orderId: o.id, nota, key, monto, resta,
+      pagado: a ? a.pagado : 0, espera: a ? a.espera : 0, despacho: start, vence: next.vence, dias, tramos: tr, liquidado: !!d, seg: seg.get(`${o.clientId}:${key}`) || null });
+  }
+  notas.sort((x, y) => x.dias - y.dias);
+  // Día en que cada nota quedó pagada completa (fecha real del pago) → días de atraso del récord
+  if (cerradas.length) {
+    const montoOf = new Map(cerradas.map((c) => [c.key, c.monto])), cum = new Map<string, number>(), done = new Map<string, string>();
+    for (const p of pagos.slice().sort((a, b) => a.date.localeCompare(b.date) || String(a.createdAt).localeCompare(String(b.createdAt)))) {
+      let left = r2(p.pagado + p.ajustes);
+      p.notas.forEach((n, i) => {
+        const take = r2(i === p.notas.length - 1 ? left : Math.min(left, n.monto)); left = r2(left - take);
+        const k = noteKey(n), m = montoOf.get(k); if (m === undefined || done.has(k)) return;
+        const c = r2((cum.get(k) || 0) + take); cum.set(k, c); if (c >= m - 0.01) done.set(k, p.date);
+      });
+    }
+    for (const c of cerradas) { const d = done.get(c.key); if (d) c.x.atrasos.push(Math.max(0, diffDays(c.vence, d))); }
+  }
+  // Crédito por cliente: los que compraron, los que tienen algo fijado por cobranza y los nuevos
+  const ids = new Set<string>([...agg.keys(), ...[...sets.keys()].filter((k) => !sellerId || clients.has(k)), ...[...clients.values()].filter((c) => isNuevo(c, R)).map((c) => c.id)]);
+  const credito: Record<string, CredInfo> = {}, lista: (CredInfo & { clientId: string; clientName: string; sellerId: string; sellerName: string })[] = [];
+  for (const id of ids) {
+    const c = clients.get(id), x = agg.get(id);
+    const info = credInfo({ R, set: sets.get(id) || null, nuevoCliente: !!c && isNuevo(c, R), compras: x ? x.compras.sort((a, b) => a.day.localeCompare(b.day)).map((q) => q.monto) : [],
+      deuda: x ? x.deuda : 0, vencido: x ? x.vencido : 0, atrasoMax: x ? x.atrasoMax : 0, atrasos: x ? x.atrasos : [] });
+    credito[id] = info;
+    lista.push({ ...info, clientId: id, clientName: (c && c.name) || (x && x.name) || id, sellerId: (c && c.sellerId) || (x && x.sellerId) || '', sellerName: (x && x.sellerName) || '' });
+  }
+  return { hoy, R, notas, alDia: [...pagaron].filter((c) => !conDeuda.has(c)), credito, clientes: lista };
+}
+const isNuevo = (c: Cli, R: ReturnType<typeof rulesOf>) => (c.source === 'campo' || c.source === 'oficina') && vzDay(c.createdAt || '') >= R.nuevosDesde;
 
 export async function POST(req: NextRequest) {
   if (!syncOk(req)) return NextResponse.json({ error: 'Clave de sincronización inválida' }, { status: 401 });
@@ -182,43 +263,47 @@ export async function POST(req: NextRequest) {
       const sellerId = str(body.sellerId, 120);
       if (!sellerId && !isReader) return NextResponse.json({ error: 'Falta el vendedor' }, { status: 400 });
       if (sellerId && !isReader && !(await sellerAccessOk(req, sellerId))) return NextResponse.json({ error: 'PIN', pin: true }, { status: 401 });
-      const hoy = vzDay(new Date().toISOString()), since = new Date(Date.now() - 200 * 86400000).toISOString().slice(0, 10);
-      const cfgRow = await db.distDoc.findUnique({ where: { kind_id: { kind: 'config', id: 'main' } }, select: { data: true } });
-      const R = rulesOf(cfgRow ? JSON.parse(cfgRow.data) : null);
-      const prodRows = await db.distDoc.findMany({ where: { kind: 'products', deleted: false }, select: { data: true } });
-      const catOf = new Map(prodRows.map((r) => { const x = JSON.parse(r.data) as { id: string; category?: string }; return [x.id, String(x.category || '')]; }));
-      type Line = { category?: string; cajas?: number; unidades?: number; boxPrice?: number; unitPrice?: number };
-      type Ord = { id: string; deleted?: boolean; status?: string; clientId?: string; clientName?: string; sellerId?: string; sellerName?: string; routeDate?: string; valeryNote?: string; dispatchedAt?: string; loadId?: string | null;
-        lines?: Record<string, Line>; delivery?: { at?: string; result?: string; monto?: number; newValery?: string; lines?: Record<string, Line>; dispatcherName?: string } | null };
-      const orows = await db.distDoc.findMany({ where: { kind: 'orders', deleted: false, status: 'despachado', routeDate: { gte: since }, ...(sellerId ? { sellerId } : {}) }, select: { data: true } });
-      const money = (l: Line) => r2((Number(l.cajas) || 0) * (Number(l.boxPrice) || 0) + (Number(l.unidades) || 0) * (Number(l.unitPrice) || 0));
-      const orders = orows.map((r) => JSON.parse(r.data) as Ord).filter((o) => !o.deleted && o.clientId && !(o.delivery && o.delivery.at && o.delivery.result === 'anulada'));
-      const clientIds = [...new Set(orders.map((o) => String(o.clientId)))];
-      const prows = clientIds.length ? await db.distPago.findMany({ where: { clientId: { in: clientIds }, status: { in: ['espera', 'aprobado'] } } }) : [];
-      const ab = allocate(prows.map(parse));
-      const segRows = await db.$queryRaw<{ name: string; value: string }[]>`SELECT "name", "value" FROM "DistSetting" WHERE "name" LIKE 'seg:%'`;
-      const seg = new Map(segRows.map((r) => [r.name.slice(4), JSON.parse(r.value)]));
-      const notas: unknown[] = []; const conDeuda = new Set<string>(), pagaron = new Set<string>();
-      for (const o of orders) {
-        const d = o.delivery && o.delivery.at ? o.delivery : null;
-        const src = (d ? d.lines : o.lines) || {};
-        const lines = Object.entries(src).map(([pid, l]) => ({ category: catOf.get(pid) || String(l.category || ''), monto: money(l) })).filter((l) => l.monto > 0);
-        const monto = d ? r2(Number(d.monto) || 0) : r2(lines.reduce((a, l) => a + l.monto, 0));
-        if (!(monto > 0)) continue;
-        // Si lo entregado no cuadra con las líneas (redondeos), manda el monto de la nota
-        const sum = r2(lines.reduce((a, l) => a + l.monto, 0)); if (sum > 0 && Math.abs(sum - monto) > 0.01) lines.forEach((l) => { l.monto = r2((l.monto * monto) / sum); });
-        const nota = notaNum((d && d.newValery) || o.valeryNote), key = noteKey({ nota, orderId: o.id }), a = ab.get(key);
-        const start = vzDay(o.dispatchedAt || (d && d.at) || '') || String(o.routeDate || '');
-        if (start < R.desde) continue;
-        const tr = tramos(lines, start, R, a ? a.pagado : 0), resta = r2(tr.reduce((x, t) => x + t.resta, 0));
-        if (resta <= 0.01) { pagaron.add(String(o.clientId)); continue; }
-        conDeuda.add(String(o.clientId));
-        const next = tr.find((t) => t.resta > 0.01)!;
-        notas.push({ ...noteStatus(monto, a), clientId: o.clientId, clientName: o.clientName, sellerId: o.sellerId, sellerName: o.sellerName, orderId: o.id, nota, key, monto, resta, pagado: a ? a.pagado : 0, espera: a ? a.espera : 0,
-          despacho: start, vence: next.vence, dias: diffDays(hoy, next.vence), tramos: tr, liquidado: !!d, seg: seg.get(`${o.clientId}:${key}`) || null });
+      const c = await cartera(sellerId);
+      return NextResponse.json({ notas: c.notas, alDia: c.alDia, hoy: c.hoy, reglas: c.R, credito: c.credito }, { headers: NO_STORE });
+    }
+
+    if (action === 'creditos') {
+      if (!isReader) return NextResponse.json({ error: 'Solo oficina o supervisor' }, { status: 401 });
+      const c = await cartera(str(body.sellerId, 120));
+      return NextResponse.json({ clientes: c.clientes, hoy: c.hoy, reglas: c.R }, { headers: NO_STORE });
+    }
+
+    if (action === 'importCobro') {
+      if (!isAdmin) return NextResponse.json({ error: 'Solo oficina' }, { status: 401 });
+      const rows = (Array.isArray(body.rows) ? body.rows : []).slice(0, 20000) as { name?: unknown; value?: unknown }[];
+      let added = 0;
+      for (const r of rows) {
+        const name = String(r && r.name || ''), value = String(r && r.value || '');
+        if (!/^(cred|seg):/.test(name) || name.length > 300 || !value || value.length > 20000) continue;
+        try { JSON.parse(value); } catch { continue; }
+        added += await db.$executeRaw`INSERT INTO "DistSetting" ("name", "value") VALUES (${name}, ${value}) ON CONFLICT ("name") DO NOTHING`;
       }
-      notas.sort((x, y) => (x as { dias: number }).dias - (y as { dias: number }).dias);
-      return NextResponse.json({ notas, alDia: [...pagaron].filter((c) => !conDeuda.has(c)), hoy, reglas: R }, { headers: NO_STORE });
+      return NextResponse.json({ added });
+    }
+
+    if (action === 'credito') {
+      if (!isAdmin) return NextResponse.json({ error: 'Solo la oficina (cobranza) ajusta el crédito' }, { status: 401 });
+      const clientId = str(body.clientId, 120), modo = str(body.modo, 10), limite = r2(Number(body.limite) || 0);
+      if (!clientId || !['auto', 'credito', 'contado'].includes(modo) || limite < 0 || limite > 1e6) return NextResponse.json({ error: 'Datos inválidos' }, { status: 400 });
+      const name = `cred:${clientId}`;
+      const prevRow = await db.distSetting.findUnique({ where: { name } });
+      const prev = prevRow ? (JSON.parse(prevRow.value) as CredSetting) : null;
+      const v: CredSetting = { modo: modo as CredSetting['modo'], limite, nota: str(body.nota, 300), by: str(body.by, 80) || 'Cobranza', at: new Date().toISOString() };
+      v.hist = [...(prev ? [{ modo: prev.modo, limite: prev.limite, nota: prev.nota, by: prev.by, at: prev.at }] : []), ...((prev && prev.hist) || [])].slice(0, 20);
+      const value = JSON.stringify(v);
+      await db.$executeRaw`INSERT INTO "DistSetting" ("name", "value") VALUES (${name}, ${value}) ON CONFLICT ("name") DO UPDATE SET "value" = EXCLUDED."value"`;
+      const cRow = await db.distDoc.findUnique({ where: { kind_id: { kind: 'clients', id: clientId } }, select: { data: true } });
+      const cl = cRow ? (JSON.parse(cRow.data) as { name?: string; sellerId?: string }) : null;
+      if (cl && cl.sellerId) {
+        const txt = modo === 'contado' ? 'va de CONTADO' : modo === 'credito' ? `crédito${limite ? ' con límite $' + limite : ''}` : `según el sistema${limite ? ' · límite $' + limite : ''}`;
+        try { await sendPush('seller', cl.sellerId, [{ title: '🚦 Crédito actualizado', body: `${cl.name || 'Cliente'}: ${txt}${v.nota ? ' — ' + v.nota : ''}`.slice(0, 300), tag: `cred-${clientId}` }]); } catch (e) { console.warn('[push credito]', e); }
+      }
+      return NextResponse.json({ ok: true, credito: v });
     }
 
     if (action === 'seguir') {

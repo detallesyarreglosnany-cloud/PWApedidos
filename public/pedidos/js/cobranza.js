@@ -53,14 +53,50 @@
     if (man.length || hoy.length || atr.length) { if (P.beep) P.beep(); if (P.toast) P.toast('📅 Tienes cobros por hacer: revisa «Cobrar»', 'ok'); }
   }
 
-  /** Aviso al tomar un pedido: el cliente debe (no bloquea) o está al día. */
-  function hintFor(clientId) {
+  /* ---------------- Crédito (Fase 6) ---------------- */
+  const DOT = { verde: '🟢', amarillo: '🟡', rojo: '🔴', nuevo: '🆕' };
+  const SEM = { verde: 'Sin atrasos', amarillo: 'Con atraso', rojo: 'Atraso grave (más de 7 días)', nuevo: 'Cliente nuevo' };
+  /** Crédito del cliente (lo calcula el servidor; un cliente recién creado en el teléfono ya cuenta como nuevo). */
+  function credOf(clientId) {
+    const P = PV(), S = P.S, sid = S.session && S.session.sellerId, c = sid ? lsGet(key(sid)) : null, d = c && c.data;
+    const k = d && d.credito && d.credito[clientId]; if (k) return k;
+    const cl = P.clientById(clientId), R = (d && d.reglas) || { nuevas: 3, nuevosDesde: '2026-10-27' };
+    if (cl && (cl.source === 'campo' || cl.source === 'oficina') && String(cl.createdAt || '').slice(0, 10) >= R.nuevosDesde && R.nuevas > 0)
+      return { modo: 'nuevo', limite: 0, sugerido: 0, bajaPct: 0, deuda: 0, atrasoMax: 0, semaforo: 'nuevo', nuevo: { n: 0, need: R.nuevas }, motivo: `Cliente nuevo: compra 1 de ${R.nuevas} de contado`, nota: '' };
+    return null;
+  }
+  function credHTML(k, monto) {
+    const P = PV(), { esc, usd } = P; if (!k) return '';
+    if (k.modo === 'contado') return `<div class="hint warn">🔴 <b>Este cliente va de CONTADO</b>: debe pagar antes o al recibir su pedido.${k.nota ? ' <i>' + esc(k.nota) + '</i>' : ''}</div>`;
+    if (k.modo === 'nuevo') return `<div class="hint warn">🆕 <b>Cliente nuevo: compra ${k.nuevo.n + 1} de ${k.nuevo.need} de contado.</b> Debe pagar al recibir. Después de ${k.nuevo.need} compras su crédito será el promedio de esas compras.</div>`;
+    if (k.semaforo === 'verde' && !(k.limite > 0) && !k.pagadas && !k.nota) return '';
+    const parts = [`${DOT[k.semaforo] || ''} <b>${esc(SEM[k.semaforo] || '')}</b>${k.motivo ? ' · ' + esc(k.motivo) : ''}`];
+    if (k.limite > 0) {
+      const disp = Math.round((k.limite - k.deuda - (monto || 0)) * 100) / 100;
+      parts.push(`Límite de crédito <b>${usd(k.limite)}</b> · debe ${usd(k.deuda)}${monto ? ' · este pedido ' + usd(monto) : ''} · <b class="${disp < 0 ? 'warn-txt' : ''}">${disp < 0 ? 'pasa su límite por ' + usd(-disp) : 'disponible ' + usd(disp)}</b>`);
+    }
+    if (k.nota) parts.push('<i>' + esc(k.nota) + '</i>');
+    return `<div class="hint ${k.semaforo === 'verde' && !(k.limite > 0 && k.limite - k.deuda - (monto || 0) < 0) ? '' : 'warn'}">${parts.join('<br>')}</div>`;
+  }
+  /** Para la barra de abajo: contado o si el pedido pasa el límite. */
+  function barNote(clientId, monto) {
+    const k = credOf(clientId); if (!k) return '';
+    if (k.modo === 'contado') return ' · <b class="warn-txt">🔴 CONTADO</b>';
+    if (k.modo === 'nuevo') return ` · <b class="warn-txt">🆕 contado (${k.nuevo.n + 1}/${k.nuevo.need})</b>`;
+    if (k.limite > 0 && k.deuda + (monto || 0) > k.limite + 0.004) return ' · <b class="warn-txt">⚠ pasa su límite</b>';
+    return '';
+  }
+
+  /** Aviso al tomar un pedido: crédito del cliente y si debe (no bloquea) o está al día. */
+  function hintFor(clientId, o) {
     const P = PV(), S = P.S, sid = S.session && S.session.sellerId; if (!sid || !clientId) return '';
-    const c = lsGet(key(sid)); if (!c || !c.data) return '';
+    const monto = o && global.Matrix ? global.Matrix.orderTotals(o).monto : 0;
+    const cred = credHTML(credOf(clientId), monto);
+    const c = lsGet(key(sid)); if (!c || !c.data) return cred;
     const notas = c.data.notas.filter((n) => n.clientId === clientId), usd = P.usd, esc = P.esc;
-    if (!notas.length) return (c.data.alDia || []).includes(clientId) ? '<div class="hint">✅ Cliente <b>al día</b> con sus pagos.</div>' : '';
+    if (!notas.length) return cred + ((c.data.alDia || []).includes(clientId) ? '<div class="hint">✅ Cliente <b>al día</b> con sus pagos.</div>' : '');
     const total = notas.reduce((a, n) => a + n.resta, 0), peor = notas.reduce((a, n) => (n.dias < a.dias ? n : a), notas[0]);
-    return `<div class="hint warn">💵 <b>Este cliente tiene ${notas.length} ${plural(notas.length, 'nota pendiente', 'notas pendientes')} por ${usd(total)}</b> · ${esc(diasTxt(peor.dias))}${peor.dias < 0 ? ' (afecta su crédito)' : ''}.
+    return cred + `<div class="hint warn">💵 <b>Este cliente tiene ${notas.length} ${plural(notas.length, 'nota pendiente', 'notas pendientes')} por ${usd(total)}</b> · ${esc(diasTxt(peor.dias))}${peor.dias < 0 ? ' (afecta su crédito)' : ''}.
       Pídele que cancele para hacer su nuevo pedido. <button type="button" class="btn btn-sm" data-cob-cid="${esc(clientId)}">Ver sus notas</button></div>`;
   }
   document.addEventListener('click', (e) => {
@@ -89,6 +125,8 @@
     lines.push('', `*Total a pagar: $ ${nf.format(total)}${rate ? ` · Bs ${nf.format(total * rate)} (tasa ${nf.format(rate)})` : ''}*`);
     const acc = (S.config.payAccounts || []).filter((a) => a.bank);
     if (acc.length) { lines.push('', 'Datos para pagar:'); acc.forEach((a) => lines.push(`• ${a.bank}${a.kind === 'pago_movil' ? ' (pago móvil)' : a.kind === 'transferencia' ? ' (transferencia)' : ''} · ${a.number || ''}${a.holder ? ' · ' + a.holder : ''}${a.rif ? ' · ' + a.rif : ''}`)); }
+    const k = credOf(client.id);
+    if (k && k.limite > 0 && k.bajaPct > 0) lines.push('', `⚠ Con ${k.atrasoMax} días de atraso su límite de crédito de $ ${nf.format(k.limite)} puede bajar a $ ${nf.format(k.sugerido)}. Pague hoy y mantenga su crédito.`);
     lines.push('', 'Al pagar, envíenos el comprobante por aquí. ¡Gracias por mantener su crédito al día! 🙌');
     return lines.join('\n');
   }
@@ -154,11 +192,12 @@
     const clientBlock = (list) => {
       const byC = new Map(); list.forEach((n) => (byC.get(n.clientId) || byC.set(n.clientId, []).get(n.clientId)).push(n));
       return [...byC.entries()].map(([cid, ns]) => { const c = P.clientById(cid) || { id: cid, name: ns[0].clientName }; return `<div class="card card-pad" style="margin-bottom:8px">
-        <div class="row wrap" style="gap:8px;align-items:center"><b class="grow">${esc(c.name)} · ${usd(ns.reduce((a, n) => a + n.resta, 0))}</b>
+        <div class="row wrap" style="gap:8px;align-items:center"><b class="grow">${(credOf(cid) && DOT[credOf(cid).semaforo]) || ''} ${esc(c.name)} · ${usd(ns.reduce((a, n) => a + n.resta, 0))}</b>
           <button class="btn btn-sm btn-primary" data-wa="${esc(cid)}">📲 WhatsApp</button><button class="btn btn-sm" data-seg="${esc(cid)}">📋 Seguimiento</button><button class="btn btn-sm" data-pay="${esc(cid)}">💵 Pago</button></div>
         ${ns.map((n) => `<div class="row" style="gap:8px;align-items:center;margin-top:6px;cursor:pointer" data-nota="${esc(cid)}|${esc(n.key)}"><span class="grow">📄 <b>Nota ${esc(n.nota || '—')}</b> · ${usd(n.resta)} de ${usd(n.monto)} · <span class="${n.dias < 0 ? 'warn-txt' : n.dias <= 1 ? 'pay-rev' : 'muted'}">${esc(diasTxt(n.dias))}</span> (${esc(fmtDate(n.vence))})
           ${n.espera ? '<br><span class="pay-rev">💵 pago subido, esperando a cobranza</span>' : ''}${n.seg ? `<br><span class="muted">📋 ${esc(n.seg.texto)}${n.seg.comentario ? ' — ' + esc(n.seg.comentario) : ''}</span>` : ''}</span><span class="muted">›</span></div>`).join('')}
-        ${ns.some((n) => n.dias < 0) ? '<div class="warn-txt" style="font-size:13px;margin-top:6px">El atraso está afectando su límite de crédito: mientras más días, más baja.</div>' : ''}</div>`; }).join('');
+        ${(() => { const k = credOf(cid); if (k && k.limite > 0 && k.bajaPct > 0) return `<div class="warn-txt" style="font-size:13px;margin-top:6px">Su límite de crédito es ${usd(k.limite)}: con ${k.atrasoMax} días de atraso el sistema sugiere bajarlo a <b>${usd(k.sugerido)}</b> (−${k.bajaPct}%). Mientras más días, más baja.</div>`;
+          return ns.some((n) => n.dias < 0) ? '<div class="warn-txt" style="font-size:13px;margin-top:6px">El atraso está afectando su límite de crédito: mientras más días, más baja.</div>' : ''; })()}</div>`; }).join('');
     };
     box.innerHTML = `<div class="kpi-row" style="margin-top:10px"><div class="kpi"><small>Por cobrar</small><b>${usd(total)}</b><small>${new Set(notas.map((n) => n.clientId)).size} clientes · ${notas.length} notas</small></div>
         <div class="kpi"><small>Atrasado</small><b class="${atr.length ? 'warn-txt' : ''}">${usd(atr.reduce((a, n) => a + n.resta, 0))}</b><small>${new Set(atr.map((n) => n.clientId)).size} clientes</small></div>
@@ -193,5 +232,84 @@
       rows: notas.map((n) => [n.sellerName, n.clientName, n.nota, n.despacho, n.vence, n.dias, n.monto, n.resta, n.seg ? n.seg.texto + (n.seg.comentario ? ' — ' + n.seg.comentario : '') : '']) })]);
   }
 
-  global.Cobranza = { load, refresh, hintFor, renderSeller, officeSheet, waText, phoneOf, diasTxt, SEG };
+  /* ---------------- Oficina: crédito de clientes (lo ajusta cobranza) ---------------- */
+  const CMAP = 'pv_credmap';
+  /** Guarda qué clientes van de contado para marcarlos en la hoja de carga. */
+  async function warmOffice(force) {
+    const c = lsGet(CMAP); if (!force && c && Date.now() - c.at < 15 * 60000) return;
+    if (!navigator.onLine) return;
+    const r = await global.Sync.pagosCall({ action: 'creditos' }); if (!r.ok) return;
+    const map = {}; r.data.clientes.forEach((k) => { map[k.clientId] = k.modo; });
+    lsSet(CMAP, { at: Date.now(), map });
+  }
+  /** 'contado' | 'nuevo' | '' para la hoja de carga (oficina). */
+  function contadoOf(clientId) {
+    const c = lsGet(CMAP), m = c && c.map && c.map[clientId];
+    if (m) return m === 'credito' ? '' : m;
+    // Cliente creado después de la última consulta: si es nuevo según Ajustes, va de contado
+    const P = PV(), cl = P.clientById(clientId), R = (P.S.config && P.S.config.creditRules) || {}, nd = R.nuevosDesde || '2026-10-27', nu = R.nuevas === undefined || R.nuevas === '' ? 3 : +R.nuevas;
+    return cl && nu > 0 && (cl.source === 'campo' || cl.source === 'oficina') && String(cl.createdAt || '').slice(0, 10) >= nd ? 'nuevo' : '';
+  }
+
+  async function creditSheet() {
+    const P = PV(), { esc, usd, openSheet, toast, S } = P;
+    const st = { q: '', sem: '', seller: '' };
+    const sh = openSheet(`<div class="row"><h2 class="grow">🚦 Crédito de clientes</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <p class="muted">El sistema sugiere; <b>cobranza decide</b>. El límite sugerido baja <span id="crPct">…</span>% por cada día de atraso y se recupera al pagar.</p>
+      <div class="row wrap" style="gap:8px;align-items:flex-end"><label class="field grow"><span>Buscar cliente</span><input id="crQ" class="input" autocomplete="off"></label>
+        <label class="field"><span>Vendedor</span><select id="crS" class="select"><option value="">Todos</option>${S.sellers.filter((s) => s.active !== false).map((s) => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('')}</select></label>
+        <label class="field"><span>Semáforo</span><select id="crF" class="select"><option value="">Todos</option><option value="rojo">🔴 Atraso grave</option><option value="amarillo">🟡 Con atraso</option><option value="verde">🟢 Al día</option><option value="nuevo">🆕 Nuevos</option><option value="contado">Contado</option><option value="sug">Con sugerencia de bajar</option></select></label>
+        <button class="btn" id="crX">⇩ Excel</button></div><div id="crOut" style="margin-top:10px"><p class="muted">Cargando…</p></div>`, { wide: true });
+    const el = sh.el, out = el.querySelector('#crOut');
+    const r = await global.Sync.pagosCall({ action: 'creditos' });
+    if (!r.ok) { out.innerHTML = `<div class="hint warn">${esc(r.error || 'No se pudo consultar')}</div>`; return; }
+    el.querySelector('#crPct').textContent = String(r.data.reglas.penal).replace('.', ',');
+    let list = r.data.clientes.slice().sort((a, b) => b.atrasoMax - a.atrasoMax || b.deuda - a.deuda || a.clientName.localeCompare(b.clientName, 'es'));
+    const map = {}; list.forEach((k) => { map[k.clientId] = k.modo; }); lsSet(CMAP, { at: Date.now(), map });
+    const sname = (k) => ((P.sellerById(k.sellerId) || {}).name || k.sellerName || '—');
+    const filt = () => list.filter((k) => (!st.q || P.norm(k.clientName).includes(P.norm(st.q))) && (!st.seller || k.sellerId === st.seller)
+      && (!st.sem || (st.sem === 'contado' ? k.modo === 'contado' : st.sem === 'sug' ? k.limite > 0 && k.bajaPct > 0 : k.semaforo === st.sem)));
+    const draw = () => {
+      const l = filt();
+      out.innerHTML = `<p class="muted">${l.length} clientes</p><div style="overflow:auto"><table class="inv"><thead><tr><th></th><th>Cliente</th><th>Vendedor</th><th>Condición</th><th class="n">Límite</th><th class="n">Debe</th><th class="n">Vencido</th><th class="n">Atraso</th><th>Récord</th><th class="n">Sugerido</th><th></th></tr></thead><tbody>
+        ${l.slice(0, 400).map((k) => `<tr><td>${DOT[k.semaforo] || ''}</td><td><b>${esc(k.clientName)}</b>${k.nota ? `<br><small class="muted">${esc(k.nota)}</small>` : ''}</td><td>${esc(sname(k))}</td>
+          <td>${k.modo === 'contado' ? '<b class="warn-txt">CONTADO</b>' : k.modo === 'nuevo' ? `Nuevo ${k.nuevo.n}/${k.nuevo.need}` : 'Crédito'}${k.fijado !== 'auto' ? ' <small class="muted">(cobranza)</small>' : ''}</td>
+          <td class="n">${k.limite ? usd(k.limite) + (k.base === 'promedio' ? '<br><small class="muted">promedio</small>' : '') : '—'}</td><td class="n">${k.deuda ? usd(k.deuda) : ''}</td><td class="n">${k.vencido ? usd(k.vencido) : ''}</td>
+          <td class="n">${k.atrasoMax ? k.atrasoMax + ' d' : ''}</td><td>${k.pagadas ? `${k.aTiempo}/${k.pagadas} a tiempo${k.promAtraso ? ` · prom. ${String(k.promAtraso).replace('.', ',')} d` : ''}` : ''}</td>
+          <td class="n">${k.limite > 0 && k.bajaPct > 0 ? `<b class="warn-txt">${usd(k.sugerido)}</b><br><small>−${k.bajaPct}%</small>` : ''}</td><td><button class="btn btn-sm" data-ed="${esc(k.clientId)}">Ajustar</button></td></tr>`).join('')}</tbody></table></div>
+        ${l.length > 400 ? '<p class="muted">Se muestran 400: usa el buscador.</p>' : ''}`;
+    };
+    el.querySelector('#crQ').oninput = (e) => { st.q = e.target.value; draw(); };
+    el.querySelector('#crS').onchange = (e) => { st.seller = e.target.value; draw(); };
+    el.querySelector('#crF').onchange = (e) => { st.sem = e.target.value; draw(); };
+    el.querySelector('#crX').onclick = () => global.Exporta.save(`credito_clientes_${r.data.hoy}.xlsx`, [global.Exporta.table({ name: 'Crédito', title: 'CRÉDITO DE CLIENTES', subtitle: 'Al ' + r.data.hoy,
+      cols: [{ h: 'SEMÁFORO', w: 12 }, { h: 'CLIENTE', w: 32 }, { h: 'VENDEDOR', w: 16 }, { h: 'CONDICIÓN', w: 12 }, { h: 'LÍMITE', k: 'money' }, { h: 'DEBE', k: 'money', total: true }, { h: 'VENCIDO', k: 'money', total: true }, { h: 'DÍAS ATRASO', k: 'int' }, { h: 'A TIEMPO', w: 10 }, { h: 'SUGERIDO', k: 'money' }, { h: 'NOTA', w: 30 }],
+      rows: filt().map((k) => [SEM[k.semaforo] || '', k.clientName, sname(k), k.modo === 'contado' ? 'Contado' : k.modo === 'nuevo' ? 'Nuevo' : 'Crédito', k.limite || '', k.deuda, k.vencido, k.atrasoMax, k.pagadas ? `${k.aTiempo}/${k.pagadas}` : '', k.limite > 0 && k.bajaPct > 0 ? k.sugerido : '', k.nota || '']) })]);
+    out.onclick = (e) => { const b = e.target.closest('[data-ed]'); if (b) editForm(list.find((k) => k.clientId === b.dataset.ed)); };
+    function editForm(k) {
+      const f = openSheet(`<div class="row"><h2 class="grow">🚦 ${esc(k.clientName)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+        <p>${DOT[k.semaforo] || ''} ${esc(SEM[k.semaforo] || '')}${k.motivo ? ' · ' + esc(k.motivo) : ''}</p>
+        <p class="muted">Debe ${usd(k.deuda)}${k.vencido ? ' · vencido ' + usd(k.vencido) : ''}${k.pagadas ? ` · pagó ${k.aTiempo} de ${k.pagadas} notas a tiempo` : ''} · ${k.compras} compras recientes</p>
+        <label class="field"><span>Condición</span><select id="ceM" class="select"><option value="auto">Según el sistema${k.nuevo ? ' (nuevo: contado)' : ''}</option><option value="credito">Crédito</option><option value="contado">Contado</option></select></label>
+        <label class="field"><span>Límite de crédito ($) <small class="muted">0 = sin límite fijado</small></span><input id="ceL" class="input" inputmode="decimal" value="${k.base === 'cobranza' ? esc(k.limite) : ''}" placeholder="${k.base === 'promedio' ? 'promedio: ' + esc(k.limite) : ''}"></label>
+        ${k.limite > 0 && k.bajaPct > 0 ? `<button class="btn btn-sm" id="ceSug">Usar el sugerido: ${usd(k.sugerido)}</button>` : ''}
+        <label class="field"><span>Nota (la ve el vendedor)</span><input id="ceN" class="input" maxlength="300" value="${esc(k.nota || '')}"></label>
+        <div class="actions"><button class="btn btn-primary" id="ceOk">Guardar</button></div>`);
+      const q = (id) => f.el.querySelector(id);
+      q('#ceM').value = k.fijado || 'auto';
+      if (q('#ceSug')) q('#ceSug').onclick = () => { q('#ceL').value = k.sugerido; };
+      q('#ceOk').onclick = async () => {
+        const lim = Number(String(q('#ceL').value).replace(/\./g, '').replace(',', '.')) || 0;
+        const x = await global.Sync.pagosCall({ action: 'credito', clientId: k.clientId, modo: q('#ceM').value, limite: lim, nota: q('#ceN').value, by: (S.config && S.config.adminName) || 'Cobranza' });
+        if (!x.ok) { toast(x.error || 'No se pudo guardar', 'err'); return; }
+        P.logEvent('credito', `Crédito de ${k.clientName}: ${q('#ceM').value === 'contado' ? 'contado' : q('#ceM').value === 'credito' ? 'crédito' : 'según el sistema'}${lim ? ' · límite $' + lim : ''}`);
+        f.close(); toast('Crédito guardado: le llega al vendedor', 'ok');
+        const r2 = await global.Sync.pagosCall({ action: 'creditos' }); if (r2.ok) { list = r2.data.clientes.slice().sort((a, b) => b.atrasoMax - a.atrasoMax || b.deuda - a.deuda || a.clientName.localeCompare(b.clientName, 'es')); const m = {}; list.forEach((z) => { m[z.clientId] = z.modo; }); lsSet(CMAP, { at: Date.now(), map: m }); }
+        draw();
+      };
+    }
+    draw();
+  }
+
+  global.Cobranza = { load, refresh, hintFor, credOf, barNote, renderSeller, officeSheet, creditSheet, warmOffice, contadoOf, waText, phoneOf, diasTxt, SEG };
 })(window);

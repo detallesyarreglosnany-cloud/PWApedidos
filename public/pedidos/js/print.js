@@ -154,6 +154,7 @@
       </div>
       <table class="load ${m.cols.length > 14 ? 'many' : ''}"><thead>
         <tr class="ini"><th style="text-align:right">VENDEDOR →</th>${m.cols.map((c) => `<th>${esc(Loads.initials(c.order.sellerName))}</th>`).join('')}<th></th>${extra.map(() => '<th></th>').join('')}</tr>
+        ${(() => { const co = (c) => (global.Cobranza ? global.Cobranza.contadoOf(c.order.clientId) : ''); return m.cols.some(co) ? `<tr class="ini fac"><th style="text-align:right">CONTADO →</th>${m.cols.map((c) => `<th>${co(c) ? 'SÍ' : ''}</th>`).join('')}<th></th>${extra.map(() => '<th></th>').join('')}</tr>` : ''; })()}
         ${m.cols.some((c) => c.order.factura) ? `<tr class="ini fac"><th style="text-align:right">FACTURA →</th>${m.cols.map((c) => `<th>${c.order.factura ? 'SÍ' : ''}</th>`).join('')}<th></th>${extra.map(() => '<th></th>').join('')}</tr>` : ''}
         <tr><th style="text-align:left">PRODUCTO</th>
         ${m.cols.map((c, i) => `<th class="cl"><div>${i + 1}. ${esc(c.client)}</div></th>`).join('')}<th class="cl tcol"><div>TOTAL</div></th>
@@ -161,8 +162,8 @@
         <tbody>${rows}</tbody><tfoot>${foot}</tfoot></table>
       <p class="muted foot">CJ = cajas · UN = unidades sueltas. Clientes: ${m.cols.map((c, i) => `${i + 1}. ${esc(c.client)} (${esc(Loads.initials(c.order.sellerName))})`).join(' · ')}</p>
       <div class="sign">${Loads.isRetiro(load) ? '<div>Entregó (oficina)</div><div>Almacén</div><div>Vendedor</div><div>Control / Oficina</div>' : '<div>Despachador</div><div>Almacén</div><div>Vendedor</div><div>Control / Oficina</div>'}</div>
-      ${(() => { const obs = m.cols.map((c, i) => ({ i: i + 1, o: c.order })).filter((x) => x.o.factura || x.o.notes);
-        return obs.length ? `<div class="obs"><b>OBSERVACIONES POR CLIENTE</b>${obs.map((x) => `<div><b>${x.i}. ${esc(x.o.clientName)}</b> (${esc(Loads.initials(x.o.sellerName))})${x.o.factura ? ' · <b class="facm">EMITIR FACTURA</b>' : ''}${x.o.notes ? ' · ' + esc(x.o.notes) : ''}</div>`).join('')}</div>` : ''; })()}
+      ${(() => { const cto = (o) => (global.Cobranza ? global.Cobranza.contadoOf(o.clientId) : ''); const obs = m.cols.map((c, i) => ({ i: i + 1, o: c.order })).filter((x) => x.o.factura || x.o.notes || cto(x.o));
+        return obs.length ? `<div class="obs"><b>OBSERVACIONES POR CLIENTE</b>${obs.map((x) => `<div><b>${x.i}. ${esc(x.o.clientName)}</b> (${esc(Loads.initials(x.o.sellerName))})${cto(x.o) ? ` · <b class="facm">COBRAR DE CONTADO${cto(x.o) === 'nuevo' ? ' (CLIENTE NUEVO)' : ''}</b>` : ''}${x.o.factura ? ' · <b class="facm">EMITIR FACTURA</b>' : ''}${x.o.notes ? ' · ' + esc(x.o.notes) : ''}</div>`).join('')}</div>` : ''; })()}
       </section>`;
   }
 

@@ -49,7 +49,10 @@ export async function POST(req: NextRequest) {
     // Pagos de clientes (cobranza): también van en la última página
     let pagos: unknown[] = [];
     try { pagos = (await db.distPago.findMany({ orderBy: { id: 'asc' } })).map((r) => JSON.parse(r.data)); } catch (e) { console.warn('[backup] pagos', e); }
-    return NextResponse.json({ docs: out, next: null, counters: Object.fromEntries(counters.map((c) => [c.name, c.value])), vacmovs, pagos });
+    // Crédito fijado por cobranza y seguimientos de cobro
+    let cobro: { name: string; value: string }[] = [];
+    try { cobro = await db.$queryRaw<{ name: string; value: string }[]>`SELECT "name", "value" FROM "DistSetting" WHERE "name" LIKE 'cred:%' OR "name" LIKE 'seg:%' ORDER BY "name"`; } catch (e) { console.warn('[backup] cobro', e); }
+    return NextResponse.json({ docs: out, next: null, counters: Object.fromEntries(counters.map((c) => [c.name, c.value])), vacmovs, pagos, cobro });
   } catch (error) {
     console.error('[pedidos/backup]', error);
     return NextResponse.json({ error: 'No se pudo leer el respaldo' }, { status: 500 });

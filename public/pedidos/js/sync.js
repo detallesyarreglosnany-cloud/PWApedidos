@@ -518,7 +518,7 @@
       r.data.docs.forEach(({ kind, doc }) => { (bundle[kind] = bundle[kind] || []).push(doc); });
       n += r.data.docs.length;
       if (onProgress) onProgress(n);
-      if (!r.data.next) { bundle.counters = r.data.counters || {}; bundle.vacmovs = r.data.vacmovs || []; bundle.pagos = r.data.pagos || []; break; }
+      if (!r.data.next) { bundle.counters = r.data.counters || {}; bundle.vacmovs = r.data.vacmovs || []; bundle.pagos = r.data.pagos || []; bundle.cobro = r.data.cobro || []; break; }
       after = r.data.next;
     }
     // Fotos (se guardan aparte en el servidor): vuelven dentro de su producto, así
@@ -591,6 +591,11 @@
     if (isAdmin && Array.isArray(bundle.pagos) && bundle.pagos.length) {
       const rp = await adminCall('pagos', { action: 'import', pagos: bundle.pagos });
       if (!rp.ok) console.warn('[import] pagos', rp.error);
+    }
+    // Crédito y seguimientos de cobro: se reponen los que falten en el servidor
+    if (isAdmin && Array.isArray(bundle.cobro) && bundle.cobro.length) {
+      const rc = await adminCall('pagos', { action: 'importCobro', rows: bundle.cobro });
+      if (!rc.ok) console.warn('[import] cobro', rc.error);
     }
     // Kardex de vacíos del respaldo: se repone en el servidor (necesita internet)
     if (isAdmin && Array.isArray(bundle.vacmovs) && bundle.vacmovs.length) {

@@ -456,7 +456,7 @@
         <label class="field"><span>Vendedor</span><select id="pfSel" class="select"><option value="">Todos</option>${S.sellers.filter((s) => s.active !== false).map((s) => `<option value="${esc(s.id)}" ${s.id === st.seller ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>
         <label class="field"><span>Estado</span><select id="pfSt" class="select">${[['', 'Todos'], ['espera', 'En espera de cobranza'], ['aprobado', 'Aprobados'], ['rechazado', 'Rechazados'], ['anulado', 'Anulados']].map(([k, l]) => `<option value="${k}" ${k === st.status ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         <button class="btn btn-primary" id="pfGo">Consultar</button></div>
-        <div class="row wrap" style="gap:8px;margin-top:10px"><button class="btn" id="pfAnt">🗂 Pago anterior (FileMaker)</button><button class="btn" id="pfImp">⇩ Importar pagos de FileMaker (Excel/CSV)</button><button class="btn" id="pfCart">📅 Cuentas por cobrar</button></div></div>
+        <div class="row wrap" style="gap:8px;margin-top:10px"><button class="btn" id="pfAnt">🗂 Pago anterior (FileMaker)</button><button class="btn" id="pfImp">⇩ Importar pagos de FileMaker (Excel/CSV)</button><button class="btn" id="pfCart">📅 Cuentas por cobrar</button><button class="btn" id="pfCred">🚦 Crédito de clientes</button></div></div>
       <div id="pfOut" style="margin-top:12px"><p class="muted">Cargando…</p></div>`;
     const q = (id) => root.querySelector(id);
     const load = async () => {
@@ -495,6 +495,7 @@
     q('#pfAnt').onclick = () => anteriorForm({ sellerId: '', office: true, onSaved: load });
     q('#pfImp').onclick = () => importSheet(load);
     q('#pfCart').onclick = () => { if (global.Cobranza) global.Cobranza.officeSheet(); };
+    q('#pfCred').onclick = () => { if (global.Cobranza) global.Cobranza.creditSheet(); };
     load();
   }
 
@@ -756,7 +757,7 @@
   }
 
   /* ======================= Plazos de crédito (cuentas por cobrar) ======================= */
-  const DEF_RULES = { def: 15, rules: [{ category: 'REFRESCOS', days: 8 }], desde: '2026-10-15' };
+  const DEF_RULES = { def: 15, rules: [{ category: 'REFRESCOS', days: 8 }], desde: '2026-10-15', penal: 2, nuevas: 3, nuevosDesde: '2026-10-27' };
   function renderRules(box, draft) {
     const P = PV(), { S, esc, toast } = P;
     const cur = draft || (S.config.creditRules && typeof S.config.creditRules === 'object' ? S.config.creditRules : DEF_RULES);
@@ -771,15 +772,23 @@
         <label class="field"><span>Categoría</span><input class="input" list="crCats" data-k="category" value="${esc(r.category)}"></label>
         <label class="field"><span>Días</span><input class="input" inputmode="numeric" data-k="days" value="${esc(r.days)}" style="max-width:100px"></label>
         <button class="btn btn-sm btn-danger" data-crm="${i}">✕</button></div>`).join('')}
-      <div class="row" style="gap:8px;margin-top:10px"><button class="btn btn-sm" id="crAdd">＋ Plazo por categoría</button><button class="btn btn-sm btn-primary" id="crSave">Guardar plazos</button></div>`;
-    const read = () => ({ def: Math.round(Number(box.querySelector('#crDef').value)) || 0, desde: box.querySelector('#crDesde').value || DEF_RULES.desde, rules: [...box.querySelectorAll('[data-cr]')].map((row) => ({ category: row.querySelector('[data-k="category"]').value.trim(), days: Math.round(Number(row.querySelector('[data-k="days"]').value)) || 0 })) });
+      <h3 style="margin-top:16px">🚦 Crédito</h3>
+      <div class="row wrap" style="gap:8px"><label class="field"><span>Bajar el límite sugerido (% por día de atraso)</span><input id="crPen" class="input" inputmode="decimal" value="${esc(cur.penal ?? DEF_RULES.penal)}" style="max-width:120px"></label>
+        <label class="field"><span>Compras de contado de un cliente nuevo</span><input id="crNue" class="input" inputmode="numeric" value="${esc(cur.nuevas ?? DEF_RULES.nuevas)}" style="max-width:120px"></label>
+        <label class="field"><span>Cuentan como nuevos los creados desde</span><input id="crNd" type="date" class="input" value="${esc(cur.nuevosDesde || DEF_RULES.nuevosDesde)}"></label></div>
+      <p class="muted" style="font-size:13px">Cliente nuevo = creado en la app (por el vendedor o la oficina) desde esa fecha. Paga de contado sus primeras compras; luego el límite sugerido es el promedio de esas compras. Cobranza puede cambiarlo en Pagos → 🚦 Crédito de clientes.</p>
+      <div class="row" style="gap:8px;margin-top:10px"><button class="btn btn-sm" id="crAdd">＋ Plazo por categoría</button><button class="btn btn-sm btn-primary" id="crSave">Guardar plazos y crédito</button></div>`;
+    const read = () => ({ def: Math.round(Number(box.querySelector('#crDef').value)) || 0, desde: box.querySelector('#crDesde').value || DEF_RULES.desde,
+      penal: Number(String(box.querySelector('#crPen').value).replace(',', '.')), nuevas: Math.round(Number(box.querySelector('#crNue').value)), nuevosDesde: box.querySelector('#crNd').value || DEF_RULES.nuevosDesde, rules: [...box.querySelectorAll('[data-cr]')].map((row) => ({ category: row.querySelector('[data-k="category"]').value.trim(), days: Math.round(Number(row.querySelector('[data-k="days"]').value)) || 0 })) });
     box.querySelector('#crAdd').onclick = (e) => { e.stopPropagation(); const r = read(); r.rules.push({ category: '', days: 8 }); renderRules(box, r); };
     box.querySelector('#crSave').onclick = async (e) => {
       e.stopPropagation();
       const r = read();
       if (!(r.def > 0 && r.def <= 120)) { toast('El plazo general debe ser de 1 a 120 días', 'err'); return; }
+      if (!(r.penal >= 0 && r.penal <= 50)) { toast('El % por día de atraso debe ser de 0 a 50', 'err'); return; }
+      if (!(r.nuevas >= 0 && r.nuevas <= 10)) { toast('Las compras de contado deben ser de 0 a 10', 'err'); return; }
       const bad = r.rules.find((x) => x.category && !(x.days > 0 && x.days <= 120)); if (bad) { toast(`Plazo inválido para ${bad.category}`, 'err'); return; }
-      await P.saveDocs('config', { ...S.config, creditRules: { def: r.def, desde: r.desde, rules: r.rules.filter((x) => x.category) } });
+      await P.saveDocs('config', { ...S.config, creditRules: { def: r.def, desde: r.desde, penal: r.penal, nuevas: r.nuevas, nuevosDesde: r.nuevosDesde, rules: r.rules.filter((x) => x.category) } });
       try { Object.keys(localStorage).filter((k) => k.startsWith('pv_cart:')).forEach((k) => localStorage.removeItem(k)); } catch (err) { /* noop */ }
       toast('Plazos guardados', 'ok'); P.runSync(false); renderRules(box);
     };
