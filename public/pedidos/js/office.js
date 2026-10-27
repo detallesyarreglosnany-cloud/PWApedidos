@@ -65,6 +65,7 @@
     autoPack();
     applyReturnableTemplate();
     upperClients();
+    if (window.Cobranza && S.settings && S.settings.adminKey) Cobranza.warmOffice();
     const app = document.getElementById('app');
     const waiting = S.loads.filter((l) => !l.deleted && !Loads.isClosed(l)).length;
     const toVerify = S.clients.filter((c) => !c.deleted && !Clientes.isVerified(c)).length;
