@@ -604,3 +604,58 @@ body.ro-ger #dEdit, body.ro-ger #dMerge, body.ro-ger #dDel, body.ro-ger [data-mo
 body.ro-ger #qReopen, body.ro-ger #qClose, body.ro-ger #qRetAdd, body.ro-ger #qPrevAdd, body.ro-ger #qAllNext, body.ro-ger #qAllStore, body.ro-ger #cutOk,
 body.ro-ger #setupImport, body.ro-ger #kdOk, body.ro-ger #pvOk, body.ro-ger #prOk, body.ro-ger #kxRetry, body.ro-ger [data-real], body.ro-ger [data-anu], body.ro-ger #cMerge, body.ro-ger [data-cmerge] { display: none !important; }
 body.ro-ger .valery-in, body.ro-ger #dStatus, body.ro-ger #dDisp, body.ro-ger #dRoute, body.ro-ger #dLabel, body.ro-ger #dDate { pointer-events: none; opacity: .75; }
+
+/* ===================== Vitrina (catálogo para mostrar en la tablet) ===================== */
+.plist.vt-mode { display: block; }
+.vt-chip { background: linear-gradient(135deg, #ffb300, #ff6d00); color: #fff; border-color: transparent; font-weight: 800; }
+.vt-chip.active { outline: 3px solid #fff; outline-offset: -3px; }
+.vt-nav { display: flex; gap: 8px; overflow-x: auto; padding: 8px 2px 10px; scrollbar-width: none; }
+.vt-go { --h: 205; flex: 0 0 auto; border: 0; border-radius: 999px; padding: 8px 14px; font: 700 14px var(--display); color: #fff; background: hsl(var(--h) 70% 38%); white-space: nowrap; }
+.vt-full { background: var(--bg-2); border: 1px solid var(--line); }
+.vt { --h: 205; margin: 6px 0 26px; scroll-margin-top: 200px; }
+.vt-banner { position: relative; display: flex; align-items: center; gap: 14px; min-height: 150px; padding: 18px 20px; border-radius: 22px; overflow: hidden; color: #fff;
+  background: radial-gradient(circle at 85% 30%, hsl(var(--h) 90% 62% / .55), transparent 55%), linear-gradient(135deg, hsl(var(--h) 75% 42%), hsl(var(--h) 80% 20%));
+  box-shadow: 0 10px 30px hsl(var(--h) 70% 12% / .55); }
+.vt-txt { position: relative; z-index: 1; flex: 1 1 60%; min-width: 0; }
+.vt-ico { font-size: 34px; line-height: 1; }
+.vt-banner h2 { margin: 6px 0 4px; font: 800 clamp(24px, 4.2vw, 42px)/1.05 var(--display); text-transform: uppercase; letter-spacing: .01em; text-shadow: 0 2px 8px rgba(0,0,0,.35); }
+.vt-banner p { margin: 0; font-size: clamp(14px, 1.9vw, 19px); opacity: .95; max-width: 46ch; }
+.vt-18 { display: inline-block; margin-top: 8px; padding: 3px 10px; border-radius: 999px; background: rgba(0,0,0,.35); font-size: 12px; font-weight: 700; }
+.vt-collage { position: relative; flex: 0 1 38%; display: flex; justify-content: flex-end; align-items: flex-end; min-height: 120px; }
+.vt-collage img { width: clamp(70px, 12vw, 140px); aspect-ratio: 1; object-fit: contain; margin-left: -18px; padding: 8px; background: radial-gradient(#fff, #eef0f3); border-radius: 18px;
+  box-shadow: 0 8px 18px rgba(0,0,0,.35); transform: rotate(-4deg); mix-blend-mode: normal; }
+.vt-collage img:nth-child(2) { transform: rotate(3deg) translateY(-12px); z-index: 1; }
+.vt-collage img:nth-child(3) { transform: rotate(7deg); }
+.vt-row { display: flex; gap: 12px; overflow-x: auto; padding: 14px 2px 8px; scroll-snap-type: x proximity; }
+.vt-row > .pitem { flex: 0 0 clamp(170px, 23vw, 250px); }
+.vt-row > * { scroll-snap-align: start; }
+.vt-row .pitem { background: linear-gradient(180deg, hsl(var(--h) 45% 22%), hsl(var(--h) 50% 14%)); border-color: hsl(var(--h) 60% 38%); }
+.vt-sep { flex: 0 0 auto; align-self: center; writing-mode: vertical-rl; transform: rotate(180deg); padding: 10px 6px; border-radius: 999px; background: hsl(var(--h) 70% 40%); color: #fff; font: 800 15px var(--display); }
+.vt-sello { position: absolute; left: 6px; bottom: 6px; z-index: 1; padding: 3px 8px; border-radius: 999px; background: rgba(20,20,20,.78); color: #fff; font: 700 11px var(--display); font-style: normal; }
+.vt-mixes { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-top: 6px; }
+.vt-mix { border-radius: 18px; padding: 14px; background: linear-gradient(160deg, hsl(var(--h) 55% 24%), hsl(var(--h) 60% 13%)); border: 1px solid hsl(var(--h) 60% 35%); display: flex; flex-direction: column; gap: 10px; }
+.vt-mix-head { display: flex; gap: 10px; align-items: center; }
+.vt-mix h3 { margin: 0; font: 800 22px var(--display); text-transform: uppercase; }
+.vt-mix p { margin: 0; }
+.vt-mix-items { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.vt-ing { display: flex; flex-direction: column; align-items: center; width: 92px; text-align: center; }
+.vt-ing img, .vt-ing span { width: 72px; height: 72px; object-fit: contain; background: radial-gradient(#fff, #eef0f3); border-radius: 14px; padding: 6px; display: grid; place-items: center; font-size: 34px; }
+.vt-ing small { margin-top: 4px; line-height: 1.2; }
+.vt-plus { font: 800 24px var(--display); opacity: .7; }
+.vt-pasos { font-size: 14px; opacity: .9; }
+@media (max-width: 560px) { .vt-banner { flex-direction: column; align-items: flex-start; } .vt-collage { align-self: flex-end; } .vt-row > .pitem { flex-basis: 46%; } }
+
+/* Promoción y marketing (oficina / gerencia) */
+.mk-list { display: flex; flex-direction: column; gap: 10px; }
+.mk-card { --h: 205; display: flex; gap: 12px; align-items: center; padding: 12px; border-radius: 14px; background: var(--bg-2); border: 1px solid var(--line); border-left: 8px solid hsl(var(--h) 70% 45%); flex-wrap: wrap; }
+.mk-card.off { opacity: .55; }
+.mk-sw { font-size: 30px; width: 48px; text-align: center; }
+.mk-pal { display: flex; gap: 8px; flex-wrap: wrap; }
+.mk-dot { --h: 0; width: 34px; height: 34px; border-radius: 50%; border: 3px solid transparent; background: linear-gradient(135deg, hsl(var(--h) 75% 45%), hsl(var(--h) 80% 22%)); }
+.mk-dot.on { border-color: #fff; box-shadow: 0 0 0 2px hsl(var(--h) 75% 45%); }
+.mk-cats { display: flex; gap: 6px; flex-wrap: wrap; }
+.mk-res { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.mk-prev { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; max-height: 320px; overflow: auto; }
+.mk-pi { display: flex; gap: 6px; align-items: center; padding: 6px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); }
+.mk-pi img, .mk-pi > span { width: 40px; height: 40px; object-fit: contain; background: #fff; border-radius: 8px; display: grid; place-items: center; flex: 0 0 auto; }
+.mk-pi small { flex: 1; min-width: 0; line-height: 1.2; }

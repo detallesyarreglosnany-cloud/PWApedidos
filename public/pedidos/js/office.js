@@ -18,7 +18,7 @@
     copyText, saveFile, pickFile, saveDocs, saveOrder, productById, sellerById, orderById, clientById, rubros } = PV;
   const U = () => S.ui.office;
 
-  const TABS = [['cargas', '🚚 Cargas'], ['pedidos', '🧾 Pedidos'], ['archivo', '🗄 Archivo'], ['envases', '♻ Envases'], ['reportes', '📈 Reportes'], ['pagos', '💵 Pagos'], ['inventario', '📦 Inventario'],
+  const TABS = [['cargas', '🚚 Cargas'], ['pedidos', '🧾 Pedidos'], ['archivo', '🗄 Archivo'], ['envases', '♻ Envases'], ['reportes', '📈 Reportes'], ['pagos', '💵 Pagos'], ['inventario', '📦 Inventario'], ['marketing', '📣 Marketing'],
     ['clientes', '👥 Clientes'], ['vendedores', '🧑‍💼 Vendedores'], ['usuarios', '🔐 Usuarios y roles'], ['historial', '🕘 Historial'], ['ajustes', '⚙ Ajustes']];
   const log = (type, text, extra) => PV.logEvent(type, text, extra);
 
@@ -58,7 +58,7 @@
   }
 
   // Gerencia ve las mismas pantallas de la oficina, en consulta (salvo pedidos, clientes e inventario)
-  const GER_TABS = ['pedidos', 'cargas', 'archivo', 'envases', 'pagos', 'inventario', 'reportes', 'clientes', 'historial'];
+  const GER_TABS = ['pedidos', 'cargas', 'archivo', 'envases', 'pagos', 'inventario', 'marketing', 'reportes', 'clientes', 'historial'];
   const roGer = () => document.body.classList.contains('ro-ger'); // Gerencia: hojas y liquidaciones en consulta
   const baseHash = () => (location.hash.startsWith('#/gerencia') ? '#/gerencia' : '#/oficina');
   PV.renderOffice = function (tab, opts) {
@@ -91,7 +91,7 @@
     }
     const body = $('#officeBody');
     if (!ger && !S.products.length && tab !== 'ajustes') body.insertAdjacentHTML('beforebegin', setupBanner());
-    ({ cargas: renderLoads, pedidos: renderOrders, archivo: renderArchive, envases: renderEnvases, reportes: (root) => { upgradeLiquidations(root); Reportes.render(root, U().rep || (U().rep = {})); }, pagos: (root) => window.Pagos.renderOffice(root), usuarios: (root) => window.Roles.renderAdmin(root), inventario: renderInventory,
+    ({ cargas: renderLoads, pedidos: renderOrders, archivo: renderArchive, envases: renderEnvases, reportes: (root) => { upgradeLiquidations(root); Reportes.render(root, U().rep || (U().rep = {})); }, pagos: (root) => window.Pagos.renderOffice(root), usuarios: (root) => window.Roles.renderAdmin(root), inventario: renderInventory, marketing: (root) => window.Mkt.render(root),
       clientes: renderClients, vendedores: renderSellers, historial: renderHistory, ajustes: renderSettings })[tab](body);
     const sb = $('#setupImport');
     if (sb) sb.onclick = importStarter;

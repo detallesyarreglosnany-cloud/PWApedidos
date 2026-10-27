@@ -131,7 +131,7 @@
   const S = {
     products: [], sellers: [], orders: [], clients: [], loads: [],
     config: null, settings: {}, session: null,
-    ui: { q: '', cat: '', onlyInOrder: false, office: {} },
+    ui: { q: '', cat: '', onlyInOrder: false, office: {}, vitrina: (() => { try { return localStorage.getItem('pv_vitrina') === '1'; } catch (e) { return false; } })() },
   };
   const DEFAULT_SETTINGS = { csvSep: ';', csvDecimal: ',', syncUrl: '', syncKey: '', adminKey: '', supervisorKey: '' };
   const bc = ('BroadcastChannel' in window) ? new BroadcastChannel('pedidos') : null;
@@ -140,6 +140,7 @@
     const all = await Promise.all(['products', 'sellers', 'orders', 'clients', 'loads', 'config'].map((k) => DB.getAll(k)));
     [S.products, S.sellers, S.orders, S.clients, S.loads] = all.slice(0, 5).map((a) => a.filter((x) => !x.deleted));
     S.config = all[5].find((c) => c.id === 'main') || Seed.defaultConfig();
+    S.mkt = all[5].find((c) => c.id === 'mkt') || null; // vitrinas y mezclas (Promoción y marketing)
     idxVer++;
     await loadMeta();
   }
@@ -159,7 +160,7 @@
       got.forEach((d) => { if (!d.deleted) out.push(d); });
       S[k] = out;
     }
-    if (touched.config && touched.config.length) S.config = (await DB.get('config', 'main')) || S.config;
+    if (touched.config && touched.config.length) { S.config = (await DB.get('config', 'main')) || S.config; S.mkt = (await DB.get('config', 'mkt')) || S.mkt || null; }
     idxVer++;
     await loadMeta();
   }
@@ -199,7 +200,7 @@
   async function gerenciaBlocks(kind, docs) {
     if (!(window.Roles && Roles.isRole('gerencia')) || S.settings.adminKey) return '';
     if (!['orders', 'clients', 'products', 'config', 'events'].includes(kind)) return 'Gerencia: las hojas de carga, liquidaciones y ajustes son solo de consulta';
-    if (kind === 'config' && docs.some((d) => Object.keys(d).some((k) => k !== 'rubros' && k !== 'updatedAt' && k !== 'fv' && JSON.stringify(d[k]) !== JSON.stringify(S.config[k])))) return 'Gerencia: los ajustes los cambia la oficina';
+    if (kind === 'config' && docs.some((d) => d.id !== 'mkt' && Object.keys(d).some((k) => k !== 'rubros' && k !== 'updatedAt' && k !== 'fv' && JSON.stringify(d[k]) !== JSON.stringify(S.config[k])))) return 'Gerencia: los ajustes los cambia la oficina';
     if (kind === 'orders') {
       for (const d of docs) {
         const prev = await DB.get('orders', d.id); if (!prev) continue;
@@ -225,7 +226,7 @@
     const skipOf = (prev, d) => (kind === 'orders' && !isOffice() && !(prev && SELLER_ST.includes(prev.status) && SELLER_ST.includes(d.status)) ? DB.FV_GROUPS.orders : null);
     docs.forEach((d, i) => { DB.touch(d); if (byField) DB.stampFields(prevs[i], d, skipOf(prevs[i], d)); });
     await DB.putMany(kind, docs);
-    if (kind === 'config') { S.config = docs[docs.length - 1]; }
+    if (kind === 'config') { docs.forEach((d) => { if (d.id === 'mkt') S.mkt = d; else S.config = d; }); }
     else {
       const arr = S[kind];
       docs.forEach((d) => {
@@ -929,17 +930,21 @@
     };
   })();
 
-  // ⭐ Más vendidos: los productos que más pedidos llevaron en los últimos 30 días (con lo que hay en este equipo)
-  let topMemo = { k: '', set: new Set() };
-  function topSellers() {
-    const from = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10), k = S.orders.length + '|' + from;
-    if (topMemo.k === k) return topMemo.set;
+  // Popularidad: en cuántos pedidos de los últimos 30 días aparece cada producto (con lo que hay en este equipo)
+  let popMemo = { k: '', n: new Map(), top: new Set(), cat: new Map() };
+  function popularity() {
+    const from = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10), k = S.orders.length + '|' + S.products.length + '|' + from;
+    if (popMemo.k === k) return popMemo;
     const n = new Map();
     S.orders.forEach((o) => { if (o.deleted || String(o.routeDate || '') < from) return; Object.keys(o.lines || {}).forEach((pid) => n.set(pid, (n.get(pid) || 0) + 1)); });
+    // ⭐ Más vendidos: el 20 % de arriba (hasta 10) · 🏆 N°1 de cada categoría
     const top = n.size >= 5 ? [...n.entries()].filter((x) => x[1] >= 3).sort((a, b) => b[1] - a[1]).slice(0, Math.min(10, Math.ceil(n.size / 5))) : [];
-    topMemo = { k, set: new Set(top.map(([pid]) => pid)) };
-    return topMemo.set;
+    const cat = new Map();
+    n.forEach((c, pid) => { const p = productById(pid); if (!p || c < 3) return; const cur = cat.get(p.category); if (!cur || c > cur.c) cat.set(p.category, { pid, c }); });
+    popMemo = { k, n, top: new Set(top.map(([pid]) => pid)), cat: new Map([...cat].map(([c, x]) => [x.pid, c])) };
+    return popMemo;
   }
+  const topSellers = () => popularity().top;
 
   function productHTML(p, o) {
     const l = o && o.lines[p.id];
@@ -953,7 +958,7 @@
     return `
       <article class="pitem ${req ? 'has-qty' : ''}" data-pid="${esc(p.id)}" style="--grp:${grpHue(p.category + '|' + (p.subgroup || ''))}">
         <div class="pimg">${hasPhoto(p) ? `<img src="${esc(imgSrc(p))}" alt="" loading="lazy">` : `<span aria-hidden="true">${rubroIcon(p.category)}</span>`}
-          ${topSellers().has(p.id) ? '<em class="hot-badge">⭐ Más vendido</em>' : ''}
+          ${popularity().cat.has(p.id) && popularity().cat.size > 1 ? `<em class="hot-badge">🏆 N°1 en ${esc(p.category)}</em>` : topSellers().has(p.id) ? '<em class="hot-badge">⭐ Más vendido</em>' : ''}
           ${req ? `<em class="qty-badge">${cj ? cj + 'cj' : ''}${cj && un ? '+' : ''}${un ? un + 'u' : ''}</em>` : ''}</div>
         <div class="pname">${esc(p.name)}</div>
         <div class="pcode mono">${p.unitCode && p.unitCode !== p.code && p.sellBy !== 'caja' ? (p.sellBy === 'unidad' ? esc(p.unitCode) : `<span class="${cj ? 'on' : ''}" title="Código al mayor (caja)">CJ ${esc(p.code)}</span> · <span class="${un ? 'on' : ''}" title="Código por unidad">UN ${esc(p.unitCode)}</span>`) : esc(p.code)}</div>
@@ -1016,7 +1021,8 @@
       <section class="catalog-tools">
         <div class="search"><input id="q" class="input" type="search" placeholder="Buscar producto, sabor, gramaje o código…" value="${esc(S.ui.q)}" aria-label="Buscar producto"></div>
         <div class="chips" id="catChips">
-          <button class="chip ${!S.ui.cat && !S.ui.onlyInOrder ? 'active' : ''}" data-cat="">Todos</button>
+          ${window.Mkt ? `<button class="chip vt-chip ${S.ui.vitrina ? 'active' : ''}" data-vt="1" title="Vitrina para mostrarle al cliente (lo que agregues va a su pedido)">🛍 Vitrina</button>` : ''}
+          <button class="chip ${!S.ui.vitrina && !S.ui.cat && !S.ui.onlyInOrder ? 'active' : ''}" data-cat="">Todos</button>
           <button class="chip ${S.ui.onlyInOrder ? 'active' : ''}" data-only="1">🧾 En pedido</button>
           ${cats.map((c) => `<button class="chip ${S.ui.cat === c ? 'active' : ''}" data-cat="${esc(c)}">${rubroIcon(c)} ${esc(c)}</button>`).join('')}
         </div>
@@ -1078,10 +1084,12 @@
     $('#q').oninput = (e) => { clearTimeout(qt); qt = setTimeout(() => { S.ui.q = e.target.value; renderProductList(); }, 90); };
     $('#catChips').onclick = (e) => {
       const b = e.target.closest('.chip'); if (!b) return;
-      if (b.dataset.only) { S.ui.onlyInOrder = !S.ui.onlyInOrder; S.ui.cat = ''; }
-      else { S.ui.cat = b.dataset.cat; S.ui.onlyInOrder = false; }
+      if (b.dataset.vt) { S.ui.vitrina = !S.ui.vitrina; S.ui.cat = ''; S.ui.onlyInOrder = false; }
+      else if (b.dataset.only) { S.ui.onlyInOrder = !S.ui.onlyInOrder; S.ui.cat = ''; S.ui.vitrina = false; }
+      else { S.ui.cat = b.dataset.cat; S.ui.onlyInOrder = false; S.ui.vitrina = false; }
+      try { localStorage.setItem('pv_vitrina', S.ui.vitrina ? '1' : ''); } catch (err) { /* noop */ }
       $$('#catChips .chip').forEach((c) => c.classList.toggle('active',
-        c.dataset.only ? S.ui.onlyInOrder : (!S.ui.onlyInOrder && c.dataset.cat === S.ui.cat)));
+        c.dataset.vt ? !!S.ui.vitrina : c.dataset.only ? S.ui.onlyInOrder : (!S.ui.vitrina && !S.ui.onlyInOrder && c.dataset.cat === S.ui.cat)));
       renderProductList();
     };
     $('#syncPill').onclick = () => runSync(true);
@@ -1091,6 +1099,7 @@
 
     const list = $('#plist');
     list.addEventListener('click', (e) => {
+      if (window.Mkt && Mkt.onSellerClick(e)) return; // vitrina: mezclas, ir a una vitrina, pantalla completa
       const b = e.target.closest('button[data-act]'); if (!b) return;
       const pid = b.closest('[data-pid]').dataset.pid;
       const cur0 = activeOrder();
@@ -1123,6 +1132,9 @@
       list.innerHTML = `<div class="empty"><strong>Catálogo vacío</strong>Toca ⟳ para sincronizar con la oficina.</div>`;
       return;
     }
+    // Modo vitrina (tablet): las vitrinas de Promoción y marketing; al buscar, vuelve a la lista
+    if (S.ui.vitrina && !S.ui.q && !S.ui.onlyInOrder && window.Mkt) { list.innerHTML = hint + Mkt.renderSeller(o); list.classList.add('vt-mode'); return; }
+    list.classList.remove('vt-mode');
     // Encabezados de rubro / subgrupo (ej. REFRESCOS · 2 L)
     let last = '';
     const html = items.map((p) => {
@@ -1217,11 +1229,11 @@
     const p = productById(pid); if (!p) return;
     if (!applyQty(o, pid, kind, value)) return;
     await saveOrder(o);
-    const card = $(`#plist [data-pid="${CSS.escape(pid)}"]`);
-    if (card) {
-      if (S.ui.onlyInOrder && !o.lines[pid]) card.remove();
-      else card.outerHTML = productHTML(p, o);
-    }
+    $$(`#plist [data-pid="${CSS.escape(pid)}"]`).forEach((card) => {
+      if (S.ui.onlyInOrder && !o.lines[pid]) { card.remove(); return; }
+      const seal = card.querySelector('.vt-sello'); // sello de la vitrina (se conserva)
+      card.outerHTML = seal ? productHTML(p, o).replace('<div class="pimg">', '<div class="pimg">' + seal.outerHTML) : productHTML(p, o);
+    });
     renderBottomBar();
     const chip = $(`#clientChips [data-oid="${CSS.escape(o.id)}"]`);
     if (chip) chip.innerHTML = `${esc(o.clientName)} <span class="badge">${usd(Matrix.orderTotals(o).monto)}</span>`;
@@ -2091,7 +2103,7 @@
     syncInfo: () => ({ idle: isIdle(), every: syncEvery(), last: lastSyncResult }), _idleSince: (ms) => { lastInput = Date.now() - ms; },
     loadAll, saveDocs, saveOrder, saveSettings, setSession, msgThreadHTML, rememberOffice, forgetOffice, PERSIST_HINT, runSync, updateSyncPill, render, refreshAfterRemote, updateBell, beep, logEvent, isSupervisor,
     notifSheet, refreshPush,
-    productById, sellerById, orderById, clientById, rubros, orderLinesHTML, groupLines, groupedRows,
+    productById, sellerById, orderById, clientById, rubros, orderLinesHTML, groupLines, groupedRows, productHTML, setQty, activeOrder, popularity,
     boot, localNotif,
   };
 })();
