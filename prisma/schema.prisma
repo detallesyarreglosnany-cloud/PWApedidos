@@ -83,3 +83,33 @@ model DistVacMov {
   @@index([orderId])
   @@index([refId])
 }
+
+// Pagos de clientes (Fase 4 · cobranza). Los registra el vendedor (o la oficina) y los
+// verifica cobranza: espera → aprobado | rechazado. `data` guarda el pago completo
+// (notas que paga, métodos, montos, tasas). Solo se agregan; un pago rechazado o
+// anulado queda guardado con su estado.
+model DistPago {
+  id        String   @id
+  date      String   // fecha del pago (YYYY-MM-DD)
+  sellerId  String
+  clientId  String
+  status    String   // espera | aprobado | rechazado | anulado
+  data      String   // JSON del pago
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([date])
+  @@index([sellerId, date])
+  @@index([clientId])
+  @@index([status])
+}
+
+// Referencias de pago ya usadas (transferencia, pago móvil, Zelle, Binance…):
+// el número no se puede repetir. La garantía la da la propia base (llave única).
+// Si el pago se rechaza o se anula, su referencia se libera para registrarlo bien.
+model DistPagoRef {
+  ref    String @id // número de referencia normalizado (solo letras y números, en mayúsculas)
+  pagoId String
+
+  @@index([pagoId])
+}
