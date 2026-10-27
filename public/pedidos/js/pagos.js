@@ -810,50 +810,79 @@
 
   /* ======================= Plazos de crédito (cuentas por cobrar) ======================= */
   const DEF_RULES = { def: 15, rules: [{ category: 'REFRESCOS', days: 8 }], desde: '2026-10-15', penal: 2, nuevas: 3, nuevosDesde: '2026-10-27' };
-  function renderRules(box, draft) {
-    const P = PV(), { S, esc, toast } = P;
-    const cur = draft || (S.config.creditRules && typeof S.config.creditRules === 'object' ? S.config.creditRules : DEF_RULES);
-    const cats = (P.rubros ? P.rubros() : []).map((c) => (typeof c === 'string' ? c : c && (c.name || c.id))).filter(Boolean);
-    box.innerHTML = `<h3>📅 Plazos de pago (cuentas por cobrar)</h3>
-      <p class="muted">Días que tiene el cliente para pagar, contados desde que la carga quedó <b>DESPACHADA</b>. Si una nota lleva productos de varias categorías, cada parte vence en su plazo.</p>
-      <div class="row wrap" style="gap:8px"><label class="field"><span>Plazo general (días)</span><input id="crDef" class="input" inputmode="numeric" value="${esc(cur.def)}" style="max-width:120px"></label>
-        <label class="field"><span>Cuentas desde (despachadas desde)</span><input id="crDesde" type="date" class="input" value="${esc(cur.desde || DEF_RULES.desde)}"></label></div>
+  const rulesNow = () => { const S = PV().S; return S.config.creditRules && typeof S.config.creditRules === 'object' ? S.config.creditRules : DEF_RULES; };
+  function renderRules(box) {
+    const P = PV(), { S, esc, toast } = P, cur = rulesNow();
+    box.innerHTML = `<h3>📅 Cuentas por cobrar</h3>
+      <p class="muted">Los <b>plazos de crédito por categoría</b> se fijan en <b>Inventario → 📅 Plazos de crédito</b>.</p>
+      <div class="row wrap" style="gap:8px"><label class="field"><span>Cuentas desde (despachadas desde)</span><input id="crDesde" type="date" class="input" value="${esc(cur.desde || DEF_RULES.desde)}"></label></div>
       <p class="muted" style="font-size:13px">Las notas despachadas antes de «Cuentas desde» no aparecen como deuda (se cobraron en FileMaker antes de la app).</p>
-      <datalist id="crCats">${cats.map((c) => `<option value="${esc(c)}">`).join('')}</datalist>
-      ${(cur.rules || []).map((r, i) => `<div class="row wrap" style="gap:8px;align-items:flex-end;margin-top:8px" data-cr="${i}">
-        <label class="field"><span>Categoría</span><input class="input" list="crCats" data-k="category" value="${esc(r.category)}"></label>
-        <label class="field"><span>Días</span><input class="input" inputmode="numeric" data-k="days" value="${esc(r.days)}" style="max-width:100px"></label>
-        <button class="btn btn-sm btn-danger" data-crm="${i}">✕</button></div>`).join('')}
       <h3 style="margin-top:16px">🚦 Crédito</h3>
       <div class="row wrap" style="gap:8px"><label class="field"><span>Bajar el límite sugerido (% por día de atraso)</span><input id="crPen" class="input" inputmode="decimal" value="${esc(cur.penal ?? DEF_RULES.penal)}" style="max-width:120px"></label>
         <label class="field"><span>Compras de contado de un cliente nuevo</span><input id="crNue" class="input" inputmode="numeric" value="${esc(cur.nuevas ?? DEF_RULES.nuevas)}" style="max-width:120px"></label>
         <label class="field"><span>Cuentan como nuevos los creados desde</span><input id="crNd" type="date" class="input" value="${esc(cur.nuevosDesde || DEF_RULES.nuevosDesde)}"></label></div>
       <p class="muted" style="font-size:13px">Cliente nuevo = creado en la app (por el vendedor o la oficina) desde esa fecha. Paga de contado sus primeras compras; luego el límite sugerido es el promedio de esas compras. Cobranza puede cambiarlo en Pagos → 🚦 Crédito de clientes.</p>
-      <div class="row" style="gap:8px;margin-top:10px"><button class="btn btn-sm" id="crAdd">＋ Plazo por categoría</button><button class="btn btn-sm btn-primary" id="crSave">Guardar plazos y crédito</button></div>
+      <div class="row" style="gap:8px;margin-top:10px"><button class="btn btn-sm btn-primary" id="crSave">Guardar crédito</button></div>
       <h3 style="margin-top:16px">🧾 Revisión de cobranzas</h3>
       <label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" id="crObl" ${S.config.cobObligatoria ? 'checked' : ''}> <span>Aprobación de cobranzas <b>obligatoria</b> antes de aprobar la hoja de carga<br><small class="muted">Apagado: es solo un aviso para la oficina. Encendido: la hoja no pasa a 🔒 hasta que la oficina la envíe a cobranzas, cobranzas revise todos los clientes y no quede ninguno retenido.</small></span></label>`;
-    const read = () => ({ def: Math.round(Number(box.querySelector('#crDef').value)) || 0, desde: box.querySelector('#crDesde').value || DEF_RULES.desde,
-      penal: Number(String(box.querySelector('#crPen').value).replace(',', '.')), nuevas: Math.round(Number(box.querySelector('#crNue').value)), nuevosDesde: box.querySelector('#crNd').value || DEF_RULES.nuevosDesde, rules: [...box.querySelectorAll('[data-cr]')].map((row) => ({ category: row.querySelector('[data-k="category"]').value.trim(), days: Math.round(Number(row.querySelector('[data-k="days"]').value)) || 0 })) });
     box.querySelector('#crObl').onchange = async (e) => {
       const on = e.target.checked;
       await P.saveDocs('config', { ...S.config, cobObligatoria: on });
       P.logEvent('ajustes', `Revisión de cobranzas ${on ? 'obligatoria' : 'como aviso (no bloquea)'}`);
       toast(on ? 'Cobranzas debe aprobar cada hoja antes de aprobarla' : 'La revisión de cobranzas queda como aviso', 'ok'); P.runSync(false);
     };
-    box.querySelector('#crAdd').onclick = (e) => { e.stopPropagation(); const r = read(); r.rules.push({ category: '', days: 8 }); renderRules(box, r); };
     box.querySelector('#crSave').onclick = async (e) => {
       e.stopPropagation();
-      const r = read();
-      if (!(r.def > 0 && r.def <= 120)) { toast('El plazo general debe ser de 1 a 120 días', 'err'); return; }
+      const r = { desde: box.querySelector('#crDesde').value || DEF_RULES.desde, penal: Number(String(box.querySelector('#crPen').value).replace(',', '.')), nuevas: Math.round(Number(box.querySelector('#crNue').value)), nuevosDesde: box.querySelector('#crNd').value || DEF_RULES.nuevosDesde };
       if (!(r.penal >= 0 && r.penal <= 50)) { toast('El % por día de atraso debe ser de 0 a 50', 'err'); return; }
       if (!(r.nuevas >= 0 && r.nuevas <= 10)) { toast('Las compras de contado deben ser de 0 a 10', 'err'); return; }
-      const bad = r.rules.find((x) => x.category && !(x.days > 0 && x.days <= 120)); if (bad) { toast(`Plazo inválido para ${bad.category}`, 'err'); return; }
-      await P.saveDocs('config', { ...S.config, creditRules: { def: r.def, desde: r.desde, penal: r.penal, nuevas: r.nuevas, nuevosDesde: r.nuevosDesde, rules: r.rules.filter((x) => x.category) } });
+      // Los plazos (def, rules, hist) se conservan: se cambian en Inventario
+      await P.saveDocs('config', { ...S.config, creditRules: { ...DEF_RULES, ...rulesNow(), ...r } });
       try { Object.keys(localStorage).filter((k) => k.startsWith('pv_cart:')).forEach((k) => localStorage.removeItem(k)); } catch (err) { /* noop */ }
-      toast('Plazos guardados', 'ok'); P.runSync(false); renderRules(box);
+      toast('Crédito guardado', 'ok'); P.runSync(false); renderRules(box);
     };
-    box.onclick = (e) => { const rm = e.target.closest('[data-crm]'); if (!rm) return; e.stopPropagation(); const r = read(); r.rules.splice(+rm.dataset.crm, 1); renderRules(box, r); };
   }
 
-  global.Pagos = { calc, METHODS, ADJUSTS, BANKS, normRef, renderSeller, renderOffice, renderAccounts, payForm, cuentaSheet, anteriorForm, importSheet, integridadSheet, fillStatus, flush, pend };
+  /* ======================= Plazos de crédito por categoría (Inventario) ======================= */
+  // Cada categoría con sus días; las que no tienen, el plazo general. Un cambio vale para lo que se despache desde hoy:
+  // se guarda una versión con fecha (hist) y las notas ya despachadas conservan el plazo con que salieron.
+  const upc = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().trim();
+  function plazosSheet(canEdit) {
+    const P = PV(), { S, esc, toast } = P, cur = rulesNow();
+    const cats = [...new Set((P.rubros ? P.rubros() : []).map((c) => (typeof c === 'string' ? c : c && (c.name || c.id))).filter(Boolean)
+      .concat(S.products.filter((p) => !p.deleted && p.category).map((p) => p.category)))];
+    const daysOf = (c) => { const r = (cur.rules || []).find((x) => upc(x.category) === upc(c)); return r ? r.days : ''; };
+    const def = cur.def || DEF_RULES.def;
+    const sh = P.openSheet(`<div class="row"><h2 class="grow">📅 Plazos de crédito</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <p class="muted">Días que tiene el cliente para pagar, contados desde que la carga quedó <b>DESPACHADA</b>. Si una nota lleva productos de varias categorías, <b>cada parte vence en su plazo</b> (lo pagado se abona primero a lo que vence antes).</p>
+      <p class="muted">Un cambio vale para lo que se despache <b>desde hoy</b>: las notas ya despachadas conservan su plazo.</p>
+      <label class="field"><span>Plazo general (categorías sin plazo propio)</span><input id="plDef" class="input" inputmode="numeric" value="${esc(def)}" style="max-width:120px" ${canEdit ? '' : 'disabled'}></label>
+      <table class="inv" style="margin-top:8px"><thead><tr><th>Categoría</th><th class="n">Productos</th><th>Plazo (días)</th></tr></thead><tbody>
+        ${cats.map((c) => `<tr><td>${P.rubroIcon ? P.rubroIcon(c) : ''} <b>${esc(c)}</b></td><td class="n">${S.products.filter((p) => !p.deleted && p.category === c).length}</td>
+          <td><input class="input sm" inputmode="numeric" data-plc="${esc(c)}" value="${esc(daysOf(c))}" placeholder="general (${esc(def)})" style="max-width:130px" ${canEdit ? '' : 'disabled'}></td></tr>`).join('')}</tbody></table>
+      ${canEdit ? '<div class="actions"><button class="btn btn-primary" id="plOk">Guardar plazos</button></div>' : '<p class="muted">Solo consulta.</p>'}`);
+    const ok = sh.el.querySelector('#plOk'); if (!ok) return;
+    ok.onclick = async () => {
+      const d = Math.round(Number(sh.el.querySelector('#plDef').value));
+      if (!(d > 0 && d <= 120)) { toast('El plazo general debe ser de 1 a 120 días', 'err'); return; }
+      const rules = [];
+      for (const inp of sh.el.querySelectorAll('[data-plc]')) {
+        const v = inp.value.trim(); if (!v) continue;
+        const n = Math.round(Number(v)); if (!(n > 0 && n <= 120)) { toast(`Plazo inválido para ${inp.dataset.plc} (1 a 120 días)`, 'err'); return; }
+        rules.push({ category: inp.dataset.plc, days: n });
+      }
+      const base = { ...DEF_RULES, ...rulesNow() }, today = P.today();
+      const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+      if (base.def === d && same(base.rules || [], rules)) { sh.close(); return; }
+      let hist = Array.isArray(base.hist) ? base.hist.slice() : [];
+      if (!hist.length) hist.push({ from: '2000-01-01', def: base.def, rules: base.rules || [] }); // lo despachado antes conserva sus plazos
+      hist = hist.filter((h) => h.from < today).concat({ from: today, def: d, rules });
+      await P.saveDocs('config', { ...S.config, creditRules: { ...base, def: d, rules, hist: hist.slice(-60) } });
+      P.logEvent('ajustes', `Plazos de crédito: general ${d} días${rules.length ? ' · ' + rules.map((r) => `${r.category} ${r.days}`).join(', ') : ''} (desde ${today})`);
+      try { Object.keys(localStorage).filter((k) => k.startsWith('pv_cart:')).forEach((k) => localStorage.removeItem(k)); } catch (err) { /* noop */ }
+      sh.close(); toast('Plazos guardados: valen para lo que se despache desde hoy', 'ok'); P.runSync(false);
+    };
+  }
+
+  global.Pagos = { calc, METHODS, ADJUSTS, BANKS, normRef, renderSeller, renderOffice, renderAccounts, payForm, cuentaSheet, anteriorForm, importSheet, integridadSheet, plazosSheet, fillStatus, flush, pend };
 })(window);
