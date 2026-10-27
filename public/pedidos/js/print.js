@@ -471,24 +471,32 @@
     printHTML('Cuadre de despachos ' + ctx.from + ' a ' + ctx.to, LOAD_CSS + ' table.load.wide{width:100%} h3{font-size:12px;margin:10px 0 3px} @page{size:letter landscape;margin:8mm}', body);
   }
 
-  /** Pagos de clientes para cobranzas: un bloque por vendedor, con sus formas de pago y totales, y firmas. */
+  /**
+   * Hoja para cobranzas: una página por día (día de subida o del pago, según ctx.dayOf), un bloque por vendedor con
+   * cada pago de cada cliente (todas sus formas de pago), totales por vendedor y del día, y firmas.
+   */
   function printPagos(pagos, ctx) {
-    const M = ctx.METHODS, A = ctx.ADJUSTS, ST = ctx.ST;
+    const M = ctx.METHODS, A = ctx.ADJUSTS, ST = ctx.ST, dayOf = ctx.dayOf || ((p) => p.date), timeOf = ctx.timeOf || (() => '');
     const money = (l) => (l.currency === 'VES' ? 'Bs ' + nf2.format(l.amount) : l.currency === 'COP' ? 'COP ' + nf0.format(l.amount) : '$ ' + nf2.format(l.amount));
-    const by = new Map(); pagos.slice().sort((a, b) => a.date.localeCompare(b.date) || String(a.clientName).localeCompare(String(b.clientName), 'es')).forEach((p) => by.set(p.sellerName || p.sellerId, (by.get(p.sellerName || p.sellerId) || []).concat(p)));
-    const block = ([name, list]) => {
-      const live = list.filter((p) => p.status !== 'rechazado' && p.status !== 'anulado');
-      const t = {}; live.forEach((p) => p.lines.forEach((l) => { const x = t[l.method] || (t[l.method] = { currency: l.currency, amount: 0, usd: 0 }); x.amount += l.amount; x.usd += l.usd; }));
-      return `<section class="pg"><h3>${esc(name)} · ${list.length} pago${list.length === 1 ? '' : 's'}</h3>
-        <table class="rep"><thead><tr><th>Fecha</th><th>Cliente</th><th>Notas</th><th>Forma de pago</th><th>Banco</th><th>Referencia</th><th>Monto</th><th>≈ $</th><th>Estado</th></tr></thead><tbody>
-        ${list.map((p) => p.lines.map((l, i) => `<tr><td>${i ? '' : esc(p.date)}</td><td>${i ? '' : esc(p.clientName)}</td><td>${i ? '' : esc(p.notas.map((n) => n.nota).join(', '))}</td><td>${esc((M[l.method] || {}).label || l.method)}</td><td>${esc(l.bank || '')}</td><td>${esc(l.ref || '')}</td><td class="num">${money(l)}</td><td class="num">${nf2.format(l.usd)}</td><td>${i ? '' : esc((ST[p.status] || [p.status])[0])}</td></tr>`).join('')
-          + (p.adjusts || []).map((a) => `<tr><td></td><td></td><td></td><td>${esc(A[a.type] || a.type)}${a.type === 'descuento' ? ' ' + a.pct + ' %' : ''}</td><td></td><td></td><td></td><td class="num">${nf2.format(a.usd)}</td><td></td></tr>`).join('')).join('')}
-        </tbody><tfoot>${Object.entries(t).map(([k, x]) => `<tr class="tot"><td colspan="6">Total ${esc((M[k] || {}).label || k)}</td><td class="num">${money({ currency: x.currency, amount: Math.round(x.amount * 100) / 100 })}</td><td class="num">${nf2.format(x.usd)}</td><td></td></tr>`).join('')}
-          <tr class="tot"><td colspan="7">TOTAL COBRADO (≈ $, sin rechazados)</td><td class="num">${nf2.format(live.reduce((a, p) => a + p.pagado + p.ajustes, 0))}</td><td></td></tr></tfoot></table>
-        <div class="sign" style="grid-template-columns:repeat(2,1fr)"><div>Vendedor: ${esc(name)}</div><div>Recibido por cobranzas</div></div></section>`;
-    };
-    const body = `<section>${header(ctx.config, 'PAGOS PARA COBRANZAS', ctx.title || '')}${[...by.entries()].map(block).join('') || '<p>Sin pagos.</p>'}</section>`;
-    printHTML('Pagos ' + (ctx.title || ''), '@page{size:letter landscape;margin:10mm} h3{font-size:12px;margin:10px 0 3px;color:#730101} table.rep td{font-size:10px} table.rep tr.tot td{font-weight:bold;background:#f3e3e3} section.pg{page-break-inside:avoid;margin-bottom:12px}', body);
+    const sumBy = (list) => { const t = {}; list.forEach((p) => p.lines.forEach((l) => { const x = t[l.method] || (t[l.method] = { currency: l.currency, amount: 0, usd: 0, n: 0 }); x.amount += l.amount; x.usd += l.usd; x.n++; })); return t; };
+    const totRows = (t, span) => Object.entries(t).map(([k, x]) => `<tr class="tot"><td colspan="${span}">Total ${esc((M[k] || {}).label || k)} (${x.n})</td><td class="num">${money({ currency: x.currency, amount: Math.round(x.amount * 100) / 100 })}</td><td class="num">${nf2.format(x.usd)}</td><td></td></tr>`).join('');
+    const days = new Map(); pagos.forEach((p) => { const d = dayOf(p); days.set(d, (days.get(d) || []).concat(p)); });
+    const block = (name, list) => `<h3>${esc(name)} · ${list.length} pago${list.length === 1 ? '' : 's'}</h3>
+      <table class="rep"><thead><tr><th>Hora</th><th>Cliente</th><th>Notas</th><th>Fecha pago</th><th>Forma de pago</th><th>Banco</th><th>Referencia</th><th>Monto</th><th>≈ $</th><th>Estado</th></tr></thead><tbody>
+      ${list.map((p) => p.lines.map((l, i) => `<tr><td>${i ? '' : esc(timeOf(p))}</td><td>${i ? '' : '<b>' + esc(p.clientName) + '</b>'}</td><td>${i ? '' : esc(p.notas.map((n) => n.nota).join(', '))}</td><td>${i ? '' : esc(fdate(p.date + 'T12:00:00'))}</td><td>${esc((M[l.method] || {}).label || l.method)}</td><td>${esc(l.bank || '')}</td><td>${esc(l.ref || '')}</td><td class="num">${money(l)}</td><td class="num">${nf2.format(l.usd)}</td><td>${i ? '' : esc((ST[p.status] || [p.status])[0])}</td></tr>`).join('')
+        + (p.adjusts || []).map((a) => `<tr><td></td><td></td><td></td><td></td><td>${esc(A[a.type] || a.type)}${a.type === 'descuento' ? ' ' + a.pct + ' %' : ''}</td><td></td><td></td><td></td><td class="num">${nf2.format(a.usd)}</td><td></td></tr>`).join('')
+        + (p.comment ? `<tr><td></td><td colspan="9" class="muted">📝 ${esc(p.comment)}</td></tr>` : '')).join('')}
+      </tbody><tfoot>${totRows(sumBy(list), 7)}<tr class="tot"><td colspan="8">TOTAL ${esc(name)} (≈ $)</td><td class="num">${nf2.format(list.reduce((a, p) => a + p.pagado + p.ajustes, 0))}</td><td></td></tr></tfoot></table>
+      <div class="sign" style="grid-template-columns:repeat(2,1fr)"><div>Vendedor: ${esc(name)}</div><div>Recibido por cobranzas</div></div>`;
+    const body = [...days.keys()].sort().map((d) => {
+      const list = days.get(d).slice().sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))), by = new Map();
+      list.forEach((p) => by.set(p.sellerName || p.sellerId, (by.get(p.sellerName || p.sellerId) || []).concat(p)));
+      return `<section class="pgday">${header(ctx.config, 'PAGOS PARA COBRANZAS', fdate(d + 'T12:00:00'))}
+        <p class="muted">${esc(ctx.title || '')} · ${list.length} pagos de ${by.size} vendedor${by.size === 1 ? '' : 'es'}</p>
+        ${[...by.entries()].sort((a, b) => String(a[0]).localeCompare(String(b[0]), 'es')).map(([n, l]) => block(n, l)).join('')}
+        <h3>Total del día ${esc(fdate(d + 'T12:00:00'))}</h3><table class="rep"><tbody>${totRows(sumBy(list), 1)}<tr class="tot"><td>TOTAL DEL DÍA (≈ $)</td><td></td><td class="num">${nf2.format(list.reduce((a, p) => a + p.pagado + p.ajustes, 0))}</td><td></td></tr></tbody></table></section>`;
+    }).join('') || '<section><p>Sin pagos.</p></section>';
+    printHTML('Pagos ' + (ctx.title || ''), '@page{size:letter landscape;margin:9mm} h3{font-size:12px;margin:10px 0 3px;color:#730101} table.rep td{font-size:10px} table.rep tr.tot td{font-weight:bold;background:#f3e3e3} section.pgday{page-break-after:always} section.pgday:last-child{page-break-after:auto}', body);
   }
 
   global.AlignCols = alignCols;
