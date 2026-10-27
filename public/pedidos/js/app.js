@@ -771,6 +771,7 @@
       await logEvent('pedido_nuevo', `Abrió pedido de ${client.name}`, { orderId: o.id, clientId: client.id, clientName: client.name });
       toast('Cliente: ' + client.name, 'ok');
     }
+    S.ui.pickedOid = o.id;
     await setSession({ ...S.session, activeOrderId: o.id });
     renderSeller();
   }
@@ -847,9 +848,17 @@
   }
 
   const STATUS_MARK = { enviado: '✓ ', en_carga: '🚚 ', en_espera: '⏸ ', despachado: '▣ ' };
+  // Mensajes de la oficina que el vendedor aún no ha abierto (se recuerda por equipo; no se sincroniza)
+  const seenMsgs = () => { try { return JSON.parse(localStorage.getItem('pv_msgSeen') || 'null'); } catch (e) { return null; } };
+  const markSeen = (o) => { try { const m = seenMsgs() || {}; m[o.id] = (o.officeMsgs || []).length; localStorage.setItem('pv_msgSeen', JSON.stringify(m)); } catch (e) { /* sin almacenamiento: no pasa nada */ } };
+  const unreadMsgs = (o) => Math.max(0, (o.officeMsgs || []).length - ((seenMsgs() || {})[o.id] || 0));
   const markOf = (o) => (o.locked && o.status !== 'despachado' ? '🔒 ' : STATUS_MARK[o.status] || '');
 
   function renderSeller() {
+    // Un pedido que ya se envió a oficina no queda «pegado» abajo al volver a la app: solo lo elige el vendedor
+    { const a0 = activeOrder(); if (a0 && a0.status !== 'abierto' && S.ui.pickedOid !== a0.id) { S.session = { ...S.session, activeOrderId: null }; setSession(S.session); } }
+    // Primera vez con avisos de mensajes: los que ya existen no cuentan como nuevos
+    if (seenMsgs() === null) { try { const m = {}; S.orders.forEach((x) => { if ((x.officeMsgs || []).length) m[x.id] = x.officeMsgs.length; }); localStorage.setItem('pv_msgSeen', JSON.stringify(m)); } catch (e) { /* noop */ } }
     const seller = sellerById(S.session.sellerId);
     const orders = pendingOrdersToday();
     const o = activeOrder();
@@ -874,13 +883,15 @@
           </form>
         </div>
         <div id="clientSug" class="suggest" role="listbox" aria-label="Clientes que coinciden"></div>
+        <div class="chips-wrap"><button type="button" class="chips-arrow" data-dir="-1" aria-label="Clientes anteriores">‹</button>
         <div class="chips" id="clientChips" role="tablist" aria-label="Clientes de hoy">
           ${orders.length ? orders.map((x) => {
             const t = Matrix.orderTotals(x);
             return `<button class="chip ${o && o.id === x.id ? 'active' : ''} st-${x.status}" data-oid="${esc(x.id)}" role="tab">
-              ${markOf(x)}${x.createdBy === 'oficina' ? '🏢 ' : ''}${(x.dupWith || []).some((d) => !d.extra) ? '⚠ ' : ''}${esc(x.clientName)} <span class="badge">${usd(t.monto)}</span></button>`;
+              ${markOf(x)}${x.createdBy === 'oficina' ? '🏢 ' : ''}${x.factura ? '🧾 ' : ''}${(x.dupWith || []).some((d) => !d.extra) ? '⚠ ' : ''}${esc(x.clientName)} <span class="badge">${usd(t.monto)}</span>${unreadMsgs(x) ? `<span class="msgbadge" data-msg="${esc(x.id)}" role="button" aria-label="Mensajes de la oficina">💬 ${unreadMsgs(x)}</span>` : ''}</button>`;
           }).join('') : '<span class="muted" style="padding:10px 2px">Escribe el primer cliente de tu ruta de hoy.</span>'}
-        </div>
+        </div><button type="button" class="chips-arrow" data-dir="1" aria-label="Más clientes">›</button>
+        ${orders.length > 1 ? `<button type="button" class="chips-list" id="clientList" title="Ver todos los clientes de hoy">☰ ${orders.length}</button>` : ''}</div>
       </section>
       <section class="catalog-tools">
         <div class="search"><input id="q" class="input" type="search" placeholder="Buscar producto, sabor, gramaje o código…" value="${esc(S.ui.q)}" aria-label="Buscar producto"></div>
@@ -924,10 +935,19 @@
     });
     sug.onclick = (e) => { const b = e.target.closest('[data-name]'); if (b) { sug.innerHTML = ''; openClient(b.dataset.name); } };
     $('#clientChips').onclick = async (e) => {
+      const mb = e.target.closest('[data-msg]');
+      if (mb) { const mo = orderById(mb.dataset.msg); if (mo) msgSheet(mo); return; }
       const b = e.target.closest('[data-oid]'); if (!b) return;
+      S.ui.pickedOid = b.dataset.oid;
       await setSession({ ...S.session, activeOrderId: b.dataset.oid });
       renderSeller();
     };
+    // Computadora: flechas y rueda del mouse para recorrer los clientes; el cliente activo queda a la vista
+    { const cc = $('#clientChips'), wrap = cc.parentElement;
+      wrap.querySelectorAll('.chips-arrow').forEach((a) => { a.onclick = () => cc.scrollBy({ left: +a.dataset.dir * Math.max(160, cc.clientWidth * 0.7), behavior: 'smooth' }); });
+      cc.addEventListener('wheel', (e) => { if (cc.scrollWidth > cc.clientWidth && Math.abs(e.deltaY) > Math.abs(e.deltaX)) { cc.scrollLeft += e.deltaY; e.preventDefault(); } }, { passive: false });
+      const act = cc.querySelector('.chip.active'); if (act) cc.scrollLeft = Math.max(0, act.offsetLeft - (cc.clientWidth - act.offsetWidth) / 2);
+      const lb = $('#clientList'); if (lb) lb.onclick = clientsTodaySheet; }
     let qt;
     $('#q').oninput = (e) => { clearTimeout(qt); qt = setTimeout(() => { S.ui.q = e.target.value; renderProductList(); }, 90); };
     $('#catChips').onclick = (e) => {
@@ -986,6 +1006,32 @@
       : `<div class="empty"><strong>Sin resultados</strong>Prueba con otra palabra o rubro.</div>`);
   }
 
+  /** Todos los clientes de hoy en una lista (más cómoda que deslizar cuando son muchos). */
+  function clientsTodaySheet() {
+    const list = pendingOrdersToday(), cur = activeOrder();
+    const sh = openSheet(`
+      <div class="row"><h2 class="grow">Clientes de hoy (${list.length})</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <div class="pick-list">${list.map((x) => { const t = Matrix.orderTotals(x), un = unreadMsgs(x);
+        return `<button type="button" class="sug-item${cur && cur.id === x.id ? ' picked' : ''}" data-oid="${esc(x.id)}"><b>${markOf(x)}${x.factura ? '🧾 ' : ''}${esc(x.clientName)}${un ? ` · 💬 ${un}` : ''}</b>
+          <small>${t.cajas} cj + ${t.unidades} un · ${usd(t.monto)} · ${esc(Loads.orderLabel(x))}</small></button>`; }).join('')}</div>`);
+    sh.el.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-oid]'); if (!b) return;
+      S.ui.pickedOid = b.dataset.oid;
+      await setSession({ ...S.session, activeOrderId: b.dataset.oid });
+      sh.close(); renderSeller();
+    });
+  }
+  /** Mensajes de la oficina sobre un pedido (se marcan como leídos al abrirlos). */
+  function msgSheet(o) {
+    markSeen(o);
+    const sh = openSheet(`
+      <div class="row"><h2 class="grow">💬 ${esc(o.clientName)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      ${msgThreadHTML(o)}
+      <div class="actions"><button class="btn btn-primary" id="msgOpen">Abrir el pedido</button><button class="btn" data-close>Cerrar</button></div>`);
+    sh.el.querySelector('#msgOpen').onclick = async () => { S.ui.pickedOid = o.id; await setSession({ ...S.session, activeOrderId: o.id }); sh.close(); renderSeller(); };
+    sh.el.addEventListener('click', (e) => { if (e.target.closest('[data-close]')) setTimeout(() => { if (location.hash === '#/ruta') renderSeller(); }, 0); });
+  }
+
   function renderBottomBar() {
     const bar = $('#bottomBar'); if (!bar) return;
     const o = activeOrder();
@@ -994,9 +1040,11 @@
     const rate = +S.config.exchangeRate || 0;
     bar.innerHTML = `
       <div class="cart-info"><b>${esc(o.clientName)}</b> · ${t.cajas} cj + ${t.unidades} un${rate ? ' · ' + bs(t.monto * rate) : ''}
-        ${o.status !== 'abierto' ? ` · <span class="status ${o.status}">${esc(Loads.orderLabel(o))}</span>` : ''}</div>
+        ${o.status !== 'abierto' ? ` · <span class="status ${o.status}">${esc(Loads.orderLabel(o))}</span>` : ''}${o.factura ? ' · 🧾 con factura' : ''}
+        <button type="button" class="cart-x" id="closeOrder" title="Quitar este cliente de la pantalla (el pedido no se borra)" aria-label="Quitar cliente de la pantalla">✕</button></div>
       <button class="cart-btn" id="viewOrder">Ver pedido (${t.items} ítems) · ${usd(t.monto)}</button>`;
     $('#viewOrder').onclick = orderSheet;
+    $('#closeOrder').onclick = async () => { await setSession({ ...S.session, activeOrderId: null }); renderSeller(); };
   }
 
   /** Cambia la cantidad de un producto en un pedido (mismas reglas desde el catálogo y desde «Mis pedidos»). */
@@ -1133,11 +1181,15 @@
         <button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
       ${o.dupWith && o.dupWith.length ? dupHint(o) : ''}
       ${o.officeEdited ? '<div class="hint warn">La oficina ajustó cantidades de este pedido.</div>' : ''}
+      ${(o.officeMsgs || []).length ? msgThreadHTML(o) : ''}
       ${orderLinesHTML(o)}
       ${vacAskHTML(o, locked)}
       <div class="row wrap modo-box" style="gap:8px;align-items:center;margin-top:14px"><span><b>Entrega:</b></span>
         <button type="button" class="chip ${o.modo === 'retiro' ? '' : 'active'}" data-modo="" ${locked ? 'disabled' : ''}>🚚 Despacho</button>
         <button type="button" class="chip ${o.modo === 'retiro' ? 'active' : ''}" data-modo="retiro" ${locked ? 'disabled' : ''}>🏢 Retira por oficina</button></div>
+      <div class="row wrap fac-box" style="gap:8px;align-items:center;margin-top:10px"><span><b>Factura:</b></span>
+        <button type="button" class="chip ${o.factura ? '' : 'active'}" data-fac="" ${locked ? 'disabled' : ''}>Sin factura</button>
+        <button type="button" class="chip ${o.factura ? 'active' : ''}" data-fac="1" ${locked ? 'disabled' : ''}>🧾 Requiere factura</button></div>
       <label class="field" style="margin-top:14px"><span>Nota para despacho</span>
         <textarea id="notes" class="input" maxlength="300" placeholder="Ej: entregar antes de las 10am, cobrar en divisas…" ${locked ? 'disabled' : ''}>${esc(o.notes || '')}</textarea></label>
       <div class="actions">
@@ -1145,6 +1197,7 @@
         ${!locked && o.status !== 'abierto' ? '<button class="btn btn-primary" data-close>✓ Listo (cambios guardados)</button>' : ''}
         <button class="btn btn-danger" id="delOrder" ${canDelete(o) ? '' : 'disabled'}>Eliminar</button>
       </div>`, { cls: 'sheet-order' });
+    if ((o.officeMsgs || []).length) markSeen(o);
     const notes = $('#notes', sh.el);
     notes.onchange = async () => { o.notes = notes.value.slice(0, 300); await saveOrder(o); };
     $('#fixClient', sh.el).onclick = () => { sh.close(); clientFixSheet(orderById(o.id) || o, { onDone: () => renderSeller() }); };
@@ -1156,6 +1209,14 @@
       await saveOrder(o);
       sh.el.querySelectorAll('[data-modo]').forEach((x) => x.classList.toggle('active', x.dataset.modo === m));
       toast(m ? '🏢 Retira por oficina: va a la hoja RETIRO POR OFICINA' : '🚚 Despacho: va a la hoja de carga de su ruta', 'ok');
+      if (o.status !== 'abierto') runSync(false);
+    }; });
+    sh.el.querySelectorAll('[data-fac]').forEach((b) => { b.onclick = async () => {
+      const f = !!b.dataset.fac; if (!!o.factura === f) return;
+      if (f) o.factura = true; else delete o.factura;
+      await saveOrder(o);
+      sh.el.querySelectorAll('[data-fac]').forEach((x) => x.classList.toggle('active', x === b));
+      toast(f ? '🧾 Este cliente lleva factura: saldrá marcado en la hoja de carga' : 'Sin factura', 'ok');
       if (o.status !== 'abierto') runSync(false);
     }; });
     const send = $('#sendOrder', sh.el);
@@ -1654,6 +1715,7 @@
       ${vacBlock}
       <div class="section-title" style="margin:14px 0 6px">💬 Notas y mensajes</div>
       ${msgThreadHTML(o)}`, { cls: 'sheet-order' });
+    if ((o.officeMsgs || []).length) markSeen(o);
     const me = $('#mosEdit', shM.el);
     if (me) me.onclick = () => { shM.close(); quickEditSheet(o.id, () => { if (location.hash.startsWith('#/ruta/pedidos')) renderSellerOrders(); }); };
   }
