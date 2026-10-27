@@ -2045,6 +2045,7 @@
         <button class="btn" id="iExp">⇩ Exportar</button>
         <button class="btn" id="iPhotos">📷 Fotos en lote</button>
         <button class="btn" id="iOrder">↕ Ordenar catálogo</button>
+        <button class="btn" id="iPlazo" title="Días de crédito de cada categoría">📅 Plazos de crédito</button>
       </div>
       ${onlyRet && missing.length ? `<div class="hint warn">Códigos de la lista de retornables que no están en el catálogo: <b>${esc(missing.join(', '))}</b>. Corrige el código del producto y márcalo en «Envase retornable».</div>` : ''}
       <p class="muted">${S.products.length} productos · ${rows.length} mostrados · ${noPhoto} sin foto${S.config.priceListDate ? ' · lista de precios del ' + esc(S.config.priceListDate) : ''}. Los cambios de precio, stock u orden se guardan al salir de la casilla y llegan a los teléfonos al sincronizar.</p>
@@ -2071,6 +2072,7 @@
     $('#iExp').onclick = () => saveFile('catalogo_' + today() + '.csv', '\uFEFF' + catalogCSV(), 'text/csv;charset=utf-8');
     $('#iImp').onclick = () => importDialog('products', root);
     $('#iPhotos').onclick = () => bulkPhotos(root);
+    $('#iPlazo').onclick = () => Pagos.plazosSheet(!roGer());
     $('#iOrder').onclick = () => catalogOrderEditor(root);
     root.onclick = (e) => { const b = e.target.closest('[data-edit]'); if (b) productForm(productById(b.dataset.edit), root); };
     root.onchange = async (e) => {

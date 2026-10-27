@@ -1,26 +1,39 @@
 // Cuentas por cobrar (Fase 5): cada nota despachada vence según la categoría de lo que llevó.
 // Por omisión: REFRESCOS 8 días y todo lo demás 15 días, contados desde el día en que la carga quedó DESPACHADA
-// (hora de Venezuela). La oficina cambia los días en Ajustes. Lo pagado se aplica primero a lo que vence antes.
+// (hora de Venezuela). La oficina fija los días por categoría en Inventario. Lo pagado se aplica primero a lo que vence antes.
+// Un cambio de plazo vale para lo despachado desde ese día: hist guarda cada versión con su fecha (las notas ya
+// despachadas conservan el plazo con que salieron).
 import { r2 } from '@/lib/pagos';
 
 // desde: solo cuentan las notas despachadas desde ese día (lo anterior se cobró en FileMaker antes de la app).
 // penal: % que el sistema sugiere bajar el límite por cada día de atraso. nuevas: compras de contado de un cliente nuevo
 // (creado en la app desde nuevosDesde) antes de darle crédito; su límite sugerido es el promedio de esas compras.
-export type CreditRules = { def: number; rules: { category: string; days: number }[]; desde: string; penal: number; nuevas: number; nuevosDesde: string };
+type Plazos = { def: number; rules: { category: string; days: number }[] };
+export type CreditRules = Plazos & { desde: string; penal: number; nuevas: number; nuevosDesde: string; hist: (Plazos & { from: string })[] };
 export const DEFAULT_DESDE = '2026-10-15';
-export const DEFAULT_RULES: CreditRules = { def: 15, rules: [{ category: 'REFRESCOS', days: 8 }], desde: DEFAULT_DESDE, penal: 2, nuevas: 3, nuevosDesde: '2026-10-27' };
+export const DEFAULT_RULES: CreditRules = { def: 15, rules: [{ category: 'REFRESCOS', days: 8 }], desde: DEFAULT_DESDE, penal: 2, nuevas: 3, nuevosDesde: '2026-10-27', hist: [] };
 const up = (s: unknown) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
 
 export function rulesOf(config: Record<string, unknown> | null): CreditRules {
   const c = (config && config.creditRules) as Partial<CreditRules> | undefined;
   if (!c || typeof c !== 'object') return DEFAULT_RULES;
-  const def = Number(c.def) > 0 && Number(c.def) <= 120 ? Math.round(Number(c.def)) : DEFAULT_RULES.def;
-  const rules = (Array.isArray(c.rules) ? c.rules : []).map((r) => ({ category: String(r && r.category || ''), days: Math.round(Number(r && r.days)) })).filter((r) => r.category && r.days > 0 && r.days <= 120);
+  const defOf = (v: unknown) => (Number(v) > 0 && Number(v) <= 120 ? Math.round(Number(v)) : DEFAULT_RULES.def);
+  const rulesIn = (v: unknown) => (Array.isArray(v) ? v : []).map((r) => ({ category: String(r && r.category || ''), days: Math.round(Number(r && r.days)) })).filter((r) => r.category && r.days > 0 && r.days <= 120);
+  const def = defOf(c.def), rules = rulesIn(c.rules);
   const day = (v: unknown, d: string) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : d);
+  const hist = (Array.isArray(c.hist) ? c.hist : []).filter((h) => h && /^\d{4}-\d{2}-\d{2}$/.test(String(h.from || ''))).slice(-60)
+    .map((h) => ({ from: String(h.from), def: defOf(h.def), rules: rulesIn(h.rules) })).sort((a, b) => a.from.localeCompare(b.from));
   const desde = day(c.desde, DEFAULT_DESDE), nuevosDesde = day(c.nuevosDesde, DEFAULT_RULES.nuevosDesde);
   const numIn = (v: unknown, min: number, max: number, d: number) => (v === null || v === undefined || v === '' || !(Number(v) >= min && Number(v) <= max) ? d : Number(v));
   const penal = numIn(c.penal, 0, 50, DEFAULT_RULES.penal), nuevas = Math.round(numIn(c.nuevas, 0, 10, DEFAULT_RULES.nuevas));
-  return { def, rules, desde, penal, nuevas, nuevosDesde };
+  return { def, rules, desde, penal, nuevas, nuevosDesde, hist };
+}
+/** Plazos vigentes para una nota despachada el día start (los de esa fecha según el historial; sin historial, los actuales). */
+export function rulesAt(R: CreditRules, start: string): CreditRules {
+  if (!R.hist.length) return R;
+  let h = R.hist[0];
+  for (const x of R.hist) if (x.from <= start) h = x;
+  return { ...R, def: h.def, rules: h.rules };
 }
 export const daysFor = (category: string, R: CreditRules) => (R.rules.find((r) => up(r.category) === up(category)) || { days: R.def }).days;
 

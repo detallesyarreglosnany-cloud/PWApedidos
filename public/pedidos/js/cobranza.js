@@ -93,6 +93,12 @@
     return '';
   }
 
+  /** Nota con productos de plazos distintos: cada parte que falta pagar con su vencimiento («$70 vence 4 nov (8 d) · $30 vence 11 nov (15 d)»). */
+  const partesOf = (n) => (n.tramos || []).filter((t) => t.resta > 0.01);
+  function partesHTML(n) {
+    const P = PV(), ts = partesOf(n); if (ts.length < 2) return '';
+    return `<div class="muted" style="font-size:12px">${ts.map((t) => `${P.usd(t.resta)} vence ${P.esc(P.fmtDate(t.vence))} (${t.days} d)`).join(' · ')}</div>`;
+  }
   /** Deuda del cliente según la cartera del teléfono: vencido, por vencer y sus notas. */
   function debtOf(clientId) {
     const S = PV().S, sid = S.session && S.session.sellerId, c = sid ? lsGet(key(sid)) : null;
@@ -106,7 +112,7 @@
   function debtHTML(clientId) {
     const P = PV(), { esc, usd, fmtDate } = P, d = debtOf(clientId); if (!d) return '';
     if (!d.notas.length) return d.alDia ? '<div class="hint">✅ Cliente <b>al día</b> con sus pagos.</div>' : '';
-    const row = (n) => `<div class="row" style="gap:6px;font-size:13px"><span class="grow">📄 Nota ${esc(n.nota || '—')} · ${usd(n.resta)}${n.resta < n.monto - 0.01 ? ` de ${usd(n.monto)}` : ''}</span><span class="${n.dias < 0 ? 'warn-txt' : n.dias <= 1 ? 'pay-rev' : 'muted'}">${esc(diasTxt(n.dias))} · ${esc(fmtDate(n.vence))}</span></div>`;
+    const row = (n) => `<div class="row" style="gap:6px;font-size:13px"><span class="grow">📄 Nota ${esc(n.nota || '—')} · ${usd(n.resta)}${n.resta < n.monto - 0.01 ? ` de ${usd(n.monto)}` : ''}</span><span class="${n.dias < 0 ? 'warn-txt' : n.dias <= 1 ? 'pay-rev' : 'muted'}">${esc(diasTxt(n.dias))} · ${esc(fmtDate(n.vence))}</span></div>${partesHTML(n)}`;
     return `<div class="hint warn cob-debt">💵 <b>Debe ${usd(d.total)}</b>${d.vencido ? ` · <b class="warn-txt">vencido ${usd(d.vencido)}</b>` : ''}${d.porVencer ? ` · por vencer ${usd(d.porVencer)}` : ''}
       <div style="margin:6px 0">${d.notas.slice(0, 5).map(row).join('')}${d.notas.length > 5 ? `<div class="muted" style="font-size:12px">… y ${d.notas.length - 5} notas más</div>` : ''}</div>
       ${d.vencido ? '<div style="font-size:13px">Pídele que cancele lo vencido para hacer su nuevo pedido y mantener su crédito.</div>' : ''}
@@ -163,6 +169,7 @@
     const lines = [`Hola ${client.name}, le saluda ${seller.name || 'su vendedor'} de ${co}.`, '', `Le recordamos ${notas.length === 1 ? 'su nota pendiente' : 'sus notas pendientes'}:`];
     notas.forEach((n) => {
       lines.push(`• Nota ${n.nota || '—'} · despachada el ${f(n.despacho)} · ${diasTxt(n.dias)} (${f(n.vence)}) · saldo $ ${nf.format(n.resta)}${rate ? ` (Bs ${nf.format(n.resta * rate)})` : ''}`);
+      const ps = partesOf(n); if (ps.length > 1) lines.push(`   (${ps.map((t) => `$ ${nf.format(t.resta)} vence el ${f(t.vence)}`).join(' y ')})`);
       const o = P.orderById(n.orderId), d = o && o.delivery && o.delivery.at ? o.delivery : null, src = o ? (d ? d.lines : o.lines) || {} : {};
       Object.values(src).filter((l) => (+l.cajas || 0) || (+l.unidades || 0)).slice(0, 25).forEach((l) => lines.push(`   - ${l.cajas ? l.cajas + ' cj' : ''}${l.cajas && l.unidades ? ' + ' : ''}${l.unidades ? l.unidades + ' un' : ''} ${l.name} ${l.presentation || ''}`.replace(/\s+/g, ' ')));
     });
@@ -239,7 +246,7 @@
       return [...byC.entries()].map(([cid, ns]) => { const c = P.clientById(cid) || { id: cid, name: ns[0].clientName }; return `<div class="card card-pad" style="margin-bottom:8px">
         <div class="row wrap" style="gap:8px;align-items:center"><b class="grow">${(credOf(cid) && DOT[credOf(cid).semaforo]) || ''} ${esc(c.name)} · ${usd(ns.reduce((a, n) => a + n.resta, 0))}</b>
           <button class="btn btn-sm btn-primary" data-wa="${esc(cid)}">📲 WhatsApp</button><button class="btn btn-sm" data-seg="${esc(cid)}">📋 Seguimiento</button><button class="btn btn-sm" data-pay="${esc(cid)}">💵 Pago</button></div>
-        ${ns.map((n) => `<div class="row" style="gap:8px;align-items:center;margin-top:6px;cursor:pointer" data-nota="${esc(cid)}|${esc(n.key)}"><span class="grow">📄 <b>Nota ${esc(n.nota || '—')}</b> · ${usd(n.resta)} de ${usd(n.monto)} · <span class="${n.dias < 0 ? 'warn-txt' : n.dias <= 1 ? 'pay-rev' : 'muted'}">${esc(diasTxt(n.dias))}</span> (${esc(fmtDate(n.vence))})
+        ${ns.map((n) => `<div class="row" style="gap:8px;align-items:center;margin-top:6px;cursor:pointer" data-nota="${esc(cid)}|${esc(n.key)}"><span class="grow">📄 <b>Nota ${esc(n.nota || '—')}</b> · ${usd(n.resta)} de ${usd(n.monto)} · <span class="${n.dias < 0 ? 'warn-txt' : n.dias <= 1 ? 'pay-rev' : 'muted'}">${esc(diasTxt(n.dias))}</span> (${esc(fmtDate(n.vence))})${partesHTML(n)}
           ${n.espera ? '<br><span class="pay-rev">💵 pago subido, esperando a cobranza</span>' : ''}${n.seg ? `<br><span class="muted">📋 ${esc(n.seg.texto)}${n.seg.comentario ? ' — ' + esc(n.seg.comentario) : ''}</span>` : ''}</span><span class="muted">›</span></div>`).join('')}
         ${(() => { const k = credOf(cid); if (k && k.limite > 0 && k.bajaPct > 0) return `<div class="warn-txt" style="font-size:13px;margin-top:6px">Su límite de crédito es ${usd(k.limite)}: con ${k.atrasoMax} días de atraso el sistema sugiere bajarlo a <b>${usd(k.sugerido)}</b> (−${k.bajaPct}%). Mientras más días, más baja.</div>`;
           return ns.some((n) => n.dias < 0) ? '<div class="warn-txt" style="font-size:13px;margin-top:6px">El atraso está afectando su límite de crédito: mientras más días, más baja.</div>' : ''; })()}</div>`; }).join('');
@@ -271,7 +278,7 @@
         <div class="kpi"><small>Atrasado</small><b class="warn-txt">${usd(notas.filter((n) => n.dias < 0).reduce((a, n) => a + n.resta, 0))}</b></div></div>
       <div class="row" style="gap:8px;margin:6px 0"><button class="btn" id="ocXls">⇩ Excel</button></div>
       ${[...bySeller.entries()].map(([name, ns]) => `<h3>${esc(name)} · ${usd(ns.reduce((a, n) => a + n.resta, 0))}</h3><div style="overflow:auto"><table class="inv"><thead><tr><th>Cliente</th><th>Nota</th><th class="n">Saldo</th><th>Vence</th><th>Situación</th><th>Seguimiento</th></tr></thead><tbody>
-        ${ns.map((n) => `<tr><td><b>${esc(n.clientName)}</b></td><td>${esc(n.nota || '—')}</td><td class="n">${usd(n.resta)}</td><td>${esc(fmtDate(n.vence))}</td><td class="${n.dias < 0 ? 'warn-txt' : ''}">${esc(diasTxt(n.dias))}${n.espera ? ' · pago en espera' : ''}</td><td>${n.seg ? esc(n.seg.texto + (n.seg.comentario ? ' — ' + n.seg.comentario : '')) : ''}</td></tr>`).join('')}</tbody></table></div>`).join('') || '<p class="muted">Nadie debe.</p>'}`;
+        ${ns.map((n) => `<tr><td><b>${esc(n.clientName)}</b></td><td>${esc(n.nota || '—')}</td><td class="n">${usd(n.resta)}</td><td>${esc(fmtDate(n.vence))}${partesHTML(n)}</td><td class="${n.dias < 0 ? 'warn-txt' : ''}">${esc(diasTxt(n.dias))}${n.espera ? ' · pago en espera' : ''}</td><td>${n.seg ? esc(n.seg.texto + (n.seg.comentario ? ' — ' + n.seg.comentario : '')) : ''}</td></tr>`).join('')}</tbody></table></div>`).join('') || '<p class="muted">Nadie debe.</p>'}`;
     out.querySelector('#ocXls').onclick = () => global.Exporta.save(`por_cobrar_${r.data.hoy}.xlsx`, [global.Exporta.table({ name: 'Por cobrar', title: 'CUENTAS POR COBRAR', subtitle: 'Al ' + r.data.hoy,
       cols: [{ h: 'VENDEDOR', w: 16 }, { h: 'CLIENTE', w: 32 }, { h: 'NOTA', w: 10 }, { h: 'DESPACHADA', k: 'date', w: 12 }, { h: 'VENCE', k: 'date', w: 12 }, { h: 'DÍAS', k: 'int' }, { h: 'MONTO NOTA', k: 'money', total: true }, { h: 'SALDO', k: 'money', total: true }, { h: 'SEGUIMIENTO', w: 30 }],
       rows: notas.map((n) => [n.sellerName, n.clientName, n.nota, n.despacho, n.vence, n.dias, n.monto, n.resta, n.seg ? n.seg.texto + (n.seg.comentario ? ' — ' + n.seg.comentario : '') : '']) })]);

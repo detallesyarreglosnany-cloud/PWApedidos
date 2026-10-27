@@ -1,6 +1,6 @@
 // Cuentas por cobrar y crédito por cliente (Fases 5 y 6). Lo usan /api/pedidos/pagos y el aviso diario (cron).
 import { db } from '@/lib/db';
-import { credInfo, diffDays, rulesOf, tramos, vzDay, type CredInfo, type CredSetting } from '@/lib/cobranza';
+import { credInfo, diffDays, rulesAt, rulesOf, tramos, vzDay, type CredInfo, type CredSetting } from '@/lib/cobranza';
 import { abonoKey, allocate, noteKey, notaNum, noteStatus, r2, type Pago } from '@/lib/pagos';
 
 const LIVE = ['espera', 'aprobado'];
@@ -65,7 +65,7 @@ export async function cartera(sellerId: string) {
     // Si lo entregado no cuadra con las líneas (redondeos), manda el monto de la nota
     const sum = r2(lines.reduce((a, l) => a + l.monto, 0)); if (sum > 0 && Math.abs(sum - monto) > 0.01) lines.forEach((l) => { l.monto = r2((l.monto * monto) / sum); });
     const nota = notaNum((d && d.newValery) || o.valeryNote), key = noteKey({ nota, orderId: o.id }), ak = abonoKey(canon(String(o.clientId)), { nota, orderId: o.id }), a = ab.get(ak);
-    const tr = tramos(lines, start, R, a ? a.pagado : 0), resta = r2(tr.reduce((q, t) => q + t.resta, 0));
+    const tr = tramos(lines, start, rulesAt(R, start), a ? a.pagado : 0), resta = r2(tr.reduce((q, t) => q + t.resta, 0));
     if (resta <= 0.01) { pagaron.add(String(o.clientId)); cerradas.push({ key: ak, monto, vence: tr[tr.length - 1].vence, x }); continue; }
     conDeuda.add(String(o.clientId));
     const next = tr.find((t) => t.resta > 0.01)!, dias = diffDays(hoy, next.vence);
