@@ -1,9 +1,22 @@
 // Cuentas por cobrar y crédito por cliente (Fases 5 y 6). Lo usan /api/pedidos/pagos y el aviso diario (cron).
 import { db } from '@/lib/db';
 import { credInfo, diffDays, rulesOf, tramos, vzDay, type CredInfo, type CredSetting } from '@/lib/cobranza';
-import { allocate, noteKey, notaNum, noteStatus, r2, type Pago } from '@/lib/pagos';
+import { abonoKey, allocate, noteKey, notaNum, noteStatus, r2, type Pago } from '@/lib/pagos';
 
 const LIVE = ['espera', 'aprobado'];
+
+/**
+ * Fichas de cliente unidas (repetidas): la eliminada guarda mergedInto. canon() da la ficha que quedó, y aliasesOf()
+ * todas las fichas de ese cliente: sus pagos siguen contando aunque se hayan registrado en la ficha vieja.
+ */
+export async function clientAliases() {
+  const rows = await db.$queryRaw<{ id: string; data: string }[]>`SELECT "id", "data" FROM "DistDoc" WHERE "kind" = 'clients' AND "data" LIKE '%"mergedInto"%'`;
+  const to = new Map<string, string>();
+  for (const r of rows) { const m = (JSON.parse(r.data) as { mergedInto?: string }).mergedInto; if (m && m !== r.id) to.set(r.id, String(m)); }
+  const canon = (id: string) => { let x = String(id || ''), n = 0; while (to.has(x) && n++ < 10) x = to.get(x)!; return x; };
+  const aliasesOf = (id: string) => { const c = canon(id); return [c, ...[...to.keys()].filter((k) => k !== c && canon(k) === c)]; };
+  return { canon, aliasesOf };
+}
 const parse = (r: { data: string; createdAt?: Date }) => { const p = JSON.parse(r.data) as Pago; if (r.createdAt && !p.createdAt) p.createdAt = r.createdAt.toISOString(); return p; };
 type Line = { category?: string; cajas?: number; unidades?: number; boxPrice?: number; unitPrice?: number };
 type Ord = { id: string; deleted?: boolean; status?: string; clientId?: string; clientName?: string; sellerId?: string; sellerName?: string; routeDate?: string; valeryNote?: string; dispatchedAt?: string; loadId?: string | null;
@@ -23,9 +36,10 @@ export async function cartera(sellerId: string) {
   const clients = new Map(crows.map((r) => { const c = JSON.parse(r.data) as Cli; return [c.id, c]; }));
   const orows = await db.distDoc.findMany({ where: { kind: 'orders', deleted: false, status: 'despachado', routeDate: { gte: since }, ...(sellerId ? { sellerId } : {}) }, select: { data: true } });
   const orders = orows.map((r) => JSON.parse(r.data) as Ord).filter((o) => !o.deleted && o.clientId && !(o.delivery && o.delivery.at && o.delivery.result === 'anulada'));
-  const clientIds = [...new Set(orders.map((o) => String(o.clientId)))];
+  const { canon, aliasesOf } = await clientAliases();
+  const clientIds = [...new Set(orders.map((o) => canon(String(o.clientId))).flatMap(aliasesOf))];
   const pagos = clientIds.length ? (await db.distPago.findMany({ where: { clientId: { in: clientIds }, status: { in: LIVE } } })).map(parse) : [];
-  const ab = allocate(pagos);
+  const ab = allocate(pagos, canon);
   const segRows = await db.$queryRaw<{ name: string; value: string }[]>`SELECT "name", "value" FROM "DistSetting" WHERE "name" LIKE 'seg:%'`;
   const seg = new Map(segRows.map((r) => [r.name.slice(4), JSON.parse(r.value)]));
   const credRows = await db.$queryRaw<{ name: string; value: string }[]>`SELECT "name", "value" FROM "DistSetting" WHERE "name" LIKE 'cred:%'`;
@@ -46,9 +60,9 @@ export async function cartera(sellerId: string) {
     if (start < R.desde) continue;
     // Si lo entregado no cuadra con las líneas (redondeos), manda el monto de la nota
     const sum = r2(lines.reduce((a, l) => a + l.monto, 0)); if (sum > 0 && Math.abs(sum - monto) > 0.01) lines.forEach((l) => { l.monto = r2((l.monto * monto) / sum); });
-    const nota = notaNum((d && d.newValery) || o.valeryNote), key = noteKey({ nota, orderId: o.id }), a = ab.get(key);
+    const nota = notaNum((d && d.newValery) || o.valeryNote), key = noteKey({ nota, orderId: o.id }), ak = abonoKey(canon(String(o.clientId)), { nota, orderId: o.id }), a = ab.get(ak);
     const tr = tramos(lines, start, R, a ? a.pagado : 0), resta = r2(tr.reduce((q, t) => q + t.resta, 0));
-    if (resta <= 0.01) { pagaron.add(String(o.clientId)); cerradas.push({ key, monto, vence: tr[tr.length - 1].vence, x }); continue; }
+    if (resta <= 0.01) { pagaron.add(String(o.clientId)); cerradas.push({ key: ak, monto, vence: tr[tr.length - 1].vence, x }); continue; }
     conDeuda.add(String(o.clientId));
     const next = tr.find((t) => t.resta > 0.01)!, dias = diffDays(hoy, next.vence);
     x.deuda += resta; if (dias < 0) { x.vencido += tr.filter((t) => t.vence < hoy).reduce((q, t) => q + t.resta, 0); x.atrasoMax = Math.max(x.atrasoMax, -dias); }
@@ -63,7 +77,7 @@ export async function cartera(sellerId: string) {
       let left = r2(p.pagado + p.ajustes);
       p.notas.forEach((n, i) => {
         const take = r2(i === p.notas.length - 1 ? left : Math.min(left, n.monto)); left = r2(left - take);
-        const k = noteKey(n), m = montoOf.get(k); if (m === undefined || done.has(k)) return;
+        const k = abonoKey(canon(p.clientId), n), m = montoOf.get(k); if (m === undefined || done.has(k)) return;
         const c = r2((cum.get(k) || 0) + take); cum.set(k, c); if (c >= m - 0.01) done.set(k, p.date);
       });
     }

@@ -1787,7 +1787,7 @@
     if (o.deleted || (!d && o.status !== 'despachado') || (d && d.result === 'anulada')) return '';
     const monto = d ? +d.monto || 0 : Matrix.orderTotals(o).monto; if (!(monto > 0)) return '';
     const nota = String((d && d.newValery) || o.valeryNote || '').replace(/\D/g, '');
-    return `<div class="pay-st muted" data-paynota="${esc(nota)}" data-payoid="${esc(o.id)}" data-paymonto="${monto}">💵 ${nota ? 'Nota ' + esc(nota) + ' · ' : ''}${navigator.onLine ? 'consultando el pago…' : 'estado del pago: sin internet'}</div>`;
+    return `<div class="pay-st muted" data-paynota="${esc(nota)}" data-payoid="${esc(o.id)}" data-paycid="${esc(o.clientId || '')}" data-paymonto="${monto}">💵 ${nota ? 'Nota ' + esc(nota) + ' · ' : ''}${navigator.onLine ? 'consultando el pago…' : 'estado del pago: sin internet'}</div>`;
   }
   function myOrderSheet(o) {
     if (!o) return;

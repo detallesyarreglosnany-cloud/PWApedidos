@@ -330,10 +330,10 @@
     const els = [...(root || document).querySelectorAll('[data-paymonto]')].filter((el) => !el.dataset.payDone);
     if (!els.length || !navigator.onLine) return;
     els.forEach((el) => { el.dataset.payDone = '1'; });
-    const notas = els.map((el) => ({ nota: el.dataset.paynota || '', orderId: el.dataset.payoid || '', monto: +el.dataset.paymonto || 0 }));
+    const notas = els.map((el) => ({ nota: el.dataset.paynota || '', orderId: el.dataset.payoid || '', clientId: el.dataset.paycid || '', monto: +el.dataset.paymonto || 0 }));
     const r = await global.Sync.pagosCall({ action: 'estado', notas });
     if (!r.ok) return;
-    els.forEach((el, i) => { const x = r.data.byKey[nkey(notas[i].nota, notas[i].orderId)]; if (!x || !el.isConnected) return;
+    els.forEach((el, i) => { const x = (r.data.byIdx && r.data.byIdx[i]) || r.data.byKey[nkey(notas[i].nota, notas[i].orderId)]; if (!x || !el.isConnected) return;
       el.className = 'pay-st ' + (EST[x.estado] || 'muted'); el.textContent = `💵 ${notas[i].nota ? 'Nota ' + notas[i].nota + ' · ' : ''}${x.texto}`; });
   }
 
@@ -456,7 +456,7 @@
         <label class="field"><span>Vendedor</span><select id="pfSel" class="select"><option value="">Todos</option>${S.sellers.filter((s) => s.active !== false).map((s) => `<option value="${esc(s.id)}" ${s.id === st.seller ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>
         <label class="field"><span>Estado</span><select id="pfSt" class="select">${[['', 'Todos'], ['espera', 'En espera de cobranza'], ['aprobado', 'Aprobados'], ['rechazado', 'Rechazados'], ['anulado', 'Anulados']].map(([k, l]) => `<option value="${k}" ${k === st.status ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         <button class="btn btn-primary" id="pfGo">Consultar</button></div>
-        <div class="row wrap" style="gap:8px;margin-top:10px"><button class="btn" id="pfAnt">🗂 Pago anterior (FileMaker)</button><button class="btn" id="pfImp">⇩ Importar pagos de FileMaker (Excel/CSV)</button><button class="btn" id="pfCart">📅 Cuentas por cobrar</button><button class="btn" id="pfCred">🚦 Crédito de clientes</button></div></div>
+        <div class="row wrap" style="gap:8px;margin-top:10px"><button class="btn" id="pfAnt">🗂 Pago anterior (FileMaker)</button><button class="btn" id="pfImp">⇩ Importar pagos de FileMaker (Excel/CSV)</button><button class="btn" id="pfCart">📅 Cuentas por cobrar</button><button class="btn" id="pfCred">🚦 Crédito de clientes</button><button class="btn" id="pfInt">🛡 Revisión de integridad</button></div></div>
       <div id="pfOut" style="margin-top:12px"><p class="muted">Cargando…</p></div>`;
     const q = (id) => root.querySelector(id);
     const load = async () => {
@@ -496,7 +496,26 @@
     q('#pfImp').onclick = () => importSheet(load);
     q('#pfCart').onclick = () => { if (global.Cobranza) global.Cobranza.officeSheet(); };
     q('#pfCred').onclick = () => { if (global.Cobranza) global.Cobranza.creditSheet(); };
+    q('#pfInt').onclick = () => integridadSheet();
     load();
+  }
+
+  /* ======================= Revisión de integridad (solo lectura) ======================= */
+  async function integridadSheet() {
+    const P = PV(), { esc, usd, fmtDate, openSheet } = P;
+    const sh = openSheet(`<div class="row"><h2 class="grow">🛡 Revisión de integridad de pagos</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <p class="muted">Revisa todos los pagos en espera y aprobados. No cambia nada: muestra lo que hay que corregir (rechazar, anular o volver a registrar en la cuenta correcta).</p><div id="inOut"><p class="muted">Revisando…</p></div>`, { wide: true });
+    const r = await global.Sync.pagosCall({ action: 'integridad' }), out = sh.el.querySelector('#inOut');
+    if (!r.ok) { out.innerHTML = `<div class="hint warn">${esc(r.error || 'No se pudo revisar')}</div>`; return; }
+    const d = r.data, secs = [['cruzados', '🔀 Pagos que abonan la nota de OTRO cliente', 'Rechaza o anula el pago y regístralo en la cuenta del cliente correcto.'],
+      ['refs', '🔁 Referencias repetidas o sin reservar', 'Verifica el comprobante: una referencia solo puede estar en un pago.'],
+      ['sobre', '➕ Notas con más abonado que su monto', 'Revisa si el pago se registró dos veces o si sobró dinero (saldo a favor).'],
+      ['ajenos', '👥 Pagos registrados por un vendedor que no es el del cliente', 'Puede ser correcto (cliente cambiado de cartera); confírmalo.']];
+    const total = secs.reduce((a, [k]) => a + d[k].length, 0);
+    out.innerHTML = `<div class="hint ${total ? 'warn' : ''}">${total ? `⚠ <b>${total}</b> caso${total === 1 ? '' : 's'} para revisar` : '✅ <b>Todo en orden</b>: ningún pago mezclado ni referencia repetida'} · ${d.revisados} pagos revisados</div>
+      ${secs.map(([k, t, tip]) => d[k].length ? `<h3>${t} <span class="muted">(${d[k].length})</span></h3><p class="muted" style="margin-top:0">${tip}</p>
+        <div style="overflow:auto"><table class="inv"><thead><tr><th>Fecha</th><th>Cliente del pago</th><th>Vendedor</th><th class="n">Monto</th><th>Estado</th><th>Detalle</th></tr></thead><tbody>
+        ${d[k].map((x) => `<tr><td>${esc(fmtDate(x.date))}</td><td><b>${esc(x.clientName)}</b></td><td>${esc(x.sellerName || '—')}</td><td class="n">${usd(x.monto)}</td><td>${esc((ST[x.status] || [x.status])[0])}</td><td>${esc(x.detalle)}</td></tr>`).join('')}</tbody></table></div>` : '').join('')}`;
   }
 
   /* ======================= Pago anterior (ya está en FileMaker) ======================= */
@@ -705,16 +724,17 @@
       const ready = rows.filter((x) => !x.issues.length);
       if (!confirm(`¿Importar ${ready.length} pagos de FileMaker? Quedan confirmados.`)) return;
       e.target.disabled = true;
-      const res = { creados: 0, repetidos: 0, conciliados: 0, errores: [] };
+      const res = { creados: 0, repetidos: 0, conciliados: 0, errores: [], conflictos: [] };
       for (let i = 0; i < ready.length; i += 200) {
         const r = await global.Sync.pagosCall({ action: 'importar', rows: ready.slice(i, i + 200).map((x) => ({ fila: x.fila, date: x.date, clientId: x.clientId, clientName: x.clientName, sellerId: x.sellerId, sellerName: x.sellerName, nota: x.nota, orderId: x.orderId,
           montoNota: x.montoNota, method: x.method, bank: x.bank, ref: x.ref, amount: x.amount, rate: x.rate, usd: x.usd, key: x.key, info: 'FileMaker' })) });
         if (!r.ok) { toast(r.error || 'No se pudo importar', 'err'); break; }
-        ['creados', 'repetidos', 'conciliados'].forEach((k) => { res[k] += r.data[k] || 0; }); res.errores.push(...(r.data.errores || []));
+        ['creados', 'repetidos', 'conciliados'].forEach((k) => { res[k] += r.data[k] || 0; }); res.errores.push(...(r.data.errores || [])); res.conflictos.push(...(r.data.conflictos || []));
       }
       out.innerHTML = `<div class="hint">✓ Importación terminada: <b>${res.creados}</b> pagos nuevos · <b>${res.conciliados}</b> pagos de vendedores aprobados por coincidir la referencia · <b>${res.repetidos}</b> ya estaban.
-        ${res.errores.length ? `<br><span class="warn-txt">${esc(res.errores.slice(0, 10).join(' · '))}</span>` : ''}</div>`;
-      P.logEvent('pagos_importados', `Importó pagos de FileMaker: ${res.creados} nuevos, ${res.conciliados} conciliados, ${res.repetidos} repetidos`);
+        ${res.errores.length ? `<br><span class="warn-txt">${esc(res.errores.slice(0, 10).join(' · '))}</span>` : ''}</div>
+        ${res.conflictos.length ? `<div class="hint warn">⚠ <b>${res.conflictos.length} referencia${res.conflictos.length === 1 ? '' : 's'} en conflicto</b> (ya usadas por otro cliente o con otro monto). No se aprobó ni se creó nada con ellas:<br>${res.conflictos.slice(0, 30).map(esc).join('<br>')}</div>` : ''}`;
+      P.logEvent('pagos_importados', `Importó pagos de FileMaker: ${res.creados} nuevos, ${res.conciliados} conciliados, ${res.repetidos} repetidos${res.conflictos.length ? ', ' + res.conflictos.length + ' en conflicto' : ''}`);
       if (onDone) onDone();
     });
     sh.el.querySelector('#imFile').onclick = async () => {

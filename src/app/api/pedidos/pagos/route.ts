@@ -4,10 +4,10 @@ import { db } from '@/lib/db';
 import { isAdminReq, isSupervisorReq, requireAdmin, syncOk } from '@/lib/keys';
 import { sellerAccessOk } from '@/lib/pin';
 import { SEGUIMIENTO, type CredSetting } from '@/lib/cobranza';
-import { cartera } from '@/lib/cartera';
+import { cartera, clientAliases } from '@/lib/cartera';
 import { sendPush } from '@/lib/push';
 import { createHash } from 'crypto';
-import { METHODS, allocate, cleanPago, normRef, noteKey, notaNum, noteStatus, r2, type Pago } from '@/lib/pagos';
+import { METHODS, abonoKey, allocate, cleanPago, normRef, noteKey, notaNum, noteStatus, r2, type Pago } from '@/lib/pagos';
 
 // Pagos de clientes (Fase 4 · cobranza).
 // POST /api/pedidos/pagos
@@ -21,6 +21,7 @@ import { METHODS, allocate, cleanPago, normRef, noteKey, notaNum, noteStatus, r2
 //     { action: 'cartera', sellerId? }            → { notas, alDia, hoy }  cuentas por cobrar con vencimientos (sin sellerId: todos, solo oficina)
 //     { action: 'creditos', sellerId? }           → { clientes }  récord y crédito de cada cliente (oficina o supervisor)
 //     { action: 'credito', clientId, modo, limite, nota } → { ok }  cobranza fija contado/crédito y límite (solo oficina)
+//     { action: 'integridad' }                    → { cruzados, ajenos, refs, sobre }  revisión de solo lectura (oficina o supervisor)
 //     { action: 'importCobro', rows }             → { added }  restaurar crédito y seguimientos de un respaldo
 //     { action: 'seguir', sellerId, clientId, key, nota, estado, comentario } → { ok }  seguimiento de cobro (le llega a la oficina)
 //   Oficina / supervisor (lectura):
@@ -49,9 +50,13 @@ function dateWhere(body: Record<string, unknown>) {
   return body.by === 'subido' ? { createdAt: vzRange(body.from, body.to) } : { date: { gte: body.from, lte: body.to } };
 }
 
+/** Otro usuario cambió el pago mientras tanto: no se aplica (gana el primero). */
+class StalePago extends Error {}
+/** Cambia el estado solo si el pago sigue como se leyó (aprobar y rechazar a la vez: gana el primero). */
 async function setStatus(p: Pago, status: string, review: Pago['review'], tx: Prisma.TransactionClient) {
   const next = { ...p, status, review };
-  await tx.distPago.update({ where: { id: p.id }, data: { status, data: JSON.stringify(next) } });
+  const n = await tx.distPago.updateMany({ where: { id: p.id, status: p.status }, data: { status, data: JSON.stringify(next) } });
+  if (n.count !== 1) throw new StalePago();
   return next;
 }
 async function conflictOf(ref: string) {
@@ -59,6 +64,48 @@ async function conflictOf(ref: string) {
   const p = r ? await db.distPago.findUnique({ where: { id: r.pagoId } }) : null;
   const x = p ? parse(p) : null;
   return x ? { ref, pagoId: x.id, clientName: x.clientName, sellerName: x.sellerName, date: x.date, status: x.status } : { ref };
+}
+
+type OrdLite = { id: string; deleted?: boolean; clientId?: string; clientName?: string; sellerId?: string; sellerName?: string; valeryNote?: string; delivery?: { newValery?: string } | null };
+const normName = (v: unknown) => String(v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+const isRealOrder = (id: string) => !!id && !id.startsWith('manual:') && !id.startsWith('fm:');
+/** Pedidos de la plataforma con alguno de esos números de nota (Valery o la nota nueva de la liquidación). */
+async function ordersByNota(nums: string[]) {
+  if (!nums.length) return [] as OrdLite[];
+  const rows = await db.$queryRaw<{ data: string }[]>`
+    SELECT "data" FROM "DistDoc" WHERE "kind" = 'orders' AND "deleted" = false
+      AND (regexp_replace(regexp_replace(COALESCE("data"::jsonb ->> 'valeryNote', ''), '\D', '', 'g'), '^0+(?=\d)', '') = ANY(${nums})
+        OR regexp_replace(regexp_replace(COALESCE("data"::jsonb -> 'delivery' ->> 'newValery', ''), '\D', '', 'g'), '^0+(?=\d)', '') = ANY(${nums}))`;
+  return rows.map((r) => JSON.parse(r.data) as OrdLite);
+}
+const notaOf = (o: OrdLite) => notaNum((o.delivery && o.delivery.newValery) || o.valeryNote);
+const otherMsg = (nota: string, o: OrdLite, clientName: string) => normName(o.clientName) === normName(clientName)
+  ? `La nota ${nota} está en otra ficha del mismo cliente (${o.clientName}${o.sellerName ? ', cartera de ' + o.sellerName : ''}). Registra el pago desde esa ficha o pide a la oficina que una las fichas.`
+  : `La nota ${nota} es de ${o.clientName || 'otro cliente'}, no de ${clientName}. Revisa el número de nota.`;
+/**
+ * Integridad de un pago: cada nota es del cliente del pago (por pedido o por número) y, si lo registra un
+ * vendedor, el cliente es de su cartera o las notas son de pedidos suyos. Devuelve el error o null.
+ */
+async function checkPago(p: { clientId: string; clientName: string; sellerId: string; notas: { orderId: string; nota: string }[] }, isAdmin: boolean) {
+  const { canon } = await clientAliases(), me = canon(p.clientId), same = (o: OrdLite) => canon(String(o.clientId)) === me;
+  const realIds = [...new Set(p.notas.map((n) => n.orderId).filter(isRealOrder))];
+  const rows = realIds.length ? await db.distDoc.findMany({ where: { kind: 'orders', id: { in: realIds } }, select: { data: true } }) : [];
+  const byId = new Map(rows.map((r) => { const o = JSON.parse(r.data) as OrdLite; return [o.id, o]; }));
+  for (const n of p.notas) {
+    if (!isRealOrder(n.orderId)) continue;
+    const o = byId.get(n.orderId);
+    if (!o || o.deleted) return `La nota ${n.nota || ''} ya no existe en la plataforma (pedido eliminado). Actualiza la app y vuelve a elegirla.`;
+    if (!same(o)) return otherMsg(n.nota || notaOf(o), o, p.clientName);
+  }
+  const nums = [...new Set(p.notas.filter((n) => !isRealOrder(n.orderId)).map((n) => notaNum(n.nota)).filter(Boolean))];
+  for (const o of await ordersByNota(nums)) if (!same(o)) return otherMsg(notaOf(o), o, p.clientName);
+  if (!isAdmin) {
+    const cRow = await db.distDoc.findUnique({ where: { kind_id: { kind: 'clients', id: p.clientId } }, select: { data: true } });
+    const c = cRow ? (JSON.parse(cRow.data) as { sellerId?: string; name?: string }) : null;
+    const suyos = realIds.length > 0 && realIds.every((id) => String((byId.get(id) || {}).sellerId || '') === p.sellerId);
+    if (c && c.sellerId && c.sellerId !== p.sellerId && !suyos) return `${c.name || p.clientName} es cliente de otro vendedor: su pago lo registra su vendedor o la oficina.`;
+  }
+  return null;
 }
 
 export async function POST(req: NextRequest) {
@@ -72,6 +119,10 @@ export async function POST(req: NextRequest) {
       if (typeof p === 'string') return NextResponse.json({ error: p }, { status: 400 });
       if (!isAdmin && !(await sellerAccessOk(req, p.sellerId))) return NextResponse.json({ error: 'PIN', pin: true }, { status: 401 });
       if (isAdmin && !p.by) p.by = 'Oficina';
+      const existing0 = await db.distPago.findUnique({ where: { id: p.id } });
+      if (existing0) return NextResponse.json({ pago: parse(existing0) }); // reintento: ya estaba guardado
+      const bad = await checkPago(p, isAdmin);
+      if (bad) return NextResponse.json({ error: bad }, { status: 422 });
       // Pago anterior (ya está en FileMaker): si lo registra la oficina queda confirmado; si es el vendedor, la oficina lo confirma
       if (p.origen === 'anterior' && isAdmin) { p.status = 'aprobado'; p.review = { by: p.by || 'Oficina', at: new Date().toISOString(), motivo: 'Pago anterior registrado por la oficina' }; }
       const existing = await db.distPago.findUnique({ where: { id: p.id } });
@@ -154,7 +205,9 @@ export async function POST(req: NextRequest) {
         const n: Nota = { key: noteKey({ nota, orderId: o.id }), nota, orderId: o.id, date: String((d && d.date) || o.routeDate || ''), monto, liquidado: !!d, hoja: loadLabel.get(String((d && d.loadId) || o.loadId || '')) || '', manual: false };
         notas.set(n.key, n);
       }
-      const prows = await db.distPago.findMany({ where: { clientId, status: { in: ['espera', 'aprobado'] } } });
+      // También los pagos registrados en fichas repetidas que ya se unieron a esta
+      const { canon, aliasesOf } = await clientAliases();
+      const prows = await db.distPago.findMany({ where: { clientId: { in: aliasesOf(clientId) }, status: { in: ['espera', 'aprobado'] } } });
       const pagos = prows.map(parse);
       // Notas agregadas a mano (de antes de la plataforma): quedan en la cuenta del cliente
       for (const p of pagos) for (const n of p.notas) {
@@ -163,23 +216,74 @@ export async function POST(req: NextRequest) {
       }
       // Lo que vale de una nota a mano es lo que se dijo la primera vez (el mayor monto registrado)
       for (const p of pagos) for (const n of p.notas) { const x = notas.get(noteKey(n)); if (x && x.manual && n.monto > x.monto) x.monto = n.monto; }
-      const ab = allocate(pagos);
-      const list = [...notas.values()].map((n) => { const a = ab.get(n.key); return { ...n, pagado: a ? a.pagado : 0, aprobado: a ? a.aprobado : 0, espera: a ? a.espera : 0, ...noteStatus(n.monto, a) }; })
+      const ab = allocate(pagos, canon);
+      const list = [...notas.values()].map((n) => { const a = ab.get(`${canon(clientId)}|${n.key}`); return { ...n, pagado: a ? a.pagado : 0, aprobado: a ? a.aprobado : 0, espera: a ? a.espera : 0, ...noteStatus(n.monto, a) }; })
         .sort((a, b) => (a.estado === 'pagada' ? 1 : 0) - (b.estado === 'pagada' ? 1 : 0) || String(b.date).localeCompare(String(a.date)));
       return NextResponse.json({ notas: list, deuda: r2(list.reduce((a, n) => a + n.resta, 0)), enEspera: r2(list.reduce((a, n) => a + n.espera, 0)) }, { headers: NO_STORE });
     }
 
     if (action === 'estado') {
-      const want = (Array.isArray(body.notas) ? body.notas : []).slice(0, 300).map((x) => { const o = (x && typeof x === 'object' ? x : {}) as Record<string, unknown>; return { nota: notaNum(o.nota), orderId: str(o.orderId, 120), monto: r2(Number(o.monto) || 0) }; });
-      if (!want.length) return NextResponse.json({ byKey: {} });
-      const nums = want.map((w) => w.nota).filter(Boolean), oids = want.map((w) => w.orderId).filter(Boolean);
-      const rows = await db.$queryRaw<{ data: string }[]>`
-        SELECT "data" FROM "DistPago" WHERE "status" IN ('espera', 'aprobado')
-          AND EXISTS (SELECT 1 FROM jsonb_array_elements("data"::jsonb -> 'notas') n WHERE regexp_replace(regexp_replace(COALESCE(n ->> 'nota', ''), '\D', '', 'g'), '^0+(?=\d)', '') = ANY(${nums}) OR n ->> 'orderId' = ANY(${oids}))`;
-      const ab = allocate(rows.map(parse));
-      const byKey: Record<string, unknown> = {};
-      for (const w of want) { const k = noteKey(w); const a = ab.get(k); byKey[k] = { pagado: a ? a.pagado : 0, aprobado: a ? a.aprobado : 0, ...noteStatus(w.monto, a) }; }
-      return NextResponse.json({ byKey }, { headers: NO_STORE });
+      const want = (Array.isArray(body.notas) ? body.notas : []).slice(0, 300).map((x) => { const o = (x && typeof x === 'object' ? x : {}) as Record<string, unknown>; return { nota: notaNum(o.nota), orderId: str(o.orderId, 120), monto: r2(Number(o.monto) || 0), clientId: str(o.clientId, 120) }; });
+      if (!want.length) return NextResponse.json({ byKey: {}, byIdx: [] });
+      // Cada nota se mira en la cuenta de SU cliente (versiones viejas de la app no lo mandan: se toma del pedido)
+      const noCli = [...new Set(want.filter((w) => !w.clientId && w.orderId).map((w) => w.orderId))];
+      if (noCli.length) {
+        const orows = await db.distDoc.findMany({ where: { kind: 'orders', id: { in: noCli } }, select: { id: true, data: true } });
+        const cOf = new Map(orows.map((r) => [r.id, String((JSON.parse(r.data) as { clientId?: string }).clientId || '')]));
+        want.forEach((w) => { if (!w.clientId) w.clientId = cOf.get(w.orderId) || ''; });
+      }
+      const { canon, aliasesOf } = await clientAliases();
+      want.forEach((w) => { if (w.clientId) w.clientId = canon(w.clientId); });
+      const nums = want.map((w) => w.nota).filter(Boolean), oids = want.map((w) => w.orderId).filter(Boolean), cids = [...new Set(want.map((w) => w.clientId).filter(Boolean).flatMap(aliasesOf))];
+      const rows = cids.length ? await db.$queryRaw<{ data: string }[]>`
+        SELECT "data" FROM "DistPago" WHERE "status" IN ('espera', 'aprobado') AND "clientId" = ANY(${cids})
+          AND EXISTS (SELECT 1 FROM jsonb_array_elements("data"::jsonb -> 'notas') n WHERE regexp_replace(regexp_replace(COALESCE(n ->> 'nota', ''), '\D', '', 'g'), '^0+(?=\d)', '') = ANY(${nums}) OR n ->> 'orderId' = ANY(${oids}))` : [];
+      const ab = allocate(rows.map(parse), canon);
+      const byKey: Record<string, unknown> = {}, byIdx: unknown[] = [];
+      for (const w of want) { const a = w.clientId ? ab.get(abonoKey(w.clientId, w)) : undefined; const x = { pagado: a ? a.pagado : 0, aprobado: a ? a.aprobado : 0, ...noteStatus(w.monto, a) }; byKey[noteKey(w)] = x; byIdx.push(x); }
+      return NextResponse.json({ byKey, byIdx }, { headers: NO_STORE });
+    }
+
+    if (action === 'integridad') {
+      // Revisión de solo lectura: pagos vivos (en espera o aprobados) que abonan notas de otro cliente, de clientes de otro
+      // vendedor, referencias sin reservar o usadas por dos pagos, y notas con más abonado que su monto.
+      if (!isReader) return NextResponse.json({ error: 'Solo oficina o supervisor' }, { status: 401 });
+      const pagos = (await db.distPago.findMany({ where: { status: { in: LIVE } } })).map(parse), { canon } = await clientAliases();
+      const orows = await db.distDoc.findMany({ where: { kind: 'orders', deleted: false, status: 'despachado' }, select: { data: true } });
+      const orders = orows.map((r) => JSON.parse(r.data) as OrdLite & { delivery?: { newValery?: string; monto?: number; at?: string; result?: string } | null; lines?: Record<string, { cajas?: number; unidades?: number; boxPrice?: number; unitPrice?: number }> });
+      const byId = new Map(orders.map((o) => [o.id, o])), byNota = new Map<string, OrdLite[]>();
+      orders.forEach((o) => { const k = notaOf(o); if (k) byNota.set(k, (byNota.get(k) || []).concat(o)); });
+      const crows = await db.distDoc.findMany({ where: { kind: 'clients', deleted: false }, select: { id: true, data: true } });
+      const cliSeller = new Map(crows.map((r) => [r.id, String((JSON.parse(r.data) as { sellerId?: string }).sellerId || '')]));
+      const refRows = await db.distPagoRef.findMany();
+      const refOf = new Map(refRows.map((r) => [r.ref, r.pagoId]));
+      type Item = { pagoId: string; date: string; status: string; clientName: string; sellerName: string; monto: number; detalle: string };
+      const item = (p: Pago, detalle: string): Item => ({ pagoId: p.id, date: p.date, status: p.status, clientName: p.clientName, sellerName: p.sellerName, monto: r2(p.pagado + p.ajustes), detalle });
+      const cruzados: Item[] = [], ajenos: Item[] = [], refs: Item[] = [];
+      for (const p of pagos) {
+        for (const n of p.notas) {
+          const o = isRealOrder(n.orderId) ? byId.get(n.orderId) : null;
+          const ajeno = o ? (canon(String(o.clientId)) !== canon(p.clientId) ? o : null) : (byNota.get(notaNum(n.nota)) || []).find((x) => canon(String(x.clientId)) !== canon(p.clientId)) || null;
+          if (ajeno) cruzados.push(item(p, otherMsg(n.nota || notaOf(ajeno), ajeno, p.clientName)));
+        }
+        const cs = cliSeller.get(canon(p.clientId));
+        const suyos = p.notas.some((n) => isRealOrder(n.orderId) && String((byId.get(n.orderId) || {}).sellerId || '') === p.sellerId);
+        if (p.origen === 'app' && cs && cs !== p.sellerId && !suyos) ajenos.push(item(p, `Lo registró ${p.sellerName || 'otro vendedor'}, pero el cliente es de otra cartera`));
+        for (const l of p.lines) if (l.ref) {
+          const owner = refOf.get(l.ref);
+          if (!owner) refs.push(item(p, `La referencia ${l.ref} (${l.bank || l.method}) no está reservada: otro pago podría repetirla`));
+          else if (owner !== p.id) { const q = pagos.find((x) => x.id === owner); refs.push(item(p, `La referencia ${l.ref} también está en el pago de ${q ? q.clientName + ' (' + q.date + ')' : 'otro registro'}`)); }
+        }
+      }
+      // Notas con más abonado que su monto (por cliente)
+      const ab = allocate(pagos, canon), sobre: Item[] = [];
+      for (const o of orders) {
+        const d = o.delivery && o.delivery.at ? o.delivery : null; if (d && d.result === 'anulada') continue;
+        const monto = d ? r2(Number(d.monto) || 0) : r2(Object.values(o.lines || {}).reduce((a, l) => a + (Number(l.cajas) || 0) * (Number(l.boxPrice) || 0) + (Number(l.unidades) || 0) * (Number(l.unitPrice) || 0), 0));
+        const a = ab.get(abonoKey(canon(String(o.clientId)), { nota: notaOf(o), orderId: o.id }));
+        if (a && monto > 0 && a.pagado > monto + 0.01) { const p = pagos.find((x) => x.id === a.pagos[a.pagos.length - 1]); if (p) sobre.push({ ...item(p, `Nota ${notaOf(o) || '—'} de $${monto.toFixed(2)} tiene abonado $${a.pagado.toFixed(2)} (sobran $${(a.pagado - monto).toFixed(2)})`), clientName: String(o.clientName || p.clientName) }); }
+      }
+      return NextResponse.json({ revisados: pagos.length, cruzados, ajenos, refs, sobre }, { headers: NO_STORE });
     }
 
     if (action === 'cartera') {
@@ -275,8 +379,13 @@ export async function POST(req: NextRequest) {
         // Pagos que ya cargó cobranza en FileMaker. Cada fila trae su llave (fecha|cliente|nota|monto|referencia): volver a
         // importar el mismo archivo no duplica. Si un pago subido por el vendedor tiene la misma referencia y sigue en espera,
         // queda aprobado (cobranza ya lo cargó en FileMaker) en vez de crear otro.
-        const res = { creados: 0, repetidos: 0, conciliados: 0, errores: [] as string[] };
+        const res = { creados: 0, repetidos: 0, conciliados: 0, errores: [] as string[], conflictos: [] as string[] };
         const rows = (Array.isArray(body.rows) ? body.rows : []).slice(0, 2000);
+        // Dueño de cada número de nota (una sola consulta para todo el archivo)
+        const owners = new Map<string, OrdLite[]>(), { canon } = await clientAliases();
+        for (const o of await ordersByNota([...new Set(rows.map((x) => notaNum((x as Record<string, unknown> | null)?.nota)).filter(Boolean))])) {
+          const k = notaOf(o); owners.set(k, (owners.get(k) || []).concat(o));
+        }
         for (const raw of rows) {
           const x = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
           const fila = String(x.fila || '');
@@ -285,14 +394,24 @@ export async function POST(req: NextRequest) {
           if (!isDay(date) || !clientId || !(usd > 0)) { res.errores.push(`Fila ${fila}: falta fecha, cliente o monto`); continue; }
           const id = 'fm' + createHash('sha1').update([date, clientId, nota, usd.toFixed(2), ref, str(x.key, 200)].join('|')).digest('hex').slice(0, 24);
           if (await db.distPago.findUnique({ where: { id } })) { res.repetidos++; continue; }
+          // La nota tiene que ser de ese cliente (si existe en la plataforma)
+          if (nota) { const ajeno = (owners.get(nota) || []).find((o) => canon(String(o.clientId)) !== canon(clientId)); if (ajeno) { res.errores.push(`Fila ${fila}: ${otherMsg(nota, ajeno, clientName)}`); continue; } }
           if (ref && ref.length >= 4) {
             const used = await db.distPagoRef.findUnique({ where: { ref } });
             if (used) {
               const other = await db.distPago.findUnique({ where: { id: used.pagoId } });
               const op = other ? parse(other) : null;
-              if (op && op.status === 'espera' && op.origen !== 'filemaker') {
-                await db.$transaction(async (tx) => { await setStatus(op, 'aprobado', { by: 'FileMaker', at: new Date().toISOString(), motivo: 'Conciliado con FileMaker (misma referencia)' }, tx); });
-                res.conciliados++;
+              if (op && op.origen === 'filemaker') { res.repetidos++; continue; }
+              // Solo se concilia si es el mismo cliente y el mismo monto (±2 % o $1): si no, cobranza lo revisa
+              const ln = op ? op.lines.find((l) => l.ref === ref) : null, tol = Math.max(1, usd * 0.02);
+              const mismo = !!op && canon(op.clientId) === canon(clientId) && !!ln && Math.abs(ln.usd - usd) <= tol;
+              if (!op || !mismo) {
+                res.conflictos.push(`Fila ${fila}: la referencia ${ref} ya está en un pago de ${op ? `${op.clientName} (${op.sellerName || 'oficina'}, ${op.date}, $${ln ? ln.usd.toFixed(2) : (op.pagado + op.ajustes).toFixed(2)})` : 'otro registro'}${op && canon(op.clientId) !== canon(clientId) ? ', otro cliente' : op ? ', otro monto' : ''}. No se aprobó nada: revísalo.`);
+                continue;
+              }
+              if (op.status === 'espera') {
+                try { await db.$transaction(async (tx) => { await setStatus(op, 'aprobado', { by: 'FileMaker', at: new Date().toISOString(), motivo: 'Conciliado con FileMaker (misma referencia, cliente y monto)' }, tx); }); res.conciliados++; }
+                catch (e) { if (e instanceof StalePago) res.repetidos++; else throw e; }
               } else res.repetidos++;
               continue;
             }
@@ -319,15 +438,16 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(res);
       }
       if (action === 'import') {
-        let added = 0;
+        let added = 0; const refConflicts: string[] = [];
         for (const raw of (Array.isArray(body.pagos) ? body.pagos : []).slice(0, 20000)) {
           const p = raw as Pago;
           if (!p || typeof p.id !== 'string' || await db.distPago.findUnique({ where: { id: p.id } })) continue;
           await db.distPago.create({ data: { id: p.id, date: String(p.date), sellerId: String(p.sellerId), clientId: String(p.clientId), status: String(p.status), data: JSON.stringify(p) } });
-          if (LIVE.includes(String(p.status))) for (const l of p.lines || []) if (l.ref) await db.distPagoRef.create({ data: { ref: l.ref, pagoId: p.id } }).catch(() => null);
+          if (LIVE.includes(String(p.status))) for (const l of p.lines || []) if (l.ref) await db.distPagoRef.create({ data: { ref: l.ref, pagoId: p.id } }).catch(() => { refConflicts.push(l.ref); });
           added++;
         }
-        return NextResponse.json({ added });
+        if (refConflicts.length) console.warn('[pagos import] referencias en conflicto', refConflicts);
+        return NextResponse.json({ added, refConflicts });
       }
       const id = str(body.id, 80);
       const row = await db.distPago.findUnique({ where: { id } });
@@ -360,6 +480,7 @@ export async function POST(req: NextRequest) {
     }
     return NextResponse.json({ error: 'Acción inválida' }, { status: 400 });
   } catch (error) {
+    if (error instanceof StalePago) return NextResponse.json({ error: 'Otra persona acaba de cambiar este pago. Actualiza la lista para ver cómo quedó.' }, { status: 409 });
     console.error('[pedidos/pagos]', error);
     return NextResponse.json({ error: 'No se pudo completar' }, { status: 500 });
   }
