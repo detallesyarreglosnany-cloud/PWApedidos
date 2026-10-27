@@ -19,6 +19,8 @@ export const STATUSES = ['espera', 'aprobado', 'rechazado', 'anulado'] as const;
 export const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 const num = (v: unknown) => { const n = Number(v); return Number.isFinite(n) ? n : NaN; };
 const str = (v: unknown, max: number) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+/** Una referencia se escribe completa: mínimo 6 caracteres (evita choques entre bancos con los últimos 4 dígitos). */
+export const REF_MIN = 6;
 export const normRef = (v: unknown) => String(v ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^0+(?=[0-9])/, '');
 const isDay = (s: unknown): s is string => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s));
 
@@ -61,7 +63,7 @@ export function cleanPago(raw: Record<string, unknown>): Pago | string {
     const amount = r2(num(x.amount));
     if (!(amount > 0) || amount > 1e12) return `Monto inválido en ${m.label}`;
     const ref = m.ref ? normRef(x.ref) : '';
-    if (m.ref && ref.length < 4) return `${m.label}: escribe el número de referencia (mínimo 4 caracteres)`;
+    if (m.ref && ref.length < REF_MIN) return `${m.label}: escribe la referencia completa (mínimo ${REF_MIN} dígitos), no solo los últimos números`;
     const bank = m.bank ? str(x.bank, 80) : '';
     if (m.bank && !bank) return `${m.label}: elige el banco`;
     if (m.currency === 'VES' && !(rate > 0)) return 'Escribe la tasa del día (Bs por $)';
