@@ -2527,11 +2527,29 @@
   }
 
   /* ============================= VENDEDORES ============================= */
+  /** PIN (voluntario) y último contacto de los teléfonos de cada vendedor. */
+  async function loadPinInfo(root) {
+    const r = await Sync.adminCall('pin', { action: 'list' });
+    const ago = (iso) => { const m = Math.round((Date.now() - Date.parse(iso)) / 60000); return m < 2 ? 'ahora mismo' : m < 60 ? `hace ${m} min` : m < 1440 ? `hace ${Math.round(m / 60)} h` : `hace ${Math.round(m / 1440)} días`; };
+    root.querySelectorAll('[data-pinfo]').forEach((el) => {
+      if (!el.isConnected) return;
+      const sid = el.dataset.pinfo, btn = root.querySelector(`[data-pinreset="${CSS.escape(sid)}"]`);
+      if (!r.ok) { el.innerHTML = `<span class="muted">🔒 PIN y conexión: ${esc(r.error || 'sin respuesta')}</span>`; return; }
+      const info = (r.data.sellers || []).find((x) => x.sellerId === sid) || { hasPin: false, devices: 0 };
+      const cs = (r.data.contacts || []).filter((c) => c.sellerId === sid).sort((a, b) => String(b.at).localeCompare(String(a.at)));
+      const last = cs[0], hours = last ? (Date.now() - Date.parse(last.at)) / 3600000 : null;
+      el.innerHTML = `${info.hasPin ? `<span class="status despachado">🔒 PIN creado</span> <span class="muted">${info.devices} teléfono${info.devices === 1 ? '' : 's'} de confianza</span>` : '<span class="status en_espera">🔓 Sin PIN</span>'}
+        · ${last ? `<span class="${hours > 24 ? 'warn-txt' : 'muted'}">📶 Última conexión ${esc(ago(last.at))}</span>` : '<span class="muted">📶 Sin conexiones registradas aún</span>'}
+        ${cs.map((c, i) => { const blk = (info.blocked || []).includes(c.device); return `<div class="row" style="gap:8px;align-items:center;margin-top:4px"><span class="grow ${blk ? 'warn-txt' : 'muted'}">${blk ? '⛔' : '📱'} Equipo ${i + 1} · ${esc(c.ua)} · ${esc(ago(c.at))}${c.pending ? ` · subió ${c.pending}` : ''}${blk ? ' · BLOQUEADO' : ''}</span>
+          <button type="button" class="btn btn-sm" data-dev="${esc(c.device)}" data-devsid="${esc(sid)}" data-devact="${blk ? 'unblock' : 'block'}">${blk ? 'Desbloquear' : 'Bloquear (perdido)'}</button></div>`; }).join('')}`;
+      if (btn) { btn.hidden = !info.hasPin; btn.textContent = 'Olvidó su PIN: restablecer'; }
+    });
+  }
   function renderSellers(root) {
     const routes = S.config.routes || [];
     root.innerHTML = `
       <div class="card card-pad" style="max-width:820px">
-        <p class="muted" style="margin-top:0">Los vendedores activos aparecen en el menú de inicio (sin contraseña). Marca las rutas que atiende cada uno.</p>
+        <p class="muted" style="margin-top:0">Los vendedores activos aparecen en el menú de inicio. El PIN es voluntario: cada vendedor crea el suyo y no frena la subida de pedidos. Marca las rutas que atiende cada uno.</p>
         <form id="sNew" class="row" style="margin-bottom:14px"><input class="input grow" name="n" placeholder="Nombre (ej: María P.)" maxlength="30" required><button class="btn btn-primary">＋ Agregar</button></form>
         ${S.sellers.slice().sort((a, b) => a.name.localeCompare(b.name, 'es')).map((s) => `
           <div class="seller-row" data-sid="${esc(s.id)}">
@@ -2541,8 +2559,11 @@
             <div class="row wrap" style="gap:8px;align-items:center"><span class="muted grow" style="font-size:13px">${S.clients.filter((c) => c.sellerId === s.id).length} clientes en cartera · ${pendingOf(s.id).clients} clientes / ${nf0.format(pendingOf(s.id).cajas)} cajas por despachar</span>
               ${pausedUntil(s) ? `<span class="status over">⏸ En pausa hasta ${esc(fmtPause(pausedUntil(s)))}</span><button type="button" class="btn btn-sm btn-ok" data-resume="${esc(s.id)}">▶ Reactivar</button>`
                 : `<button type="button" class="btn btn-sm" data-pause="${esc(s.id)}">⏸ Suspender pedidos</button>`}</div>
+            <div class="row wrap pin-row" style="gap:8px;align-items:center"><span class="grow" style="font-size:13px" data-pinfo="${esc(s.id)}"><span class="muted">🔒 PIN y conexión: consultando…</span></span>
+              <button type="button" class="btn btn-sm" data-pinreset="${esc(s.id)}" hidden>Restablecer PIN</button></div>
           </div>`).join('')}
       </div>`;
+    loadPinInfo(root);
     $('#sNew').onsubmit = async (e) => {
       e.preventDefault(); const name = e.target.n.value.trim(); if (!name) return;
       await saveDocs('sellers', { id: DB.uid('s'), name, routes: [], aliases: [], active: true, deleted: false });
@@ -2550,6 +2571,24 @@
     };
     root.onclick = async (e) => {
       const p = e.target.closest('[data-pause]'); if (p) { pauseDialog(sellerById(p.dataset.pause), () => renderSellers(root)); return; }
+      const pr = e.target.closest('[data-pinreset]');
+      if (pr) {
+        const s = sellerById(pr.dataset.pinreset);
+        if (!confirm(`¿Restablecer el PIN de ${s.name}?\n\nSe borra su PIN: la próxima vez que entre crea uno nuevo. Sus pedidos no se tocan.\nSi perdió el teléfono, además bloquea ese equipo.`)) return;
+        const r = await Sync.adminCall('pin', { action: 'reset', sellerId: s.id });
+        if (r.ok) { await log('pin_reset', `Restableció el PIN de ${s.name}`, { sellerId: s.id }); toast(`PIN de ${s.name} restablecido`, 'ok'); loadPinInfo(root); }
+        else toast(r.error || 'No se pudo restablecer', 'err');
+        return;
+      }
+      const dv = e.target.closest('[data-devact]');
+      if (dv) {
+        const s = sellerById(dv.dataset.devsid), block = dv.dataset.devact === 'block';
+        if (block && !confirm(`¿Bloquear este equipo de ${s.name}?\n\nNo podrá usar el usuario de ${s.name} ni ver sus ventas. Los pedidos que ya subió no se tocan.`)) return;
+        const r = await Sync.adminCall('pin', { action: dv.dataset.devact, sellerId: s.id, device: dv.dataset.dev });
+        if (r.ok) { await log('pin_equipo', `${block ? 'Bloqueó' : 'Desbloqueó'} un equipo de ${s.name}`, { sellerId: s.id }); toast(block ? 'Equipo bloqueado' : 'Equipo desbloqueado', 'ok'); loadPinInfo(root); }
+        else toast(r.error || 'No se pudo', 'err');
+        return;
+      }
       const r = e.target.closest('[data-resume]');
       if (r) {
         const s = sellerById(r.dataset.resume);

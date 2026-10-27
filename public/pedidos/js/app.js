@@ -676,6 +676,7 @@
       location.hash = '#/ruta';
       await logEvent('entrada', `Entró a su ruta${S.session.route ? ' ' + S.session.route : ''}`);
       runSync(false);
+      if (window.PinGate) PinGate.check({ force: true });
     };
   }
 
@@ -940,6 +941,7 @@
     renderBottomBar();
     updateSyncPill();
     loadActividad();
+    if (window.PinGate) PinGate.check();
 
     const rs = $('#routeSel');
     if (rs) rs.onchange = async () => { await setSession({ ...S.session, route: rs.value }); renderSeller(); };
@@ -1800,6 +1802,7 @@
         <button class="btn btn-primary" id="mSync">⟳ Sincronizar ahora</button>
         <button class="btn" id="mExport">⇪ Enviar pedidos de hoy por archivo (WhatsApp)</button>
         <button class="btn" id="mImport">⇩ Cargar catálogo desde archivo</button>
+        <button class="btn" id="mPin">🔒 Mi PIN</button>
       </div>
       <details style="margin-top:16px" ${S.settings.syncKey ? '' : 'open'}><summary class="section-title" style="cursor:pointer">🔑 Conexión (clave de sincronización)</summary>
         ${S.settings.syncKey ? '' : '<div class="hint warn" style="margin-top:8px">Falta la clave de sincronización: sin ella no bajan los clientes ni el catálogo.</div>'}
@@ -1814,6 +1817,7 @@
       <div class="actions"><button class="btn btn-danger" id="mOut">Cambiar de vendedor</button></div>
       ${creditFooter()}`);
     $('#mSync', sh.el).onclick = () => runSync(true);
+    $('#mPin', sh.el).onclick = () => { sh.close(); if (window.PinGate) PinGate.menu(); };
     $('#mExport', sh.el).onclick = async () => {
       const seller = sellerById(S.session.sellerId);
       const b = await Sync.exportBundle({ sellerId: seller.id, routeDate: today() });

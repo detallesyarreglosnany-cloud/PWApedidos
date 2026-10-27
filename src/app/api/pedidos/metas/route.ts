@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { syncOk } from '@/lib/keys';
+import { sellerAccessOk } from '@/lib/pin';
 
 // Metas de cada vendedor para una quincena (las pone él mismo en su pantalla «Mi quincena»).
 // Se guardan en la tabla de ajustes (DistSetting) con el nombre «metas:<vendedor>:<AAAA-MM-Q>»: no tocan pedidos ni catálogo.
@@ -24,6 +25,8 @@ export async function POST(req: NextRequest) {
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }); }
   const sellerId = str(body.sellerId, 120), period = str(body.period, 10);
   if (!sellerId) return NextResponse.json({ error: 'Falta el vendedor' }, { status: 400 });
+  // Vendedor con PIN: solo desde un teléfono de confianza (sin PIN, todo sigue igual)
+  if (!(await sellerAccessOk(req, sellerId))) return NextResponse.json({ error: 'PIN', pin: true }, { status: 401 });
   if (!isPeriod(period)) return NextResponse.json({ error: 'Quincena inválida' }, { status: 400 });
   const name = `metas:${sellerId}:${period}`;
   try {

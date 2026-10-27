@@ -7,6 +7,7 @@ import { RESET_LOCK, currentEpoch, epochAt } from '@/lib/epoch';
 import { ordersOfLoads, syncKardexForOrders } from '@/lib/vacios';
 import { dupPairs, DUP_WINDOW_DAYS, type DupOrder } from '@/lib/dedup';
 import { stashImage, productsWithInlineImage } from '@/lib/images';
+import { recordContact } from '@/lib/pin';
 
 // Sincronización de la PWA de pedidos (public/pedidos).
 //
@@ -344,6 +345,8 @@ export async function GET() {
   return NextResponse.json({ ok: true, service: 'pedidos-sync', time: new Date().toISOString() });
 }
 
+const lastContact = new Map<string, number>();
+
 export async function POST(req: NextRequest) {
   const serverTime = new Date();
 
@@ -374,6 +377,8 @@ export async function POST(req: NextRequest) {
     epoch?: string | null;
     sellerId?: string | null;
     noPull?: boolean;
+    deviceId?: string;
+    pending?: number;
     page?: { k?: number; id?: string } | null;
     push?: Partial<Record<Kind, unknown[]>>;
   };
@@ -383,6 +388,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'JSON inválido' }, { status: 400 });
   }
   const sellerId = typeof body.sellerId === 'string' && body.sellerId ? body.sellerId : null;
+  // Último contacto de cada teléfono de vendedor (la oficina ve quién trabaja sin señal). Como mucho uno por minuto; nunca frena el sync.
+  if (!isAdmin && !isSupervisor && sellerId && typeof body.deviceId === 'string' && body.deviceId) {
+    const key = sellerId + '|' + body.deviceId;
+    if (Date.now() - (lastContact.get(key) || 0) > 60_000) {
+      lastContact.set(key, Date.now());
+      const ua = String(req.headers.get('user-agent') || '');
+      const kindUa = /iphone|ipad/i.test(ua) ? 'iPhone' : /android/i.test(ua) ? 'Android' : /windows/i.test(ua) ? 'Windows' : /mac os/i.test(ua) ? 'Mac' : 'Equipo';
+      const pending = Math.max(0, Math.min(100000, Math.round(Number(body.pending) || 0)));
+      after(async () => { try { await recordContact(sellerId, String(body.deviceId), { pending, ua: kindUa }); } catch (e) { console.warn('[contacto]', e); } });
+    }
+  }
 
   const accepted = Object.fromEntries(KINDS.map((k) => [k, [] as string[]])) as Record<Kind, string[]>;
   const rejected: { kind: Kind; id: string; reason: string; doc?: Doc }[] = [];

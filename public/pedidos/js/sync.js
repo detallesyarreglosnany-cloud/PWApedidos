@@ -228,7 +228,7 @@
     // Vercel rechaza cuerpos de más de 4,5 MB en ambos sentidos: la subida va
     // por tandas y la bajada por páginas. El cursor avanza solo al terminar.
     const batches = splitPush(push);
-    const base = { deviceId: await deviceId(), epoch: await DB.getMeta('epoch', ''), since, sinceDays: since ? null : (fullRead && !sellerId ? 365 : INITIAL_ORDER_DAYS), sellerId }; // la oficina baja hasta 1 año
+    const base = { deviceId: await deviceId(), epoch: await DB.getMeta('epoch', ''), since, sinceDays: since ? null : (fullRead && !sellerId ? 365 : INITIAL_ORDER_DAYS), sellerId, pending: total(push) }; // la oficina baja hasta 1 año
     const empty = Object.fromEntries(KINDS.map((k) => [k, []]));
     const rejected = [];
     let first = null;
@@ -452,12 +452,25 @@
     return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/envases'), headers, { action: 'mine', sellerId });
   }
 
+  /** Permiso de «teléfono de confianza» del vendedor (si creó su PIN). */
+  async function sellerToken(sellerId) { try { return ((await DB.getMeta('sellerTokens', {})) || {})[sellerId] || ''; } catch (e) { return ''; } }
+  async function withSellerToken(headers, sellerId) { const t = sellerId ? await sellerToken(sellerId) : ''; if (t) headers['x-seller-token'] = t; }
+  /** PIN del vendedor: { action: 'status' | 'create' | 'verify', sellerId, pin?, token? } (clave de sincronización). */
+  async function pinCall(body) {
+    if (!navigator.onLine) return { ok: false, offline: true };
+    const cfg = await settings();
+    const headers = { 'Content-Type': 'application/json' };
+    if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
+    return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/pin'), headers, { ...body, deviceId: await deviceId() });
+  }
+
   /** «Mi quincena» del vendedor: sus ventas liquidadas por categoría y producto (clave de sincronización). */
   async function myVentas(sellerId, from, to) {
     if (!navigator.onLine) return { ok: false, offline: true };
     const cfg = await settings();
     const headers = { 'Content-Type': 'application/json' };
     if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
+    await withSellerToken(headers, sellerId);
     return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/mis-ventas'), headers, { sellerId, from, to });
   }
   /** Fecha del último pedido y cantidad de pedidos de cada cliente del vendedor (el teléfono solo guarda las últimas semanas). */
@@ -466,6 +479,7 @@
     const cfg = await settings();
     const headers = { 'Content-Type': 'application/json' };
     if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
+    await withSellerToken(headers, sellerId);
     return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/actividad'), headers, { sellerId });
   }
   /** Metas del vendedor para una quincena: { action: 'get' | 'set', sellerId, period, goals? }. */
@@ -474,6 +488,7 @@
     const cfg = await settings();
     const headers = { 'Content-Type': 'application/json' };
     if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
+    await withSellerToken(headers, body && body.sellerId);
     return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/metas'), headers, body);
   }
 
@@ -569,5 +584,5 @@
     return n;
   }
 
-  global.Sync = { KINDS, isLocked, syncNow, pendingCount, diagnose, forceUpload, redownload, hasCursor, reserveNumbers, adminCall, readerCall, report, pushCall, keysCall, myVacios, myVentas, metas, actividad, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
+  global.Sync = { KINDS, isLocked, syncNow, pendingCount, diagnose, forceUpload, redownload, hasCursor, reserveNumbers, adminCall, readerCall, report, pushCall, keysCall, myVacios, myVentas, metas, actividad, pinCall, sellerToken, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
 })(window);

@@ -87,6 +87,7 @@
       const r = await global.Sync.myVentas(sid, rg.from, rg.to);
       if (!$('#rsBody') || S.ui.res !== st) return; // la pantalla cambió mientras llegaba
       if (r && r.ok && r.data && r.data.totals) { st.data = r.data; st.asOf = r.data.asOf; st.stale = false; st.err = ''; lsSet(cacheKey, { data: r.data, at: r.data.asOf }); }
+      else if (r && r.status === 401 && r.error === 'PIN') { st.err = '🔒 Escribe tu PIN para ver tus ventas en este teléfono.'; if (global.PinGate) global.PinGate.check({ force: true }); }
       else st.err = r && r.offline ? 'Sin internet: se muestra lo último que se pudo bajar.' : 'No se pudo actualizar ahora. Se muestra lo último que se pudo bajar.';
       if (key) {
         const g = await global.Sync.metas({ action: 'get', sellerId: sid, period: key });
