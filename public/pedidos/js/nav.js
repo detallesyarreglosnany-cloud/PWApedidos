@@ -61,9 +61,28 @@
       ] },
     ],
     gerencia: [
-      { id: 'cons', icon: '👔', label: 'Gerencia', items: [
+      { id: 'desp', icon: '🚚', label: 'Despachos a crédito', items: [
+        { icon: '🛒', label: 'Tomar pedido', go: '#/gerencia/tomar' },
+        { icon: '🧾', label: 'Pedidos del día', go: '#/gerencia/pedidos' },
+        { icon: '🚚', label: 'Hojas de carga y despacho', go: '#/gerencia/cargas' },
+        { icon: '🗄', label: 'Liquidaciones y notas', go: '#/gerencia/archivo' },
+      ] },
+      { id: 'vac', icon: '♻', label: 'Vacíos', items: [
+        { icon: '♻', label: 'Kardex y envases', go: '#/gerencia/envases' },
+      ] },
+      { id: 'pagos', icon: '💵', label: 'Pagos y cobranza', items: [
+        { icon: '💵', label: 'Pagos', go: '#/gerencia/pagos' },
+        { icon: '📅', label: 'Cuentas por cobrar', go: '#/gerencia/pagos', act: 'cartera' },
+        { icon: '🚦', label: 'Crédito de clientes', go: '#/gerencia/pagos', act: 'credito' },
+      ] },
+      { id: 'inv', icon: '📦', label: 'Inventario y catálogo', items: [
+        { icon: '📦', label: 'Inventario y productos', go: '#/gerencia/inventario' },
+        { icon: '🐢', label: 'Productos sin movimiento', go: '#/gerencia/sinmov' },
+      ] },
+      { id: 'rep', icon: '📈', label: 'Reportes', items: [
         { icon: '📊', label: 'Resumen del día', go: '#/gerencia/resumen' },
-        { icon: '📈', label: 'Reportes de ventas', go: '#/gerencia/reportes' },
+        { icon: '📈', label: 'Ventas y liquidaciones', go: '#/gerencia/reportes' },
+        { icon: '👥', label: 'Clientes', go: '#/gerencia/clientes' },
         { icon: '🕘', label: 'Historial', go: '#/gerencia/historial' },
       ] },
     ],
@@ -89,7 +108,10 @@
     if (h.startsWith('#/oficina')) return 'office';
     if (h.startsWith('#/supervisor')) return 'super';
     if (h.startsWith('#/gerencia') || h.startsWith('#/cobranzas')) { const R = global.Roles; const role = h.startsWith('#/gerencia') ? 'gerencia' : 'cobranzas'; return R && R.isRole(role) ? role : ''; }
-    if (h.startsWith('#/ruta')) { const S = PV() && PV().S; return S && S.session && PV().sellerById(S.session.sellerId) ? 'seller' : ''; }
+    if (h.startsWith('#/ruta')) {
+      const S = PV() && PV().S; if (!(S && S.session && PV().sellerById(S.session.sellerId))) return '';
+      return S.session.gerencia && global.Roles && global.Roles.isRole('gerencia') ? 'gerencia' : 'seller'; // Gerencia tomando pedidos
+    }
     return '';
   }
   const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } };
@@ -102,6 +124,7 @@
     const tab = (x) => x.split('/')[2] || '';
     if (it.go.startsWith('#/oficina/')) return base.startsWith('#/oficina') && (tab(base) || 'cargas') === tab(it.go) && !(tab(it.go) === 'archivo' && S.ui.office && S.ui.office.trash);
     if (it.go.startsWith('#/supervisor/')) return base.startsWith('#/supervisor') && (tab(base) || 'resumen') === tab(it.go);
+    if (it.go === '#/gerencia/tomar') return base.startsWith('#/ruta');
     if (it.go.startsWith('#/gerencia/') || it.go.startsWith('#/cobranzas/')) return base.split('/')[1] === it.go.split('/')[1] && (tab(base) || tab(it.go)) === tab(it.go);
     if (it.myo) return base === it.go && ((S.ui.myo && S.ui.myo.tab) || 'pedidos') === it.myo;
     return base === it.go;

@@ -8,7 +8,7 @@
 (function (global) {
   'use strict';
   const PV = () => global.PV;
-  const ROLE = { gerencia: { label: 'Gerencia', icon: '👔', home: '#/gerencia/resumen' }, cobranzas: { label: 'Cobranzas', icon: '🧾', home: '#/cobranzas/pagos' } };
+  const ROLE = { gerencia: { label: 'Gerencia', icon: '👔', home: '#/gerencia/pedidos' }, cobranzas: { label: 'Cobranzas', icon: '🧾', home: '#/cobranzas/pagos' } };
 
   const session = () => { const s = PV().S.settings || {}; return s.userToken && s.userRole ? { id: s.userId, name: s.userName, role: s.userRole, token: s.userToken } : null; };
   const isRole = (role) => { const u = session(); return !!u && u.role === role; };
@@ -67,10 +67,26 @@
     if (out) out.onclick = async () => { if (confirm('¿Cerrar tu sesión en este equipo?')) await logout(); };
   }
 
-  /* ---------------- Gerencia (D2: consulta; D3 suma pedidos, inventario y reportes) ---------------- */
-  function renderGerencia(tab) {
+  /* ---------------- Gerencia ---------------- */
+  // Tomar pedido (todos los clientes), Pedidos del día, consulta de hojas, liquidaciones, vacíos, pagos y crédito,
+  // inventario y catálogo, reportes (ventas, rutas, productos sin movimiento) e historial.
+  async function renderGerencia(tab) {
     if (!isRole('gerencia')) return renderGate('gerencia');
-    return PV().renderSupervisor(tab, { base: '#/gerencia', head: () => shell('gerencia', 'Puerto Venado'), wire });
+    const P = PV(), S = P.S;
+    if (tab === 'tomar') {
+      const cur = S.session && P.sellerById(S.session.sellerId) ? S.session.sellerId : (S.sellers.find((x) => x.active !== false) || {}).id;
+      if (!cur) { P.toast('Aún no hay vendedores: sincroniza primero', 'err'); location.hash = '#/gerencia/pedidos'; return; }
+      await P.setSession({ sellerId: cur, route: '', activeOrderId: null, gerencia: true });
+      location.hash = '#/ruta';
+      return;
+    }
+    if (tab === 'resumen') return P.renderSupervisor('resumen', { base: '#/gerencia', head: () => shell('gerencia', 'Resumen del día'), wire });
+    if (tab === 'sinmov') {
+      document.getElementById('app').innerHTML = `${shell('gerencia', 'Productos sin movimiento')}<div class="container" id="gerBody"></div>${P.creditFooter()}`;
+      wire();
+      return global.Reportes.sinMovimiento(document.getElementById('gerBody'));
+    }
+    return P.renderOffice(tab, { role: 'gerencia', head: () => shell('gerencia', 'Puerto Venado'), wire });
   }
 
   /* ---------------- Cobranzas (D2: pagos y crédito; D4 suma las hojas por aprobar) ---------------- */

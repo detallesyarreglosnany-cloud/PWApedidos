@@ -366,7 +366,11 @@ export async function POST(req: NextRequest) {
   if (!isAdmin && (await userHeaderInvalid(req))) {
     return NextResponse.json({ error: 'Tu sesión venció: vuelve a entrar con tu PIN', userExpired: true }, { status: 401 });
   }
-  const isSupervisor = isSupervisorReq(req) || (!isAdmin && !!(await userOf(req)));
+  // Gerencia escribe pedidos (de cualquier vendedor, con las mismas reglas que un vendedor), clientes, productos y
+  // la lista de categorías; Cobranzas solo lee (como el supervisor)
+  const reqUser = isAdmin ? null : await userOf(req);
+  const isGer = !!reqUser && reqUser.role === 'gerencia';
+  const isSupervisor = isSupervisorReq(req) || (!!reqUser && !isGer);
   if (supHeader && !isSupervisorReq(req)) {
     return NextResponse.json({ error: 'Clave de supervisor inválida' }, { status: 401 });
   }
@@ -394,7 +398,7 @@ export async function POST(req: NextRequest) {
   }
   const sellerId = typeof body.sellerId === 'string' && body.sellerId ? body.sellerId : null;
   // Último contacto de cada teléfono de vendedor (la oficina ve quién trabaja sin señal). Como mucho uno por minuto; nunca frena el sync.
-  if (!isAdmin && !isSupervisor && sellerId && typeof body.deviceId === 'string' && body.deviceId) {
+  if (!isAdmin && !isSupervisor && !isGer && sellerId && typeof body.deviceId === 'string' && body.deviceId) {
     const key = sellerId + '|' + body.deviceId;
     if (Date.now() - (lastContact.get(key) || 0) > 60_000) {
       lastContact.set(key, Date.now());
@@ -441,18 +445,18 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: `Demasiados documentos en ${kind}` }, { status: 413 });
       }
       // Un teléfono nunca publica catálogo ni cargas: se ignora sin error.
-      if (ADMIN_KINDS.includes(kind) && !isAdmin) continue;
+      if (ADMIN_KINDS.includes(kind) && !isAdmin && !(isGer && (kind === 'products' || kind === 'config'))) continue;
       // El supervisor NUNCA escribe nada, sea cual sea el sellerId que mande.
       if (isSupervisor) continue;
       // Un teléfono sin vendedor elegido no escribe pedidos ni clientes (quedan pendientes).
-      if (!isAdmin && !sellerId) continue;
+      if (!isAdmin && !isGer && !sellerId) continue;
 
       for (let i = 0; i < incoming.length; i += CHUNK) {
         const part = incoming.slice(i, i + CHUNK);
         const existingRows = await db.distDoc.findMany({ where: { kind, id: { in: part.map((d) => d.id) } } });
         const existingById = new Map(existingRows.map((r) => [r.id, r]));
         const toWrite: Row[] = [];
-        const pending = new Map<string, Notice>();
+        const pending = new Map<string, Notice>(), extraNotices: { id: string; n: Notice }[] = [];
         const newlySent = new Set<string>();
 
         for (const raw of part) {
@@ -482,9 +486,14 @@ export async function POST(req: NextRequest) {
             rejected.push({ kind, id: doc.id, reason: 'partial', doc: cur || undefined });
             continue;
           }
+          // Gerencia solo cambia la lista de categorías de la configuración (al crear un producto de una categoría nueva)
+          if (kind === 'config' && isGer) {
+            if (!cur) { rejected.push({ kind, id: doc.id, reason: 'foreign' }); continue; }
+            doc = { ...cur, rubros: Array.isArray((doc as Record<string, unknown>).rubros) ? (doc as Record<string, unknown>).rubros : cur.rubros, updatedAt: doc.updatedAt } as typeof doc;
+          }
           if (kind === 'events') {
-            // Historial: solo se agrega. Un teléfono solo escribe eventos de su vendedor.
-            if (!isAdmin && String(doc.sellerId || '') !== sellerId) { rejected.push({ kind, id: doc.id, reason: 'foreign' }); continue; }
+            // Historial: solo se agrega. Un teléfono solo escribe eventos de su vendedor (Gerencia, de cualquiera).
+            if (!isAdmin && !isGer && String(doc.sellerId || '') !== sellerId) { rejected.push({ kind, id: doc.id, reason: 'foreign' }); continue; }
             if (existing) { accepted[kind].push(doc.id); continue; }
             toWrite.push(toRow(kind, doc));
             continue;
@@ -502,7 +511,7 @@ export async function POST(req: NextRequest) {
             else if (curVerified && (String(d.name || '') !== String(cur.name || '') || digitsOf(d.rif) !== digitsOf(cur.rif))) { d.verified = false; d.verifyReason = 'el vendedor cambió nombre o RIF'; }
             else { for (const f of ['verified', 'verifiedAt', 'verifiedBy', 'verifyReason']) { if (f in cur) d[f] = cur[f]; else delete d[f]; } }
           }
-          if (!isAdmin && (kind === 'orders' || kind === 'clients')) {
+          if (!isAdmin && !isGer && (kind === 'orders' || kind === 'clients')) {
             // Nunca se escribe ni se reasigna un pedido o cliente de otro vendedor
             if (String(doc.sellerId || '') !== sellerId || (cur && String(cur.sellerId || '') !== sellerId)) {
               rejected.push({ kind, id: doc.id, reason: 'foreign', doc: cur || undefined });
@@ -579,7 +588,11 @@ export async function POST(req: NextRequest) {
           if (kind === 'orders') {
             const n = orderNotice(cur as Record<string, unknown> | null, doc as Record<string, unknown>, isAdmin);
             if (n) pending.set(doc.id, n);
-            if (isSent(doc as Record<string, unknown>) && !isSent(cur as Record<string, unknown> | null)) newlySent.add(doc.id);
+            if (isSent(doc as Record<string, unknown>) && !isSent(cur as Record<string, unknown> | null)) {
+              newlySent.add(doc.id);
+              // Gerencia cargó un pedido a nombre del vendedor: el vendedor se entera
+              if (isGer && doc.sellerId) extraNotices.push({ id: doc.id, n: { to: 'seller', sellerId: String(doc.sellerId), msg: { title: '👔 Pedido cargado por Gerencia', body: `${String((doc as Record<string, unknown>).clientName || '')}`, tag: `o-${doc.id}-ger` } } });
+            }
           }
           toWrite.push(toRow(kind, doc));
         }
@@ -603,6 +616,7 @@ export async function POST(req: NextRequest) {
           }
         }
         pending.forEach((n, id) => { if (written.has(id)) notices.push(n); });
+        extraNotices.forEach((x) => { if (written.has(x.id)) notices.push(x.n); });
         newlySent.forEach((id) => { if (written.has(id)) sentNow.push(id); });
         if (lost.length) {
           // Otro equipo escribió una versión más nueva entre la lectura y la escritura
@@ -635,8 +649,8 @@ export async function POST(req: NextRequest) {
     const sinceDays = !since && typeof body.sinceDays === 'number' && body.sinceDays > 0
       ? Math.min(body.sinceDays, 365) : null;
     // Un teléfono sin vendedor elegido solo baja catálogo, vendedores y ajustes
-    const noScope = !isAdmin && !isSupervisor && !sellerId;
-    const office = (isAdmin || isSupervisor) && !sellerId;
+    const noScope = !isAdmin && !isSupervisor && !isGer && !sellerId;
+    const office = (isAdmin || isSupervisor || isGer) && !sellerId;
 
     const whereOf = (kind: Kind): Prisma.DistDocWhereInput | null => {
       switch (kind) {

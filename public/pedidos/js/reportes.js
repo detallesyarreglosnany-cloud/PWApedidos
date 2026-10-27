@@ -280,7 +280,14 @@
     ], { title: 'VACÍOS DE LO LIQUIDADO', subtitle: sub });
     const detalle = E.table({ name: 'Detalle', title: 'DETALLE POR CLIENTE', subtitle: sub, cols: [{ h: 'FECHA', k: 'date', w: 12 }, { h: 'HOJA', w: 12 }, { h: 'CLIENTE', w: 38 }, { h: 'VENDEDOR', w: 18 }, { h: 'DESPACHADOR', w: 18 }, { h: 'NOTA', w: 10 }, { h: 'RESULTADO', w: 20 }, { h: 'CAJAS', k: 'int', total: true }, { h: 'UNIDADES', k: 'int', total: true }, { h: 'MONTO $', k: 'money', total: true }],
       rows: d.detail.map((x) => [x.date, x.load, x.clientName, x.sellerName, x.dispatcherName, x.valeryNote, RES[x.result] || x.result, x.cajas, x.unidades, x.monto]) });
-    return [resumen, categorias, cuadre, productos, camion, vacios, detalle, novedades];
+    // Ventas por ruta y por ruta × categoría (las versiones viejas del servidor no las traen)
+    const rutas = E.blocks('Rutas', [
+      { title: 'Ventas por ruta', cols: [{ h: 'RUTA', w: 24 }, { h: 'CLIENTES', k: 'int', total: true }, { h: 'CAJAS', k: 'int', total: true }, { h: 'UNIDADES', k: 'int', total: true }, { h: 'MONTO $', k: 'money', total: true, w: 15 }],
+        rows: (d.byRoute || []).map((r) => [r.route, r.clients, r.cajas, r.unidades, r.monto]) },
+      { title: 'Ventas por ruta y categoría', cols: [{ h: 'RUTA', w: 24 }, { h: 'CATEGORÍA', w: 20 }, { h: 'CAJAS', k: 'int', total: true }, { h: 'UNIDADES', k: 'int', total: true }, { h: 'MONTO $', k: 'money', total: true, w: 15 }],
+        rows: (d.byCategoryRoute || []).slice().sort((a, b) => a.route.localeCompare(b.route, 'es') || b.monto - a.monto).map((r) => [r.route, r.category, r.cajas, r.unidades, r.monto]) },
+    ], { title: 'VENTAS POR RUTA', subtitle: sub });
+    return [resumen, categorias, cuadre, productos, rutas, camion, vacios, detalle, novedades];
   }
 
   /** Pantalla del reporte. Usa PV (helpers de la app). */
@@ -403,6 +410,9 @@
         ${cuadreHTML(d)}
         ${tbl('Ventas por categoría', [{ t: 'Categoría' }, N('Cajas'), N('Unidades'), N('Monto')], d.byCategory.map((c) => `<tr><td><b>${esc(c.category)}</b></td><td class="n">${nf0.format(c.cajas)}</td><td class="n">${nf0.format(c.unidades)}</td><td class="n">${usd(c.monto)}</td></tr>`).join(''),
           `<tr><td>TOTAL</td><td class="n">${nf0.format(t.cajas)}</td><td class="n">${nf0.format(t.unidades)}</td><td class="n">${usd(t.monto)}</td></tr>`)}
+        ${(d.byRoute || []).length ? tbl('Ventas por ruta', [{ t: 'Ruta' }, N('Clientes'), N('Cajas'), N('Unidades'), N('Monto')], d.byRoute.map((r) => `<tr><td><b>${esc(r.route)}</b></td><td class="n">${nf0.format(r.clients)}</td><td class="n">${nf0.format(r.cajas)}</td><td class="n">${nf0.format(r.unidades)}</td><td class="n">${usd(r.monto)}</td></tr>`).join(''),
+          `<tr><td>TOTAL</td><td class="n">${nf0.format(d.byRoute.reduce((a, r) => a + r.clients, 0))}</td><td class="n">${nf0.format(t.cajas)}</td><td class="n">${nf0.format(t.unidades)}</td><td class="n">${usd(t.monto)}</td></tr>`) : ''}
+        ${(d.byCategoryRoute || []).length ? tbl('Ventas por ruta y categoría', [{ t: 'Ruta' }, { t: 'Categoría' }, N('Cajas'), N('Unidades'), N('Monto')], d.byCategoryRoute.slice().sort((a, b) => a.route.localeCompare(b.route, 'es') || b.monto - a.monto).map((r) => `<tr><td><b>${esc(r.route)}</b></td><td>${esc(r.category)}</td><td class="n">${nf0.format(r.cajas)}</td><td class="n">${nf0.format(r.unidades)}</td><td class="n">${usd(r.monto)}</td></tr>`).join('')) : ''}
         ${tbl('Ventas por producto', [{ t: 'Código' }, { t: 'Producto' }, { t: 'Categoría' }, N('Cajas'), N('Unidades'), N('Monto')], prodRows,
           `<tr><td colspan="3">TOTAL</td><td class="n">${nf0.format(t.cajas)}</td><td class="n">${nf0.format(t.unidades)}</td><td class="n">${usd(t.monto)}</td></tr>`)}
         ${tbl('Diferencias de camión', [{ t: 'Fecha' }, { t: 'Hoja' }, { t: 'Despachador' }, { t: 'Producto' }, N('Debe quedar'), N('Devolución'), N('Diferencia'), { t: 'Motivo' }],
@@ -490,5 +500,62 @@
         rows: L.flatMap((d) => d.hojas.flatMap((h) => h.rows.map((r) => [d.name, global.Loads.labelOf(h.load), h.load.date || '', ledgerName(r.key), r.traia, r.queda, r.carga, r.anterior || 0, r.entregado, r.almacen, r.sigue, r.sigue ? (r.destLoad ? loadName(r.destLoad) : 'la próxima') : '', +r.dif || 0, r.motivo || '']))) })]);
   }
 
-  global.Reportes = { lastDay, quincena, quincenaOf, prevQuincena, render, titleOf, summaryRows, crossGrid, catGrid, catSelect, prodSelect, catPeople };
+
+  /* ======================= Productos sin movimiento (Gerencia) ======================= */
+  // Con los pedidos que ya están en el equipo (despachados o liquidados: lo liquidado cuenta lo entregado): qué no sale
+  // en N días, cuándo salió por última vez, cuánto hay en existencia y si bajó frente al período anterior.
+  function sinMovimiento(root, st0) {
+    const P = global.PV, { S, esc, nf0, fmtDate, today } = P;
+    const st = st0 || S.ui.sinMov || (S.ui.sinMov = { dias: 15, cat: '', ver: 'sin' });
+    const dayMinus = (n) => { const d = new Date(today() + 'T12:00:00'); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); };
+    const desde = dayMinus(st.dias - 1), antes = dayMinus(st.dias * 2 - 1);
+    const SALIO = ['enviado', 'en_carga', 'en_espera', 'despachado'];
+    const agg = new Map();
+    for (const o of S.orders) {
+      if (o.deleted || !SALIO.includes(o.status)) continue;
+      const d = o.delivery && o.delivery.at ? o.delivery : null;
+      if (d && d.result === 'anulada') continue;
+      const day = String((d && d.date) || o.routeDate || ''); if (!day) continue;
+      const lines = (d ? d.lines : o.lines) || {};
+      for (const [pid, l] of Object.entries(lines)) {
+        const q = (+l.cajas || 0) * (+l.unitsPerBox || 1) + (+l.unidades || 0); if (!q) continue;
+        const a = agg.get(pid) || { now: 0, prev: 0, last: '' };
+        if (day >= desde) a.now += q; else if (day >= antes) a.prev += q;
+        if (day > a.last) a.last = day;
+        agg.set(pid, a);
+      }
+    }
+    const fmtQ = (q, p) => { const upb = +p.unitsPerBox || 1; if (upb <= 1) return nf0.format(q) + ' un'; const c = Math.floor(q / upb), u = q % upb; return `${nf0.format(c)} cj${u ? ' + ' + u + ' un' : ''}`; };
+    const rows = S.products.filter((p) => p.active !== false && (!st.cat || p.category === st.cat)).map((p) => {
+      const a = agg.get(p.id) || { now: 0, prev: 0, last: '' };
+      const dias = a.last ? Math.round((Date.parse(today()) - Date.parse(a.last)) / 86400000) : null;
+      const caida = a.prev > 0 ? Math.round((1 - a.now / a.prev) * 100) : null;
+      const estado = !a.now ? 'sin' : caida !== null && caida >= 50 ? 'baja' : 'ok';
+      return { p, ...a, dias, caida, estado };
+    });
+    const list = rows.filter((r) => st.ver === 'todos' || (st.ver === 'sin' ? r.estado === 'sin' : r.estado !== 'ok'))
+      .sort((a, b) => (a.estado === 'sin' ? 0 : 1) - (b.estado === 'sin' ? 0 : 1) || (b.dias ?? 9999) - (a.dias ?? 9999) || a.p.name.localeCompare(b.p.name, 'es'));
+    const stock = (p) => (P.fmtStock ? P.fmtStock(p.stock, p.unitsPerBox, p.sellBy) : (p.stock === null || p.stock === undefined || p.stock === '' ? '—' : fmtQ(+p.stock, p))); // existencia en unidades
+    const cats = [...new Set(S.products.map((p) => p.category).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'es'));
+    root.innerHTML = `<div class="toolbar"><div class="field"><span>Período</span><div class="seg" id="smD">${[7, 15, 30, 60].map((n) => `<button data-d="${n}" class="${st.dias === n ? 'active' : ''}">${n} días</button>`).join('')}</div></div>
+        <label class="field"><span>Categoría</span><select id="smC" class="select"><option value="">Todas</option>${cats.map((c) => `<option ${c === st.cat ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></label>
+        <div class="field"><span>Mostrar</span><div class="seg" id="smV">${[['sin', 'Sin movimiento'], ['baja', 'Sin movimiento o en baja'], ['todos', 'Todos']].map(([k, l]) => `<button data-v="${k}" class="${st.ver === k ? 'active' : ''}">${l}</button>`).join('')}</div></div>
+        <div class="grow"></div><button class="btn" id="smX">⇩ Excel</button></div>
+      <div class="kpi-row"><div class="kpi"><small>Sin movimiento en ${st.dias} días</small><b class="${rows.some((r) => r.estado === 'sin') ? 'warn-txt' : ''}">${rows.filter((r) => r.estado === 'sin').length}</b><small>de ${rows.length} productos activos</small></div>
+        <div class="kpi"><small>En baja (−50 % o más)</small><b>${rows.filter((r) => r.estado === 'baja').length}</b><small>frente a los ${st.dias} días anteriores</small></div></div>
+      <p class="muted" style="font-size:13px">Cuenta los pedidos enviados, en hoja, despachados y liquidados (de lo liquidado, lo entregado). «Última salida» es la fecha de ruta o de entrega más reciente.</p>
+      <div class="card" style="overflow:auto"><table class="inv"><thead><tr><th>Producto</th><th>Categoría</th><th class="n">Últimos ${st.dias} días</th><th class="n">${st.dias} días anteriores</th><th>Última salida</th><th class="n">Existencia</th><th>Estado</th></tr></thead><tbody>
+        ${list.slice(0, 500).map((r) => `<tr><td><span class="mono muted">${esc(r.p.code)}</span> <b>${esc(r.p.name)}</b> ${esc(r.p.presentation || '')}</td><td>${esc(r.p.category || '')}</td>
+          <td class="n">${r.now ? fmtQ(r.now, r.p) : '—'}</td><td class="n">${r.prev ? fmtQ(r.prev, r.p) : '—'}</td><td>${r.last ? esc(fmtDate(r.last)) + ` <span class="muted">(${r.dias} d)</span>` : '<span class="muted">sin salidas</span>'}</td>
+          <td class="n">${esc(stock(r.p))}</td><td>${r.estado === 'sin' ? '<b class="warn-txt">🐢 Sin movimiento</b>' : r.estado === 'baja' ? `<span class="pay-rev">↓ Bajó ${r.caida}%</span>` : '✓'}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">Nada que mostrar con estos filtros.</td></tr>'}</tbody></table></div>`;
+    const re = () => sinMovimiento(root, st);
+    root.querySelector('#smD').onclick = (e) => { const b = e.target.closest('[data-d]'); if (b) { st.dias = +b.dataset.d; re(); } };
+    root.querySelector('#smV').onclick = (e) => { const b = e.target.closest('[data-v]'); if (b) { st.ver = b.dataset.v; re(); } };
+    root.querySelector('#smC').onchange = (e) => { st.cat = e.target.value; re(); };
+    root.querySelector('#smX').onclick = () => global.Exporta.save(`productos_sin_movimiento_${st.dias}d_${today()}.xlsx`, [global.Exporta.table({ name: 'Sin movimiento', title: 'PRODUCTOS SIN MOVIMIENTO', subtitle: `Últimos ${st.dias} días al ${today()}`,
+      cols: [{ h: 'CÓDIGO', w: 12 }, { h: 'PRODUCTO', w: 40 }, { h: 'CATEGORÍA', w: 18 }, { h: `ÚLTIMOS ${st.dias} DÍAS (UN)`, k: 'int' }, { h: `${st.dias} DÍAS ANTERIORES (UN)`, k: 'int' }, { h: 'ÚLTIMA SALIDA', k: 'date', w: 12 }, { h: 'DÍAS SIN SALIR', k: 'int' }, { h: 'EXISTENCIA', w: 14 }, { h: 'ESTADO', w: 18 }],
+      rows: list.map((r) => [r.p.code, `${r.p.name} ${r.p.presentation || ''}`.trim(), r.p.category || '', r.now, r.prev, r.last || '', r.dias ?? '', stock(r.p), r.estado === 'sin' ? 'Sin movimiento' : r.estado === 'baja' ? `Bajó ${r.caida}%` : 'Normal']) })]);
+  }
+
+  global.Reportes = { sinMovimiento, lastDay, quincena, quincenaOf, prevQuincena, render, titleOf, summaryRows, crossGrid, catGrid, catSelect, prodSelect, catPeople };
 })(window);

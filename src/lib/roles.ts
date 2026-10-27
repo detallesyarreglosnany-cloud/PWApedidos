@@ -60,3 +60,5 @@ export function userOf(req: NextRequest): Promise<Usuario | null> {
 }
 /** Mandó cabeceras de usuario pero no son válidas (PIN cambiado, usuario desactivado, teléfono bloqueado). */
 export async function userHeaderInvalid(req: NextRequest) { return !!req.headers.get('x-user-token') && !(await userOf(req)); }
+/** ¿La petición es de un usuario de Gerencia con permiso vigente? */
+export async function isGerencia(req: NextRequest) { const u = await userOf(req); return !!u && u.role === 'gerencia'; }

@@ -18,7 +18,7 @@ const MAX_DAYS = 366;
 type Line = { code?: string; name?: string; presentation?: string; category?: string; cajas?: number; unidades?: number; boxPrice?: number; unitPrice?: number; unitsPerBox?: number };
 type VacLine = { code?: string; type?: string; regime?: string; boxes?: number; recv?: number; asg?: number | null; pending?: number; motivo?: string };
 type Delivery = { at?: string; date?: string; loadId?: string; result?: string; lines?: Record<string, Line>; monto?: number; motivo?: string; voidedNote?: string; newValery?: string; vac?: Record<string, VacLine>; prevVac?: { type?: string; from?: string; qty?: number; motivo?: string }[] };
-type OrderDoc = { id: string; deleted?: boolean; sellerId?: string; sellerName?: string; clientId?: string; clientName?: string; valeryNote?: string; lines?: Record<string, Line>; delivery?: Delivery | null };
+type OrderDoc = { id: string; deleted?: boolean; sellerId?: string; sellerName?: string; clientId?: string; clientName?: string; route?: string; valeryNote?: string; lines?: Record<string, Line>; delivery?: Delivery | null };
 type SnapRow = { key?: string; code?: string; name?: string; presentation?: string; um?: string; pedido?: number; entregado?: number; queda?: number; carga?: number; total?: number; debe?: number; dev?: number | null; dif?: number | null; motivo?: string; dest?: string };
 type LoadDoc = {
   id: string; deleted?: boolean; number?: number; label?: string; date?: string; closedAt?: string; status?: string; route?: string;
@@ -107,6 +107,9 @@ export async function POST(req: NextRequest) {
     // Lo mismo por producto (para ver, de cada vendedor o despachador, qué productos de las categorías elegidas vendió)
     type ProdPerson = { id: string; name: string; pid: string; code: string; pname: string; presentation: string; category: string; cajas: number; unidades: number; monto: number };
     const prodSeller = new Map<string, ProdPerson>(), prodDisp = new Map<string, ProdPerson>();
+    // Por ruta (la del pedido; si no tiene, la de la hoja) y por ruta y categoría
+    const byRoute = new Map<string, { route: string; clients: number; cajas: number; unidades: number; monto: number }>();
+    const catRoute = new Map<string, { route: string; category: string; cajas: number; unidades: number; monto: number }>();
     const novedades: unknown[] = [];
     const detail: unknown[] = [];
     const loadSum = new Map<string, { monto: number; clients: number }>(); // lo que SÍ llegó al servidor de cada hoja
@@ -132,7 +135,7 @@ export async function POST(req: NextRequest) {
           result: res, valeryNote: d.voidedNote || o.valeryNote || '', newValery: d.newValery || '', motivo: d.motivo || '', pedido: r2(pedido), entregado: r2(num(d.monto)) });
       }
       let cajas = 0, unidades = 0, monto = 0;
-      const sidC = o.sellerId || '—', didC = load.dispatcherId || '—';
+      const sidC = o.sellerId || '—', didC = load.dispatcherId || '—', rutaC = String(o.route || load0.route || 'Sin ruta').trim().toUpperCase() || 'SIN RUTA';
       for (const [pid, l] of Object.entries(d.lines || {})) {
         const c = num(l.cajas), u = num(l.unidades), m = lineMoney(l);
         if (!c && !u) continue;
@@ -150,6 +153,8 @@ export async function POST(req: NextRequest) {
         p.cajas += c; p.unidades += u; p.monto += m;
         const cat = bump(byCategory, catName, () => ({ category: catName, cajas: 0, unidades: 0, monto: 0 }));
         cat.cajas += c; cat.unidades += u; cat.monto += m;
+        const cr = bump(catRoute, rutaC + '\u0001' + catName, () => ({ route: rutaC, category: catName, cajas: 0, unidades: 0, monto: 0 }));
+        cr.cajas += c; cr.unidades += u; cr.monto += m;
       }
       const sid = o.sellerId || '—';
       const s = bump(bySeller, sid, () => mkSeller(sid, o.sellerName || sid));
@@ -161,6 +166,7 @@ export async function POST(req: NextRequest) {
       if (!cajas && !unidades) continue;
       const ls = bump(loadSum, load0.id, () => ({ monto: 0, clients: 0 })); ls.monto += monto; ls.clients++;
       totals.clients++; totals.cajas += cajas; totals.unidades += unidades; totals.monto += monto;
+      const rt = bump(byRoute, rutaC, () => ({ route: rutaC, clients: 0, cajas: 0, unidades: 0, monto: 0 })); rt.clients++; rt.cajas += cajas; rt.unidades += unidades; rt.monto += monto;
       s.clients++; s.cajas += cajas; s.unidades += unidades; s.monto += monto;
       const cx = crossOf(o, load); cx.clients++; cx.cajas += cajas; cx.monto += monto;
       dd.clients++; dd.cajas += cajas; dd.unidades += unidades; dd.monto += monto;
@@ -317,6 +323,7 @@ export async function POST(req: NextRequest) {
       pendingMonto: r2(pendingLoads.reduce((a, l) => a + l.monto, 0)),
       byProduct: money([...byProduct.values()]).sort((a, b) => a.category.localeCompare(b.category, 'es') || a.name.localeCompare(b.name, 'es') || a.code.localeCompare(b.code, 'es', { numeric: true })),
       byCategory: money([...byCategory.values()]).sort((a, b) => b.monto - a.monto),
+      byRoute: money([...byRoute.values()]).sort((a, b) => b.monto - a.monto), byCategoryRoute: money([...catRoute.values()]),
       bySeller: money([...bySeller.values()]).map((x) => ({ ...x, pedido: r2(x.pedido), devuelto: r2(x.devuelto) })).sort((a, b) => b.monto - a.monto),
       byDispatcher: money([...byDispatcher.values()]).map((x) => ({ ...x, pedido: r2(x.pedido), devuelto: r2(x.devuelto) })).sort((a, b) => b.monto - a.monto),
       compare, cuadre, enProceso, novedades,

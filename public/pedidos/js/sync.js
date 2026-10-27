@@ -218,12 +218,15 @@
     if (!cfg.syncKey) return { ok: false, noKey: true, error: 'Falta la clave de sincronización (☰ → Conexión, o Ajustes en la oficina)' };
     const url = cfg.syncUrl || DEFAULT_SYNC_URL;
     const isAdmin = !!cfg.adminKey;
-    const isSupervisor = !isAdmin && (!!cfg.supervisorKey || !!cfg.userToken); // Gerencia y Cobranzas también leen todo
-    const fullRead = isAdmin || isSupervisor; // el supervisor lee todo, pero jamás publica nada
+    // Gerencia: baja todo y sube sus pedidos (de cualquier vendedor), clientes, productos y categorías; Cobranzas solo lee
+    const isGer = !isAdmin && !!cfg.userToken && cfg.userRole === 'gerencia';
+    const isSupervisor = !isAdmin && !isGer && (!!cfg.supervisorKey || !!cfg.userToken);
+    const fullRead = isAdmin || isSupervisor || isGer; // el supervisor lee todo, pero jamás publica nada
     const sellerId = scope && scope.sellerId || null;
     const cursorKey = cursorKeyOf(scope);
     const since = await DB.getMeta(cursorKey, null);
-    const push = await collectDirty(isAdmin, sellerId);
+    const push = await collectDirty(isAdmin || isGer, sellerId);
+    if (isGer) { push.loads = []; push.sellers = []; } // hojas y vendedores: solo la oficina
 
     const headers = { 'Content-Type': 'application/json' };
     if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
@@ -338,7 +341,10 @@
 
   async function pendingCount(scope, all) {
     const cfg = await settings();
-    return total(await collectDirty(!!cfg.adminKey || !!all, scope && scope.sellerId || null));
+    const ger = !!cfg.userToken && cfg.userRole === 'gerencia';
+    const push = await collectDirty(!!cfg.adminKey || ger || !!all, scope && scope.sellerId || null);
+    if (ger && !cfg.adminKey) { push.loads = []; push.sellers = []; }
+    return total(push);
   }
 
   /* ------------------------- Diagnóstico ------------------------- */
@@ -537,6 +543,7 @@
     const headers = { 'Content-Type': 'application/json' };
     if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
     await withSellerToken(headers, sellerId);
+    await withUser(headers, cfg);
     return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/actividad'), headers, { sellerId });
   }
   /** Metas del vendedor para una quincena: { action: 'get' | 'set', sellerId, period, goals? }. */
@@ -651,5 +658,5 @@
     return n;
   }
 
-  global.Sync = { KINDS, isLocked, syncNow, pruneLocal, usersCall, pendingCount, diagnose, forceUpload, redownload, hasCursor, reserveNumbers, adminCall, readerCall, report, pushCall, keysCall, myVacios, myVentas, metas, actividad, pinCall, sellerToken, pagosCall, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
+  global.Sync = { KINDS, OFFICE_ORDER_FIELDS, OFFICE_ORDER_STATUS, isLocked, syncNow, pruneLocal, usersCall, pendingCount, diagnose, forceUpload, redownload, hasCursor, reserveNumbers, adminCall, readerCall, report, pushCall, keysCall, myVacios, myVentas, metas, actividad, pinCall, sellerToken, pagosCall, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
 })(window);
