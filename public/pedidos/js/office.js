@@ -459,6 +459,7 @@
           <td style="white-space:nowrap">${editableLoad ? `<button class="btn btn-sm" data-left="${i}" ${i ? '' : 'disabled'} aria-label="Mover a la izquierda">←</button><button class="btn btn-sm" data-right="${i}" ${i < os.length - 1 ? '' : 'disabled'} aria-label="Mover a la derecha">→</button>` : ''}</td>
           <td><b>${esc(o.clientName)}</b> <span class="muted">${esc(fmtDate(o.routeDate))}</span>${dupBadge(o, dups)}${dupLines(o, dups)}
             ${o.officeEdited ? ' <span class="status abierto">editado oficina</span>' : ''}${o.sellerEdited ? ' <span class="status en_espera">modificado por vendedor</span>' : ''}
+            ${o.factura ? ' <span class="status en_carga">🧾 FACTURA</span>' : ''}
             ${o.notes ? `<div class="muted">📝 ${esc(o.notes)}</div>` : ''}${(o.officeMsgs || []).length ? `<div class="muted">💬 ${o.officeMsgs.length} mensaje${o.officeMsgs.length > 1 ? 's' : ''} de oficina</div>` : ''}</td>
           <td><span class="tag">${esc(Loads.initials(o.sellerName))}</span></td>
           <td class="n" data-l="Bultos">${t.bultos}</td><td class="n" data-l="Unid.">${t.totalUnidades}</td><td class="n" data-l="Monto">${usd(t.monto)}</td>
@@ -654,6 +655,9 @@
         <button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
       ${locked ? '<div class="hint warn">🔒 La carga de este pedido ya fue aprobada: no se puede modificar.</div>' : ''}
       <div id="oeBody"></div>
+      ${o.status !== 'despachado' ? `<div class="row wrap" style="gap:8px;align-items:center;margin-top:10px"><b>Factura:</b>
+        <button type="button" class="chip ${o.factura ? '' : 'active'}" data-oefac="">Sin factura</button><button type="button" class="chip ${o.factura ? 'active' : ''}" data-oefac="1">🧾 Requiere factura</button>
+        <span class="muted" style="font-size:12px">Sale marcado en la hoja de carga.</span></div>` : ''}
       <div class="msg-box"><div class="section-title" style="margin:14px 0 6px">💬 Mensajes con ${esc(o.sellerName)}</div>
         <div id="oeMsgs"></div>
         <div class="row" style="gap:8px;align-items:flex-end"><label class="field grow"><span>Responder o pasar una novedad (le llega al teléfono)</span>
@@ -667,6 +671,15 @@
           <span class="muted" style="font-size:12px">Al cambiarlo, el pedido pasa solo a la hoja que corresponde.</span></div>`}
       <div class="actions">${o.status !== 'despachado' ? '<button class="btn btn-danger" id="oeDel">🗑 Eliminar pedido</button>' : ''}<button class="btn btn-primary" data-close>Listo</button></div>`, { wide: true });
     draw(sh);
+    sh.el.querySelectorAll('[data-oefac]').forEach((b) => { b.onclick = async () => {
+      const cur = orderById(o.id) || o, f = !!b.dataset.oefac;
+      if (!!cur.factura === f) return;
+      const x = { ...cur }; if (f) x.factura = true; else delete x.factura;
+      await saveOrder(x);
+      await log('pedido_factura', `${x.clientName}: ${f ? '🧾 requiere factura' : 'sin factura'}`, { orderId: x.id, clientName: x.clientName });
+      sh.el.querySelectorAll('[data-oefac]').forEach((y) => y.classList.toggle('active', y === b));
+      if (onDone) onDone();
+    }; });
     sh.el.querySelectorAll('[data-oemodo]').forEach((b) => { b.onclick = async () => {
       const cur = orderById(o.id) || o, m = b.dataset.oemodo;
       if ((cur.modo || '') === m) return;

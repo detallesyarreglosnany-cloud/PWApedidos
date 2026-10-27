@@ -207,6 +207,14 @@ textarea.input { padding: 12px 14px; min-height: 90px; resize: vertical; }
 }
 .cart-bar > * { pointer-events: auto; }
 .cart-info { font-size: 13px; color: var(--ink-2); text-align: center; }
+.cart-x { margin-left: 8px; width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--line); background: var(--surface-2); color: var(--ink); font-size: 14px; line-height: 1; vertical-align: middle; }
+.chips-wrap { display: flex; align-items: center; gap: 4px; }
+.chips-wrap .chips { flex: 1 1 auto; min-width: 0; }
+.chips-arrow { display: none; flex: 0 0 auto; width: 34px; height: 42px; margin-top: 6px; border: 1.5px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 999px; font-size: 22px; line-height: 1; }
+@media (hover: hover) and (pointer: fine) { .chips-arrow { display: inline-flex; align-items: center; justify-content: center; } }
+.chips-list { flex: 0 0 auto; min-height: 42px; margin-top: 6px; padding: 0 12px; border-radius: 999px; border: 1.5px solid var(--line); background: var(--surface); color: var(--ink); font-weight: 700; font-size: 14px; }
+.msgbadge { background: var(--brand-2); color: #fff; border-radius: 999px; padding: 2px 8px; font-size: 12px; box-shadow: 0 0 0 2px rgba(255,255,255,.25); }
+.sug-item.picked { border-color: var(--brand-2); }
 .cart-btn {
   width: min(100%, 520px); min-height: 58px; border: 0; border-radius: 999px;
   background: linear-gradient(180deg, #c8141f, #8e0a14); color: #fff;
