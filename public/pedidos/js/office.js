@@ -19,7 +19,7 @@
   const U = () => S.ui.office;
 
   const TABS = [['cargas', '🚚 Cargas'], ['pedidos', '🧾 Pedidos'], ['archivo', '🗄 Archivo'], ['envases', '♻ Envases'], ['reportes', '📈 Reportes'], ['pagos', '💵 Pagos'], ['inventario', '📦 Inventario'],
-    ['clientes', '👥 Clientes'], ['vendedores', '🧑‍💼 Vendedores'], ['historial', '🕘 Historial'], ['ajustes', '⚙ Ajustes']];
+    ['clientes', '👥 Clientes'], ['vendedores', '🧑‍💼 Vendedores'], ['usuarios', '🔐 Usuarios y roles'], ['historial', '🕘 Historial'], ['ajustes', '⚙ Ajustes']];
   const log = (type, text, extra) => PV.logEvent(type, text, extra);
 
   const productRank = () => Object.fromEntries(S.products.map((p) => [p.id, +p.sort || 9999]));
@@ -82,7 +82,7 @@
     PV.updateSyncPill(); PV.updateBell();
     const body = $('#officeBody');
     if (!S.products.length && tab !== 'ajustes') body.insertAdjacentHTML('beforebegin', setupBanner());
-    ({ cargas: renderLoads, pedidos: renderOrders, archivo: renderArchive, envases: renderEnvases, reportes: (root) => { upgradeLiquidations(root); Reportes.render(root, U().rep || (U().rep = {})); }, pagos: (root) => window.Pagos.renderOffice(root), inventario: renderInventory,
+    ({ cargas: renderLoads, pedidos: renderOrders, archivo: renderArchive, envases: renderEnvases, reportes: (root) => { upgradeLiquidations(root); Reportes.render(root, U().rep || (U().rep = {})); }, pagos: (root) => window.Pagos.renderOffice(root), usuarios: (root) => window.Roles.renderAdmin(root), inventario: renderInventory,
       clientes: renderClients, vendedores: renderSellers, historial: renderHistory, ajustes: renderSettings })[tab](body);
     const sb = $('#setupImport');
     if (sb) sb.onclick = importStarter;

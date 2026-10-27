@@ -71,7 +71,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Error del kardex de vacíos' }, { status: 500 });
     }
   }
-  const denied = action === 'list' ? requireReader(req) : requireAdmin(req);
+  const denied = action === 'list' ? await requireReader(req) : requireAdmin(req);
   if (denied) return denied;
   try {
     await ensureKardex();
