@@ -565,6 +565,7 @@
     if (h === '#/ruta/pedidos' && S.session && sellerById(S.session.sellerId)) return renderSellerOrders();
     if (h === '#/ruta/clientes' && S.session && sellerById(S.session.sellerId)) return renderMyClients();
     if (h === '#/ruta/resumen' && S.session && sellerById(S.session.sellerId)) return window.Resumen.render();
+    if (h === '#/ruta/pagos' && S.session && sellerById(S.session.sellerId)) return window.Pagos.renderSeller();
     if (h === '#/ruta' && S.session && sellerById(S.session.sellerId)) return renderSeller();
     return renderLogin();
   }
@@ -903,7 +904,7 @@
         `<button id="bell" class="bell" type="button" aria-label="Notificaciones">🔔</button><button id="syncPill" class="pill" type="button"></button><button class="icon-btn ghost" id="menuBtn" aria-label="Menú">☰</button>`)}
       <nav class="quick-nav" id="quickNav" aria-label="Accesos">
         <button type="button" data-go="pedidos">🧾 Mis pedidos</button><button type="button" data-go="hojas">🚚 Mis hojas</button>
-        <button type="button" data-go="clientes">👥 Mis clientes</button><button type="button" data-go="vacios">♻ Vacíos</button><button type="button" data-go="resumen">📊 Mi quincena</button></nav>
+        <button type="button" data-go="clientes">👥 Mis clientes</button><button type="button" data-go="vacios">♻ Vacíos</button><button type="button" data-go="resumen">📊 Mi quincena</button><button type="button" data-go="pagos">💵 Pagos</button></nav>
       ${suspension() ? suspensionHTML(suspension()) : ''}
       <section class="client-bar" ${suspension() ? 'hidden' : ''}>
         <div class="row wrap client-row">
@@ -951,6 +952,7 @@
       const b = e.target.closest('[data-go]'); if (!b) return;
       if (b.dataset.go === 'clientes') { location.hash = '#/ruta/clientes'; return; }
       if (b.dataset.go === 'resumen') { location.hash = '#/ruta/resumen'; return; }
+      if (b.dataset.go === 'pagos') { location.hash = '#/ruta/pagos'; return; }
       S.ui.myo = { ...(S.ui.myo || { g: 'todos', r: '15' }), tab: b.dataset.go };
       location.hash = '#/ruta/pedidos';
     };

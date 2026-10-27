@@ -46,7 +46,10 @@ export async function POST(req: NextRequest) {
     // oficina se reponen; los de las liquidaciones se rehacen desde los pedidos)
     let vacmovs: unknown[] = [];
     try { vacmovs = (await db.distVacMov.findMany({ orderBy: { id: 'asc' } })).map((m) => ({ ...m, at: m.at.toISOString() })); } catch (e) { console.warn('[backup] kardex', e); }
-    return NextResponse.json({ docs: out, next: null, counters: Object.fromEntries(counters.map((c) => [c.name, c.value])), vacmovs });
+    // Pagos de clientes (cobranza): también van en la última página
+    let pagos: unknown[] = [];
+    try { pagos = (await db.distPago.findMany({ orderBy: { id: 'asc' } })).map((r) => JSON.parse(r.data)); } catch (e) { console.warn('[backup] pagos', e); }
+    return NextResponse.json({ docs: out, next: null, counters: Object.fromEntries(counters.map((c) => [c.name, c.value])), vacmovs, pagos });
   } catch (error) {
     console.error('[pedidos/backup]', error);
     return NextResponse.json({ error: 'No se pudo leer el respaldo' }, { status: 500 });

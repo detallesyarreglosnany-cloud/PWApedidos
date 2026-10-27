@@ -471,6 +471,26 @@
     printHTML('Cuadre de despachos ' + ctx.from + ' a ' + ctx.to, LOAD_CSS + ' table.load.wide{width:100%} h3{font-size:12px;margin:10px 0 3px} @page{size:letter landscape;margin:8mm}', body);
   }
 
+  /** Pagos de clientes para cobranzas: un bloque por vendedor, con sus formas de pago y totales, y firmas. */
+  function printPagos(pagos, ctx) {
+    const M = ctx.METHODS, A = ctx.ADJUSTS, ST = ctx.ST;
+    const money = (l) => (l.currency === 'VES' ? 'Bs ' + nf2.format(l.amount) : l.currency === 'COP' ? 'COP ' + nf0.format(l.amount) : '$ ' + nf2.format(l.amount));
+    const by = new Map(); pagos.slice().sort((a, b) => a.date.localeCompare(b.date) || String(a.clientName).localeCompare(String(b.clientName), 'es')).forEach((p) => by.set(p.sellerName || p.sellerId, (by.get(p.sellerName || p.sellerId) || []).concat(p)));
+    const block = ([name, list]) => {
+      const live = list.filter((p) => p.status !== 'rechazado' && p.status !== 'anulado');
+      const t = {}; live.forEach((p) => p.lines.forEach((l) => { const x = t[l.method] || (t[l.method] = { currency: l.currency, amount: 0, usd: 0 }); x.amount += l.amount; x.usd += l.usd; }));
+      return `<section class="pg"><h3>${esc(name)} · ${list.length} pago${list.length === 1 ? '' : 's'}</h3>
+        <table class="rep"><thead><tr><th>Fecha</th><th>Cliente</th><th>Notas</th><th>Forma de pago</th><th>Banco</th><th>Referencia</th><th>Monto</th><th>≈ $</th><th>Estado</th></tr></thead><tbody>
+        ${list.map((p) => p.lines.map((l, i) => `<tr><td>${i ? '' : esc(p.date)}</td><td>${i ? '' : esc(p.clientName)}</td><td>${i ? '' : esc(p.notas.map((n) => n.nota).join(', '))}</td><td>${esc((M[l.method] || {}).label || l.method)}</td><td>${esc(l.bank || '')}</td><td>${esc(l.ref || '')}</td><td class="num">${money(l)}</td><td class="num">${nf2.format(l.usd)}</td><td>${i ? '' : esc((ST[p.status] || [p.status])[0])}</td></tr>`).join('')
+          + (p.adjusts || []).map((a) => `<tr><td></td><td></td><td></td><td>${esc(A[a.type] || a.type)}${a.type === 'descuento' ? ' ' + a.pct + ' %' : ''}</td><td></td><td></td><td></td><td class="num">${nf2.format(a.usd)}</td><td></td></tr>`).join('')).join('')}
+        </tbody><tfoot>${Object.entries(t).map(([k, x]) => `<tr class="tot"><td colspan="6">Total ${esc((M[k] || {}).label || k)}</td><td class="num">${money({ currency: x.currency, amount: Math.round(x.amount * 100) / 100 })}</td><td class="num">${nf2.format(x.usd)}</td><td></td></tr>`).join('')}
+          <tr class="tot"><td colspan="7">TOTAL COBRADO (≈ $, sin rechazados)</td><td class="num">${nf2.format(live.reduce((a, p) => a + p.pagado + p.ajustes, 0))}</td><td></td></tr></tfoot></table>
+        <div class="sign" style="grid-template-columns:repeat(2,1fr)"><div>Vendedor: ${esc(name)}</div><div>Recibido por cobranzas</div></div></section>`;
+    };
+    const body = `<section>${header(ctx.config, 'PAGOS PARA COBRANZAS', ctx.title || '')}${[...by.entries()].map(block).join('') || '<p>Sin pagos.</p>'}</section>`;
+    printHTML('Pagos ' + (ctx.title || ''), '@page{size:letter landscape;margin:10mm} h3{font-size:12px;margin:10px 0 3px;color:#730101} table.rep td{font-size:10px} table.rep tr.tot td{font-weight:bold;background:#f3e3e3} section.pg{page-break-inside:avoid;margin-bottom:12px}', body);
+  }
+
   global.AlignCols = alignCols;
-  global.Print = { printTruckLedger, printLoadSheet, printNotes, printLiquidation, printKardex, printQuincena, printCatSel, printTickets, printTestTicket };
+  global.Print = { printTruckLedger, printLoadSheet, printNotes, printLiquidation, printKardex, printQuincena, printCatSel, printPagos, printTickets, printTestTicket };
 })(window);

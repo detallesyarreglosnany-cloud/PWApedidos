@@ -464,6 +464,18 @@
     return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/pin'), headers, { ...body, deviceId: await deviceId() });
   }
 
+  /** Pagos de clientes (cobranza). El vendedor va con su permiso de PIN (si lo tiene); la oficina con su clave. */
+  async function pagosCall(body) {
+    if (!navigator.onLine) return { ok: false, offline: true, error: 'Sin internet' };
+    const cfg = await settings();
+    const headers = { 'Content-Type': 'application/json' };
+    if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
+    if (cfg.adminKey) headers['x-admin-key'] = cfg.adminKey;
+    else if (cfg.supervisorKey) headers['x-supervisor-key'] = cfg.supervisorKey;
+    await withSellerToken(headers, (body && (body.sellerId || (body.pago && body.pago.sellerId))) || '');
+    return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/pagos'), headers, body);
+  }
+
   /** «Mi quincena» del vendedor: sus ventas liquidadas por categoría y producto (clave de sincronización). */
   async function myVentas(sellerId, from, to) {
     if (!navigator.onLine) return { ok: false, offline: true };
@@ -506,7 +518,7 @@
       r.data.docs.forEach(({ kind, doc }) => { (bundle[kind] = bundle[kind] || []).push(doc); });
       n += r.data.docs.length;
       if (onProgress) onProgress(n);
-      if (!r.data.next) { bundle.counters = r.data.counters || {}; bundle.vacmovs = r.data.vacmovs || []; break; }
+      if (!r.data.next) { bundle.counters = r.data.counters || {}; bundle.vacmovs = r.data.vacmovs || []; bundle.pagos = r.data.pagos || []; break; }
       after = r.data.next;
     }
     // Fotos (se guardan aparte en el servidor): vuelven dentro de su producto, así
@@ -575,6 +587,11 @@
     n += await mergeRemote('orders', bundle.orders || [], isAdmin, true, true);
     // Historial de actividad del respaldo (solo la oficina; en el servidor solo se agrega, nunca se pisa)
     if (isAdmin) n += await mergeRemote('events', bundle.events || [], isAdmin, true, true);
+    // Pagos de clientes del respaldo: se reponen en el servidor los que falten (necesita internet)
+    if (isAdmin && Array.isArray(bundle.pagos) && bundle.pagos.length) {
+      const rp = await adminCall('pagos', { action: 'import', pagos: bundle.pagos });
+      if (!rp.ok) console.warn('[import] pagos', rp.error);
+    }
     // Kardex de vacíos del respaldo: se repone en el servidor (necesita internet)
     if (isAdmin && Array.isArray(bundle.vacmovs) && bundle.vacmovs.length) {
       const r = await adminCall('envases', { action: 'import', movs: bundle.vacmovs });
@@ -584,5 +601,5 @@
     return n;
   }
 
-  global.Sync = { KINDS, isLocked, syncNow, pendingCount, diagnose, forceUpload, redownload, hasCursor, reserveNumbers, adminCall, readerCall, report, pushCall, keysCall, myVacios, myVentas, metas, actividad, pinCall, sellerToken, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
+  global.Sync = { KINDS, isLocked, syncNow, pendingCount, diagnose, forceUpload, redownload, hasCursor, reserveNumbers, adminCall, readerCall, report, pushCall, keysCall, myVacios, myVentas, metas, actividad, pinCall, sellerToken, pagosCall, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
 })(window);

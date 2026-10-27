@@ -18,7 +18,7 @@
     copyText, saveFile, pickFile, saveDocs, saveOrder, productById, sellerById, orderById, clientById, rubros } = PV;
   const U = () => S.ui.office;
 
-  const TABS = [['cargas', '🚚 Cargas'], ['pedidos', '🧾 Pedidos'], ['archivo', '🗄 Archivo'], ['envases', '♻ Envases'], ['reportes', '📈 Reportes'], ['inventario', '📦 Inventario'],
+  const TABS = [['cargas', '🚚 Cargas'], ['pedidos', '🧾 Pedidos'], ['archivo', '🗄 Archivo'], ['envases', '♻ Envases'], ['reportes', '📈 Reportes'], ['pagos', '💵 Pagos'], ['inventario', '📦 Inventario'],
     ['clientes', '👥 Clientes'], ['vendedores', '🧑‍💼 Vendedores'], ['historial', '🕘 Historial'], ['ajustes', '⚙ Ajustes']];
   const log = (type, text, extra) => PV.logEvent(type, text, extra);
 
@@ -80,7 +80,7 @@
     PV.updateSyncPill(); PV.updateBell();
     const body = $('#officeBody');
     if (!S.products.length && tab !== 'ajustes') body.insertAdjacentHTML('beforebegin', setupBanner());
-    ({ cargas: renderLoads, pedidos: renderOrders, archivo: renderArchive, envases: renderEnvases, reportes: (root) => { upgradeLiquidations(root); Reportes.render(root, U().rep || (U().rep = {})); }, inventario: renderInventory,
+    ({ cargas: renderLoads, pedidos: renderOrders, archivo: renderArchive, envases: renderEnvases, reportes: (root) => { upgradeLiquidations(root); Reportes.render(root, U().rep || (U().rep = {})); }, pagos: (root) => window.Pagos.renderOffice(root), inventario: renderInventory,
       clientes: renderClients, vendedores: renderSellers, historial: renderHistory, ajustes: renderSettings })[tab](body);
     const sb = $('#setupImport');
     if (sb) sb.onclick = importStarter;
@@ -2749,6 +2749,8 @@
           <div class="row" style="margin-top:10px"><button class="btn btn-danger" id="rsGo">Reiniciar datos…</button></div>
           <div id="rsOut" class="muted" style="margin-top:10px"></div></section>
 
+        <section class="card card-pad" id="payAccBox"></section>
+
         <section class="card card-pad"><h3>Hoja de carga</h3>
           <div class="grid3">
             <label class="field"><span>Tope por hoja</span><input id="lLimit" class="input" inputmode="numeric" value="${L.limit}"></label>
@@ -2841,6 +2843,7 @@
         ${S.persisted === false ? `<div class="hint warn">${PV.PERSIST_HINT}</div>` : ''}
       </div>`;
 
+    if (window.Pagos) Pagos.renderAccounts($('#payAccBox'));
     const saveCfg = async (patch) => { await saveDocs('config', { ...S.config, ...patch }); renderSettings(root); toast('Guardado', 'ok'); };
     const tSave = async () => { await PV.saveSettings({ ticket: { width: +$('#tWidth').value === 58 ? 58 : 80, prices: $('#tPrices').value === '1', copies: +$('#tCopies').value === 2 ? 2 : 1 } }); toast('Impresora de tickets guardada', 'ok'); };
     ['#tWidth', '#tPrices', '#tCopies'].forEach((x) => { $(x).onchange = tSave; });
