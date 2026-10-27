@@ -530,3 +530,11 @@ table.grid.sheet-grid .cell-in { min-height: 30px; }
 .liq-cuadre.bad { border-color: var(--warn); }
 .select.need { border-color: var(--warn); box-shadow: 0 0 0 2px rgba(255,180,0,.25); }
 .load-card.retiro { border-color: #5aa9ff; box-shadow: inset 4px 0 0 #5aa9ff; }
+
+/* ---------- Mi quincena: metas ---------- */
+.goal-bar { position: relative; height: 16px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 999px; overflow: hidden; margin: 6px 0 4px; }
+.goal-bar i { position: absolute; inset: 0 auto 0 0; border-radius: 999px; }
+.goal-bar i.g2 { background: rgba(31, 163, 92, .28); }
+.goal-bar i.g1 { background: linear-gradient(90deg, #5f070e, var(--brand-2)); }
+.goal.g-ok .goal-bar i.g1 { background: linear-gradient(90deg, #14703f, var(--ok)); }
+.goal-msg { font-size: 14px; color: var(--ink-2); }
