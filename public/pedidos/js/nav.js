@@ -87,6 +87,9 @@
       ] },
     ],
     cobranzas: [
+      { id: 'hojas', icon: '🚚', label: 'Despachos a crédito', items: [
+        { icon: '🧾', label: 'Hojas por aprobar', go: '#/cobranzas/hojas', count: 'revisar' },
+      ] },
       { id: 'pagos', icon: '💵', label: 'Pagos y cobranza', items: [
         { icon: '⏳', label: 'Pagos por verificar', go: '#/cobranzas/pagos' },
         { icon: '📅', label: 'Cuentas por cobrar', go: '#/cobranzas/pagos', act: 'cartera' },
@@ -143,6 +146,7 @@
       c.espera = S.orders.filter((o) => !o.deleted && o.status === 'en_espera').length;
       c.verificar = S.clients.filter((x) => !x.deleted && global.Clientes && !global.Clientes.isVerified(x)).length;
     }
+    if (role === 'cobranzas' && global.Revision) c.revisar = global.Revision.pendingCount();
     return c;
   }
 

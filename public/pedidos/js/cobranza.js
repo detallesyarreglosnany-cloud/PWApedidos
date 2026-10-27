@@ -282,14 +282,16 @@
   /** Guarda qué clientes van de contado para marcarlos en la hoja de carga. */
   // Una consulta a la vez, y si falla se espera 5 minutos antes de reintentar (no una por cada redibujo de pantalla)
   let warming = null, warmFailAt = 0;
+  // Por cliente: condición, semáforo, deuda, vencido, días de atraso y límite (para las hojas de carga, sin internet también)
+  const saveMap = (clientes) => { const map = {}; clientes.forEach((k) => { map[k.clientId] = { m: k.modo, s: k.semaforo, d: k.deuda, v: k.vencido, a: k.atrasoMax, l: k.limite || 0 }; }); lsSet(CMAP, { at: Date.now(), v: 3, map }); };
+  const markOf = (clientId) => { const c = lsGet(CMAP); return (c && c.map && c.map[clientId]) || null; };
   async function warmOffice(force) {
     const c = lsGet(CMAP); if (!force && c && Date.now() - c.at < 15 * 60000 && c.v === 3) return false;
     if (!navigator.onLine || warming || (!force && Date.now() - warmFailAt < 5 * 60000)) return false;
     warming = global.Sync.pagosCall({ action: 'creditos' });
     let r; try { r = await warming; } finally { warming = null; }
     if (!r.ok) { warmFailAt = Date.now(); return false; }
-    const map = {}; r.data.clientes.forEach((k) => { map[k.clientId] = { m: k.modo, s: k.semaforo, d: k.deuda, v: k.vencido, a: k.atrasoMax }; });
-    lsSet(CMAP, { at: Date.now(), v: 3, map }); return true;
+    saveMap(r.data.clientes); return true;
   }
   /** 'contado' | 'nuevo' | '' para la hoja de carga (oficina). */
   /** Crédito de un cliente para la hoja de carga (oficina): { m: 'credito'|'contado'|'nuevo', s: semáforo } o null. */
@@ -325,7 +327,7 @@
     if (!r.ok) { out.innerHTML = `<div class="hint warn">${esc(r.error || 'No se pudo consultar')}</div>`; return; }
     el.querySelector('#crPct').textContent = String(r.data.reglas.penal).replace('.', ',');
     let list = r.data.clientes.slice().sort((a, b) => b.atrasoMax - a.atrasoMax || b.deuda - a.deuda || a.clientName.localeCompare(b.clientName, 'es'));
-    const map = {}; list.forEach((k) => { map[k.clientId] = { m: k.modo, s: k.semaforo, d: k.deuda, v: k.vencido, a: k.atrasoMax }; }); lsSet(CMAP, { at: Date.now(), v: 3, map });
+    saveMap(list);
     const sname = (k) => ((P.sellerById(k.sellerId) || {}).name || k.sellerName || '—');
     const filt = () => list.filter((k) => (!st.q || P.norm(k.clientName).includes(P.norm(st.q))) && (!st.seller || k.sellerId === st.seller)
       && (!st.sem || (st.sem === 'contado' ? k.modo === 'contado' : st.sem === 'sug' ? k.limite > 0 && k.bajaPct > 0 : k.semaforo === st.sem)));
@@ -346,30 +348,33 @@
       cols: [{ h: 'SEMÁFORO', w: 12 }, { h: 'CLIENTE', w: 32 }, { h: 'VENDEDOR', w: 16 }, { h: 'CONDICIÓN', w: 12 }, { h: 'LÍMITE', k: 'money' }, { h: 'DEBE', k: 'money', total: true }, { h: 'VENCIDO', k: 'money', total: true }, { h: 'DÍAS ATRASO', k: 'int' }, { h: 'A TIEMPO', w: 10 }, { h: 'SUGERIDO', k: 'money' }, { h: 'NOTA', w: 30 }],
       rows: filt().map((k) => [SEM[k.semaforo] || '', k.clientName, sname(k), k.modo === 'contado' ? 'Contado' : k.modo === 'nuevo' ? 'Nuevo' : 'Crédito', k.limite || '', k.deuda, k.vencido, k.atrasoMax, k.pagadas ? `${k.aTiempo}/${k.pagadas}` : '', k.limite > 0 && k.bajaPct > 0 ? k.sugerido : '', k.nota || '']) })]);
     out.onclick = (e) => { const b = e.target.closest('[data-ed]'); if (b) editForm(list.find((k) => k.clientId === b.dataset.ed)); };
-    function editForm(k) {
-      const f = openSheet(`<div class="row"><h2 class="grow">🚦 ${esc(k.clientName)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
-        <p>${DOT[k.semaforo] || ''} ${esc(SEM[k.semaforo] || '')}${k.motivo ? ' · ' + esc(k.motivo) : ''}</p>
-        <p class="muted">Debe ${usd(k.deuda)}${k.vencido ? ' · vencido ' + usd(k.vencido) : ''}${k.pagadas ? ` · pagó ${k.aTiempo} de ${k.pagadas} notas a tiempo` : ''} · ${k.compras} compras recientes</p>
-        <label class="field"><span>Condición</span><select id="ceM" class="select"><option value="auto">Según el sistema${k.nuevo ? ' (nuevo: contado)' : ''}</option><option value="credito">Crédito</option><option value="contado">Contado</option></select></label>
-        <label class="field"><span>Límite de crédito ($) <small class="muted">0 = sin límite fijado</small></span><input id="ceL" class="input" inputmode="decimal" value="${k.base === 'cobranza' ? esc(k.limite) : ''}" placeholder="${k.base === 'promedio' ? 'promedio: ' + esc(k.limite) : ''}"></label>
-        ${k.limite > 0 && k.bajaPct > 0 ? `<button class="btn btn-sm" id="ceSug">Usar el sugerido: ${usd(k.sugerido)}</button>` : ''}
-        <label class="field"><span>Nota (la ve el vendedor)</span><input id="ceN" class="input" maxlength="300" value="${esc(k.nota || '')}"></label>
-        <div class="actions"><button class="btn btn-primary" id="ceOk">Guardar</button></div>`);
-      const q = (id) => f.el.querySelector(id);
-      q('#ceM').value = k.fijado || 'auto';
-      if (q('#ceSug')) q('#ceSug').onclick = () => { q('#ceL').value = k.sugerido; };
-      q('#ceOk').onclick = async () => {
-        const lim = Number(String(q('#ceL').value).replace(/\./g, '').replace(',', '.')) || 0;
-        const x = await global.Sync.pagosCall({ action: 'credito', clientId: k.clientId, modo: q('#ceM').value, limite: lim, nota: q('#ceN').value, by: (S.config && S.config.adminName) || 'Cobranza' });
-        if (!x.ok) { toast(x.error || 'No se pudo guardar', 'err'); return; }
-        P.logEvent('credito', `Crédito de ${k.clientName}: ${q('#ceM').value === 'contado' ? 'contado' : q('#ceM').value === 'credito' ? 'crédito' : 'según el sistema'}${lim ? ' · límite $' + lim : ''}`);
-        f.close(); toast('Crédito guardado: le llega al vendedor', 'ok');
-        const r2 = await global.Sync.pagosCall({ action: 'creditos' }); if (r2.ok) { list = r2.data.clientes.slice().sort((a, b) => b.atrasoMax - a.atrasoMax || b.deuda - a.deuda || a.clientName.localeCompare(b.clientName, 'es')); const m = {}; list.forEach((z) => { m[z.clientId] = { m: z.modo, s: z.semaforo, d: z.deuda, v: z.vencido, a: z.atrasoMax }; }); lsSet(CMAP, { at: Date.now(), v: 3, map: m }); }
-        draw();
-      };
-    }
+    function editForm(k) { creditEdit(k, (l) => { list = l.slice().sort((a, b) => b.atrasoMax - a.atrasoMax || b.deuda - a.deuda || a.clientName.localeCompare(b.clientName, 'es')); draw(); }); }
     draw();
   }
 
-  global.Cobranza = { load, refresh, hintFor, credOf, barNote, debtOf, afterSend, afterPay, officeChip, renderSeller, officeSheet, creditSheet, warmOffice, contadoOf, semOf, DOT, SEM, waText, phoneOf, diasTxt, SEG };
+  /** Ajustar el crédito de un cliente (cobranza u oficina): condición, límite y nota. onSaved recibe la lista nueva. */
+  function creditEdit(k, onSaved) {
+    const P = PV(), { esc, usd, openSheet, toast, S } = P;
+    const f = openSheet(`<div class="row"><h2 class="grow">🚦 ${esc(k.clientName)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <p>${DOT[k.semaforo] || ''} ${esc(SEM[k.semaforo] || '')}${k.motivo ? ' · ' + esc(k.motivo) : ''}</p>
+      <p class="muted">Debe ${usd(k.deuda)}${k.vencido ? ' · vencido ' + usd(k.vencido) : ''}${k.pagadas ? ` · pagó ${k.aTiempo} de ${k.pagadas} notas a tiempo` : ''} · ${k.compras} compras recientes</p>
+      <label class="field"><span>Condición</span><select id="ceM" class="select"><option value="auto">Según el sistema${k.nuevo ? ' (nuevo: contado)' : ''}</option><option value="credito">Crédito</option><option value="contado">Contado</option></select></label>
+      <label class="field"><span>Límite de crédito ($) <small class="muted">0 = sin límite fijado</small></span><input id="ceL" class="input" inputmode="decimal" value="${k.base === 'cobranza' ? esc(k.limite) : ''}" placeholder="${k.base === 'promedio' ? 'promedio: ' + esc(k.limite) : ''}"></label>
+      ${k.limite > 0 && k.bajaPct > 0 ? `<button class="btn btn-sm" id="ceSug">Usar el sugerido: ${usd(k.sugerido)}</button>` : ''}
+      <label class="field"><span>Nota (la ve el vendedor)</span><input id="ceN" class="input" maxlength="300" value="${esc(k.nota || '')}"></label>
+      <div class="actions"><button class="btn btn-primary" id="ceOk">Guardar</button></div>`);
+    const q = (id) => f.el.querySelector(id);
+    q('#ceM').value = k.fijado || 'auto';
+    if (q('#ceSug')) q('#ceSug').onclick = () => { q('#ceL').value = k.sugerido; };
+    q('#ceOk').onclick = async () => {
+      const lim = Number(String(q('#ceL').value).replace(/\./g, '').replace(',', '.')) || 0;
+      const x = await global.Sync.pagosCall({ action: 'credito', clientId: k.clientId, modo: q('#ceM').value, limite: lim, nota: q('#ceN').value, by: (S.config && S.config.adminName) || 'Cobranza' });
+      if (!x.ok) { toast(x.error || 'No se pudo guardar', 'err'); return; }
+      P.logEvent('credito', `Crédito de ${k.clientName}: ${q('#ceM').value === 'contado' ? 'contado' : q('#ceM').value === 'credito' ? 'crédito' : 'según el sistema'}${lim ? ' · límite $' + lim : ''}`);
+      f.close(); toast('Crédito guardado: le llega al vendedor', 'ok');
+      const r2 = await global.Sync.pagosCall({ action: 'creditos' }); if (r2.ok) { saveMap(r2.data.clientes); if (onSaved) onSaved(r2.data.clientes); }
+    };
+  }
+
+  global.Cobranza = { load, refresh, hintFor, credOf, barNote, debtOf, afterSend, afterPay, officeChip, renderSeller, officeSheet, creditSheet, warmOffice, contadoOf, semOf, markOf, creditEdit, DOT, SEM, waText, phoneOf, diasTxt, SEG };
 })(window);

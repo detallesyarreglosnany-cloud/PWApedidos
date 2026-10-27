@@ -486,6 +486,12 @@ export async function POST(req: NextRequest) {
             rejected.push({ kind, id: doc.id, reason: 'partial', doc: cur || undefined });
             continue;
           }
+          // La revisión de cobranzas (cobRev) solo la escribe el servidor (acción «revisar»): siempre vale la guardada
+          if (kind === 'loads') {
+            const d = doc as Record<string, unknown>, fv = (d.fv && typeof d.fv === 'object' ? d.fv : null) as Fv | null, cfv = cur ? fvFull(cur) : {};
+            if (cur && cur.cobRev !== undefined) d.cobRev = cur.cobRev; else delete d.cobRev;
+            if (fv) { if (cfv.cobRev) fv.cobRev = cfv.cobRev; else delete fv.cobRev; }
+          }
           // Gerencia solo cambia la lista de categorías de la configuración (al crear un producto de una categoría nueva)
           if (kind === 'config' && isGer) {
             if (!cur) { rejected.push({ kind, id: doc.id, reason: 'foreign' }); continue; }

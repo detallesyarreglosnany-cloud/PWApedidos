@@ -23,6 +23,7 @@ import { METHODS, REF_MIN, abonoKey, allocate, cleanPago, normRef, noteKey, nota
 //     { action: 'creditos', sellerId? }           → { clientes }  récord y crédito de cada cliente (oficina o supervisor)
 //     { action: 'credito', clientId, modo, limite, nota } → { ok }  cobranza fija contado/crédito y límite (solo oficina)
 //     { action: 'ref', refs, pagoId? }            → { usadas: { ref: { clientName, sellerName, date, status } } }  aviso al escribir
+//     { action: 'revisar', loadId, orderId, estado, nota } → { cobRev }  cobranzas revisa un cliente de una hoja (oficina o cobranzas)
 //     { action: 'integridad' }                    → { cruzados, ajenos, refs, sobre }  revisión de solo lectura (oficina o supervisor)
 //     { action: 'importCobro', rows }             → { added }  restaurar crédito y seguimientos de un respaldo
 //     { action: 'seguir', sellerId, clientId, key, nota, estado, comentario } → { ok }  seguimiento de cobro (le llega a la oficina)
@@ -252,6 +253,41 @@ export async function POST(req: NextRequest) {
       const byKey: Record<string, unknown> = {}, byIdx: unknown[] = [];
       for (const w of want) { const a = w.clientId ? ab.get(abonoKey(w.clientId, w)) : undefined; const x = { pagado: a ? a.pagado : 0, aprobado: a ? a.aprobado : 0, ...noteStatus(w.monto, a) }; byKey[noteKey(w)] = x; byIdx.push(x); }
       return NextResponse.json({ byKey, byIdx }, { headers: NO_STORE });
+    }
+
+    if (action === 'revisar') {
+      // Cobranzas revisa un cliente de una hoja de carga: crédito, contado o retener (o borra la decisión).
+      // Se guarda en la propia hoja (campo cobRev, solo lo escribe el servidor) con la fila bloqueada: dos personas
+      // revisando a la vez no se pisan, y la oficina lo ve aunque esté sin internet (le llega con la hoja).
+      if (!isCob) return NextResponse.json({ error: 'Solo la oficina o cobranzas revisan las hojas' }, { status: 401 });
+      const loadId = str(body.loadId, 120), orderId = str(body.orderId, 120), estado = str(body.estado, 12), nota = str(body.nota, 200);
+      if (!loadId || !orderId || !['aprobado', 'contado', 'retener', ''].includes(estado)) return NextResponse.json({ error: 'Datos inválidos' }, { status: 400 });
+      const FV_SKIP = new Set(['id', 'updatedAt', 'fv', 'dirty', 'dupWith', 'partial']);
+      const out = await db.$transaction(async (tx) => {
+        const rows = await tx.$queryRaw<{ data: string; updatedAt: string }[]>`SELECT "data", "updatedAt" FROM "DistDoc" WHERE "kind" = 'loads' AND "id" = ${loadId} FOR UPDATE`;
+        if (!rows[0]) return { error: 'No existe esa hoja', status: 404 };
+        const l = JSON.parse(rows[0].data) as Record<string, unknown> & { deleted?: boolean; fv?: Record<string, string>; cobRev?: Record<string, unknown>; label?: string; updatedAt?: string };
+        if (l.deleted) return { error: 'Esa hoja fue eliminada', status: 409 };
+        const oRow = await tx.distDoc.findUnique({ where: { kind_id: { kind: 'orders', id: orderId } }, select: { data: true } });
+        const o = oRow ? (JSON.parse(oRow.data) as { loadId?: string; deleted?: boolean; clientName?: string; lines?: Record<string, { cajas?: number; unidades?: number; boxPrice?: number; unitPrice?: number }> }) : null;
+        if (!o || o.deleted || o.loadId !== loadId) return { error: 'Ese pedido ya no está en esta hoja: actualiza la pantalla', status: 409 };
+        const now = new Date().toISOString(), prevAt = String(rows[0].updatedAt || l.updatedAt || '');
+        const monto = r2(Object.values(o.lines || {}).reduce((a, x) => a + r2((Number(x.cajas) || 0) * (Number(x.boxPrice) || 0) + (Number(x.unidades) || 0) * (Number(x.unitPrice) || 0)), 0));
+        const rev = { ...(l.cobRev || {}) };
+        if (estado) rev[orderId] = { estado, nota, by: actor || 'Oficina', at: now, monto }; else delete rev[orderId];
+        // Versión por campo: lo demás conserva su hora; cobRev queda con la de ahora (así gana al fusionar)
+        const fv: Record<string, string> = l.fv && typeof l.fv === 'object' ? { ...l.fv } : Object.fromEntries(Object.keys(l).filter((k) => !FV_SKIP.has(k)).map((k) => [k, prevAt]));
+        const upd = now > prevAt ? now : new Date(Date.parse(prevAt) + 1).toISOString();
+        fv.cobRev = upd;
+        const next = { ...l, cobRev: rev, fv, updatedAt: upd };
+        await tx.distDoc.update({ where: { kind_id: { kind: 'loads', id: loadId } }, data: { data: JSON.stringify(next), updatedAt: upd, syncedAt: new Date() } });
+        return { cobRev: rev, at: upd, label: String(l.label || ''), clientName: String(o.clientName || '') };
+      });
+      if ('error' in out) return NextResponse.json({ error: out.error }, { status: out.status });
+      if (estado === 'retener') {
+        try { await sendPush('office', null, [{ title: '⏸ Cobranzas retuvo un cliente', body: `${out.clientName}${out.label ? ' · hoja ' + out.label : ''}${nota ? ': ' + nota : ''}`.slice(0, 300), tag: `crev-${orderId}` }]); } catch (e) { console.warn('[push revisar]', e); }
+      }
+      return NextResponse.json({ cobRev: out.cobRev, at: out.at });
     }
 
     if (action === 'ref') {
