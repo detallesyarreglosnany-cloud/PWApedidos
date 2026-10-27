@@ -10,7 +10,7 @@ import { safeEqual } from '@/lib/keys';
 //      así quien usa la app no puede apagar el aviso. Se guarda en la base: no hace falta volver a publicar.
 //
 // Valores por omisión (si no se configuró nada): variables PEDIDOS_TRIAL_END (AAAA-MM-DD), PEDIDOS_TRIAL_MESSAGE,
-// PEDIDOS_TRIAL_CONTACT y PEDIDOS_TRIAL_OFF=1; si tampoco existen, el fin de la prueba por omisión de abajo.
+// PEDIDOS_TRIAL_CONTACT y PEDIDOS_TRIAL_OFF (por omisión el aviso está APAGADO; =0 lo enciende); si tampoco existen, el fin de la prueba por omisión de abajo.
 
 export const dynamic = 'force-dynamic';
 
@@ -24,7 +24,8 @@ type Cfg = { off: boolean; endsAt: string; message: string; contact: string };
 function envCfg(): Cfg {
   const end = process.env.PEDIDOS_TRIAL_END || '';
   return {
-    off: process.env.PEDIDOS_TRIAL_OFF === '1',
+    // Suspendido (ya se pagó): para volver a mostrarlo, PEDIDOS_TRIAL_OFF=0 o POST { key, off: false } con la clave del desarrollador
+    off: process.env.PEDIDOS_TRIAL_OFF !== '0',
     endsAt: isDay(end) ? end : DEFAULT_END,
     message: clean(process.env.PEDIDOS_TRIAL_MESSAGE, 400),
     contact: clean(process.env.PEDIDOS_TRIAL_CONTACT, 80) || DEFAULT_CONTACT,
