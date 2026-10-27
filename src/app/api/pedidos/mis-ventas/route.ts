@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { syncOk } from '@/lib/keys';
+import { sellerAccessOk } from '@/lib/pin';
 
 // Resumen de ventas de UN vendedor (su pantalla «Mi quincena»): solo lectura, con la clave de sincronización
 // (igual que el kardex de vacíos del vendedor). Cuenta lo ENTREGADO en hojas con la liquidación CERRADA
@@ -33,6 +34,8 @@ export async function POST(req: NextRequest) {
   const sellerId = typeof body.sellerId === 'string' ? body.sellerId.trim().slice(0, 120) : '';
   const { from, to } = body;
   if (!sellerId) return NextResponse.json({ error: 'Falta el vendedor' }, { status: 400 });
+  // Vendedor con PIN: solo desde un teléfono de confianza (sin PIN, todo sigue igual)
+  if (!(await sellerAccessOk(req, sellerId))) return NextResponse.json({ error: 'PIN', pin: true }, { status: 401 });
   if (!isDay(from) || !isDay(to) || from > to) return NextResponse.json({ error: 'Rango de fechas inválido' }, { status: 400 });
   if ((Date.parse(to) - Date.parse(from)) / 86400000 > MAX_DAYS) return NextResponse.json({ error: `Máximo ${MAX_DAYS} días por consulta` }, { status: 400 });
 

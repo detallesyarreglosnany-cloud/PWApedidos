@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { syncOk } from '@/lib/keys';
+import { sellerAccessOk } from '@/lib/pin';
 
 // Actividad de compra de los clientes de UN vendedor: fecha del último pedido y cuántos pedidos ha hecho.
 // El teléfono solo guarda los pedidos de las últimas semanas, así que esto se pregunta al servidor.
@@ -20,6 +21,8 @@ export async function POST(req: NextRequest) {
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }); }
   const sellerId = typeof body.sellerId === 'string' ? body.sellerId.trim().slice(0, 120) : '';
   if (!sellerId) return NextResponse.json({ error: 'Falta el vendedor' }, { status: 400 });
+  // Vendedor con PIN: solo desde un teléfono de confianza (sin PIN, todo sigue igual)
+  if (!(await sellerAccessOk(req, sellerId))) return NextResponse.json({ error: 'PIN', pin: true }, { status: 401 });
   try {
     const ids = (await db.distDoc.findMany({ where: { kind: 'clients', sellerId, deleted: false }, select: { id: true } })).map((r) => r.id);
     if (!ids.length) return NextResponse.json({ byClient: {}, asOf: new Date().toISOString() }, { headers: { 'Cache-Control': 'no-store' } });
