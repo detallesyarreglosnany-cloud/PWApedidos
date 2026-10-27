@@ -496,7 +496,7 @@
       const r = await global.Sync.pagosCall({ action: 'list', from: st.from, to: st.to, sellerId: st.seller, status: st.status, by: st.by });
       const out = q('#pfOut'); if (!out) return;
       if (!r.ok) { out.innerHTML = `<div class="hint warn">${esc(r.error || 'No se pudo consultar')}</div>`; return; }
-      const pagos = r.data.pagos, office = !!(S.settings && S.settings.adminKey);
+      const pagos = r.data.pagos, office = !!(S.settings && (S.settings.adminKey || S.settings.userRole === 'cobranzas'));
       const bySeller = new Map(); pagos.forEach((p) => bySeller.set(p.sellerName || p.sellerId, (bySeller.get(p.sellerName || p.sellerId) || []).concat(p)));
       const tot = totals(pagos);
       const dayOf = (p) => (st.by === 'subido' ? vzDay(p.createdAt) : p.date);

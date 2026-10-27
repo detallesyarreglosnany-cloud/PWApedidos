@@ -37,7 +37,7 @@ function orderTotals(o: OrderDoc) {
 }
 
 export async function POST(req: NextRequest) {
-  const denied = requireReader(req);
+  const denied = await requireReader(req);
   if (denied) return denied;
   let body: { from?: unknown; to?: unknown };
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }); }

@@ -333,6 +333,8 @@
     // Otra pestaña ya reinició los datos: esta muestra datos viejos
     if ((await DB.getMeta('epoch', '')) !== (S.epoch || '')) { location.reload(); return { ok: false }; }
     const r = await Sync.syncNow(scope);
+    // Usuario con rol cuyo permiso ya no vale (PIN cambiado, desactivado, equipo bloqueado): vuelve a entrar
+    if (!r.ok && r.status === 401 && S.settings.userToken && /sesión venció/.test(String(r.error || '')) && window.Roles) { await Roles.logout(r.error); return r; }
     // La oficina reinició los datos: este equipo ya borró su copia y bajó todo de nuevo
     if (r.reset) { location.reload(); return r; }
     lastSyncResult = r;
@@ -600,6 +602,8 @@
     if (window.Nav) setTimeout(() => Nav.render(), 0); // panel de secciones (y sus contadores)
     if (h.startsWith('#/oficina')) return PV.renderOffice(h.split('/')[2] || 'cargas');
     if (h.startsWith('#/supervisor')) return PV.renderSupervisor(h.split('/')[2] || 'resumen');
+    if (h.startsWith('#/gerencia') && window.Roles) return Roles.renderGerencia(h.split('/')[2] || 'resumen');
+    if (h.startsWith('#/cobranzas') && window.Roles) return Roles.renderCobranzas(h.split('/')[2] || 'pagos');
     if (h === '#/ruta/pedidos' && S.session && sellerById(S.session.sellerId)) return renderSellerOrders();
     if (h === '#/ruta/clientes' && S.session && sellerById(S.session.sellerId)) return renderMyClients();
     if (h === '#/ruta/resumen' && S.session && sellerById(S.session.sellerId)) return window.Resumen.render();
@@ -699,6 +703,7 @@
           <button id="enterBtn" class="btn btn-primary btn-block" ${last ? '' : 'disabled'}>Entrar a mi ruta →</button>
           <div class="divider">o</div>
           <a class="btn btn-block" href="#/oficina/cargas">🖥️ Oficina · Administración</a>
+          <div class="row" style="gap:8px;margin-top:8px"><a class="btn grow" href="#/gerencia">👔 Gerencia</a><a class="btn grow" href="#/cobranzas">🧾 Cobranzas</a></div>
           <a class="btn btn-block" href="#/supervisor" style="margin-top:8px">👁 Supervisor · Solo consulta</a>
         </div>
         ${creditFooter()}

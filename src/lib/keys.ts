@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { timingSafeEqual } from 'crypto';
+import { userOf } from '@/lib/roles';
 
 const SYNC_KEY = process.env.PEDIDOS_SYNC_KEY || '';
 const ADMIN_KEY = process.env.PEDIDOS_ADMIN_KEY || '';
@@ -35,10 +36,11 @@ export function requireAdmin(req: NextRequest) {
  * solo lectura (reportes): el supervisor ve todo, pero nunca puede escribir
  * nada — eso lo exige cada ruta de escritura con `requireAdmin`.
  */
-export function requireReader(req: NextRequest) {
+export async function requireReader(req: NextRequest) {
   if (!syncOk(req)) return NextResponse.json({ error: 'Clave de sincronización inválida' }, { status: 401 });
-  if (!isAdminReq(req) && !isSupervisorReq(req)) {
-    return NextResponse.json({ error: 'Solo oficina o supervisor' }, { status: 401 });
-  }
-  return null;
+  if (isAdminReq(req) || isSupervisorReq(req)) return null;
+  // Gerencia (con su PIN) también consulta todo
+  const u = await userOf(req);
+  if (u && u.role === 'gerencia') return null;
+  return NextResponse.json({ error: 'Solo oficina, gerencia o supervisor' }, { status: 401 });
 }

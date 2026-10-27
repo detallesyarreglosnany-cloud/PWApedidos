@@ -15,7 +15,7 @@ export const maxDuration = 60;
 const KINDS = ['orders', 'clients', 'products', 'sellers', 'loads', 'config'];
 
 export async function POST(req: NextRequest) {
-  const bad = requireReader(req);
+  const bad = await requireReader(req);
   if (bad) return bad;
   try {
     const rows = await db.distDoc.findMany({ where: { kind: { in: KINDS } }, select: { kind: true, id: true, updatedAt: true, deleted: true } });

@@ -55,8 +55,25 @@
       { id: 'adm', icon: '⚙', label: 'Administración', items: [
         { icon: '👥', label: 'Clientes', go: '#/oficina/clientes', count: 'verificar' },
         { icon: '🧑‍💼', label: 'Vendedores', go: '#/oficina/vendedores' },
+        { icon: '🔐', label: 'Usuarios y roles', go: '#/oficina/usuarios' },
         { icon: '🕘', label: 'Historial', go: '#/oficina/historial' },
         { icon: '⚙', label: 'Ajustes', go: '#/oficina/ajustes' },
+      ] },
+    ],
+    gerencia: [
+      { id: 'cons', icon: '👔', label: 'Gerencia', items: [
+        { icon: '📊', label: 'Resumen del día', go: '#/gerencia/resumen' },
+        { icon: '📈', label: 'Reportes de ventas', go: '#/gerencia/reportes' },
+        { icon: '🕘', label: 'Historial', go: '#/gerencia/historial' },
+      ] },
+    ],
+    cobranzas: [
+      { id: 'pagos', icon: '💵', label: 'Pagos y cobranza', items: [
+        { icon: '⏳', label: 'Pagos por verificar', go: '#/cobranzas/pagos' },
+        { icon: '📅', label: 'Cuentas por cobrar', go: '#/cobranzas/pagos', act: 'cartera' },
+        { icon: '🚦', label: 'Crédito de clientes', go: '#/cobranzas/pagos', act: 'credito' },
+        { icon: '🛡', label: 'Revisión de integridad', go: '#/cobranzas/pagos', act: 'integridad' },
+        { icon: '⇩', label: 'Importar de FileMaker', go: '#/cobranzas/pagos', act: 'importar' },
       ] },
     ],
     super: [
@@ -71,6 +88,7 @@
   function roleOf(h) {
     if (h.startsWith('#/oficina')) return 'office';
     if (h.startsWith('#/supervisor')) return 'super';
+    if (h.startsWith('#/gerencia') || h.startsWith('#/cobranzas')) { const R = global.Roles; const role = h.startsWith('#/gerencia') ? 'gerencia' : 'cobranzas'; return R && R.isRole(role) ? role : ''; }
     if (h.startsWith('#/ruta')) { const S = PV() && PV().S; return S && S.session && PV().sellerById(S.session.sellerId) ? 'seller' : ''; }
     return '';
   }
@@ -84,6 +102,7 @@
     const tab = (x) => x.split('/')[2] || '';
     if (it.go.startsWith('#/oficina/')) return base.startsWith('#/oficina') && (tab(base) || 'cargas') === tab(it.go) && !(tab(it.go) === 'archivo' && S.ui.office && S.ui.office.trash);
     if (it.go.startsWith('#/supervisor/')) return base.startsWith('#/supervisor') && (tab(base) || 'resumen') === tab(it.go);
+    if (it.go.startsWith('#/gerencia/') || it.go.startsWith('#/cobranzas/')) return base.split('/')[1] === it.go.split('/')[1] && (tab(base) || tab(it.go)) === tab(it.go);
     if (it.myo) return base === it.go && ((S.ui.myo && S.ui.myo.tab) || 'pedidos') === it.myo;
     return base === it.go;
   }
@@ -120,7 +139,7 @@
     const mini = !!lsGet('pv_sideMini', false); document.body.classList.toggle('side-mini', mini);
     const c = await counts(role), esc = P.esc;
     const badge = (k) => (k && c[k] ? `<span class="side-count">${c[k]}</span>` : '');
-    el.innerHTML = `<div class="side-head"><b>${esc(role === 'office' ? 'Oficina' : role === 'super' ? 'Supervisor' : ((P.sellerById(P.S.session.sellerId) || {}).name || 'Vendedor'))}</b>
+    el.innerHTML = `<div class="side-head"><b>${esc(role === 'office' ? 'Oficina' : role === 'super' ? 'Supervisor' : role === 'gerencia' || role === 'cobranzas' ? (P.S.settings.userName || '') + ' · ' + (role === 'gerencia' ? 'Gerencia' : 'Cobranzas') : ((P.sellerById(P.S.session.sellerId) || {}).name || 'Vendedor'))}</b>
         <button type="button" class="side-mini-btn" data-mini title="${mini ? 'Mostrar el panel' : 'Achicar el panel'}" aria-label="Achicar el panel">${mini ? '»' : '«'}</button></div>
       ${menu.map((s) => { const on = open[s.id] !== false, act = s.items.some((it) => isActive(it, h)), tot = s.items.reduce((a, it) => a + (it.count ? c[it.count] || 0 : 0), 0);
         return `<div class="side-sec ${on ? 'open' : ''} ${act ? 'has-active' : ''}"><button type="button" class="side-sec-btn" data-sec="${s.id}" title="${esc(s.label)}"><span class="side-ico">${s.icon}</span><span class="side-lbl">${esc(s.label)}</span>${tot && !on ? `<span class="side-count">${tot}</span>` : ''}<span class="side-car">${on ? '▾' : '▸'}</span></button>

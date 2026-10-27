@@ -218,7 +218,7 @@
     if (!cfg.syncKey) return { ok: false, noKey: true, error: 'Falta la clave de sincronización (☰ → Conexión, o Ajustes en la oficina)' };
     const url = cfg.syncUrl || DEFAULT_SYNC_URL;
     const isAdmin = !!cfg.adminKey;
-    const isSupervisor = !isAdmin && !!cfg.supervisorKey;
+    const isSupervisor = !isAdmin && (!!cfg.supervisorKey || !!cfg.userToken); // Gerencia y Cobranzas también leen todo
     const fullRead = isAdmin || isSupervisor; // el supervisor lee todo, pero jamás publica nada
     const sellerId = scope && scope.sellerId || null;
     const cursorKey = cursorKeyOf(scope);
@@ -229,6 +229,7 @@
     if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
     if (cfg.adminKey) headers['x-admin-key'] = cfg.adminKey;
     if (cfg.supervisorKey) headers['x-supervisor-key'] = cfg.supervisorKey;
+    await withUser(headers, cfg);
 
     // Vercel rechaza cuerpos de más de 4,5 MB en ambos sentidos: la subida va
     // por tandas y la bajada por páginas. El cursor avanza solo al terminar.
@@ -420,6 +421,21 @@
     for (const m of await DB.getAll('meta')) if (/^syncCursor/.test(m.key)) await DB.remove('meta', m.key);
   }
 
+  /** Usuario con rol (Gerencia, Cobranzas): su permiso de este equipo va en cada llamada. */
+  async function withUser(headers, cfg) {
+    if (cfg.userToken && cfg.userId) { headers['x-user-id'] = cfg.userId; headers['x-user-token'] = cfg.userToken; headers['x-device-id'] = await deviceId(); }
+  }
+  /** Usuarios y roles (/api/pedidos/usuarios). asAdmin: la oficina con su clave. */
+  async function usersCall(body, asAdmin) {
+    if (!navigator.onLine) return { ok: false, offline: true, error: 'Sin internet' };
+    const cfg = await settings();
+    if (!cfg.syncKey) return { ok: false, error: 'Falta la clave de sincronización' };
+    const headers = { 'Content-Type': 'application/json', 'x-sync-key': cfg.syncKey };
+    if (asAdmin) { if (!cfg.adminKey) return { ok: false, error: 'Falta la clave admin en Ajustes' }; headers['x-admin-key'] = cfg.adminKey; }
+    else await withUser(headers, cfg);
+    return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/usuarios'), headers, body || {});
+  }
+
   /** Llamada a una ruta de oficina (/api/pedidos/<name>) con las claves guardadas. */
   async function adminCall(name, body) {
     if (!navigator.onLine) return { ok: false, error: 'Sin internet' };
@@ -434,11 +450,12 @@
   async function readerCall(name, body) {
     if (!navigator.onLine) return { ok: false, error: 'Sin internet' };
     const cfg = await settings();
-    if (!cfg.adminKey && !cfg.supervisorKey) return { ok: false, error: 'Falta la clave de acceso' };
+    if (!cfg.adminKey && !cfg.supervisorKey && !cfg.userToken) return { ok: false, error: 'Falta la clave de acceso' };
     const headers = { 'Content-Type': 'application/json' };
     if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
     if (cfg.adminKey) headers['x-admin-key'] = cfg.adminKey;
     if (cfg.supervisorKey) headers['x-supervisor-key'] = cfg.supervisorKey;
+    await withUser(headers, cfg);
     return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/' + name), headers, body || {});
   }
   /** Suscripción a avisos push (/api/pedidos/push). La oficina se identifica con su clave admin. */
@@ -499,6 +516,7 @@
     if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
     if (cfg.adminKey) headers['x-admin-key'] = cfg.adminKey;
     else if (cfg.supervisorKey) headers['x-supervisor-key'] = cfg.supervisorKey;
+    await withUser(headers, cfg);
     await withSellerToken(headers, (body && (body.sellerId || (body.pago && body.pago.sellerId))) || '');
     return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/pagos'), headers, body);
   }
@@ -633,5 +651,5 @@
     return n;
   }
 
-  global.Sync = { KINDS, isLocked, syncNow, pruneLocal, pendingCount, diagnose, forceUpload, redownload, hasCursor, reserveNumbers, adminCall, readerCall, report, pushCall, keysCall, myVacios, myVentas, metas, actividad, pinCall, sellerToken, pagosCall, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
+  global.Sync = { KINDS, isLocked, syncNow, pruneLocal, usersCall, pendingCount, diagnose, forceUpload, redownload, hasCursor, reserveNumbers, adminCall, readerCall, report, pushCall, keysCall, myVacios, myVentas, metas, actividad, pinCall, sellerToken, pagosCall, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
 })(window);

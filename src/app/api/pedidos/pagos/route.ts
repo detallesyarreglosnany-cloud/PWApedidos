@@ -5,6 +5,7 @@ import { isAdminReq, isSupervisorReq, requireAdmin, syncOk } from '@/lib/keys';
 import { sellerAccessOk } from '@/lib/pin';
 import { SEGUIMIENTO, type CredSetting } from '@/lib/cobranza';
 import { cartera, clientAliases } from '@/lib/cartera';
+import { ROLES, userOf } from '@/lib/roles';
 import { sendPush } from '@/lib/push';
 import { createHash } from 'crypto';
 import { METHODS, REF_MIN, abonoKey, allocate, cleanPago, normRef, noteKey, notaNum, noteStatus, r2, type Pago } from '@/lib/pagos';
@@ -113,19 +114,24 @@ export async function POST(req: NextRequest) {
   if (!syncOk(req)) return NextResponse.json({ error: 'Clave de sincronización inválida' }, { status: 401 });
   let body: Record<string, unknown>;
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }); }
-  const action = body.action, isAdmin = isAdminReq(req), isReader = isAdmin || isSupervisorReq(req);
+  const user = await userOf(req);
+  // Cobranzas (usuario con PIN) verifica pagos, importa de FileMaker y ajusta el crédito; Gerencia consulta
+  const action = body.action, isAdmin = isAdminReq(req), isCob = isAdmin || (!!user && user.role === 'cobranzas'), isReader = isAdmin || isSupervisorReq(req) || !!user;
+  // Quién lo hizo: el usuario con PIN queda con su nombre (no el texto que mande el equipo)
+  const actor = user ? `${user.name} (${ROLES[user.role]})` : '';
   try {
     if (action === 'create') {
       const p = cleanPago((body.pago && typeof body.pago === 'object' ? body.pago : {}) as Record<string, unknown>);
       if (typeof p === 'string') return NextResponse.json({ error: p }, { status: 400 });
-      if (!isAdmin && !(await sellerAccessOk(req, p.sellerId))) return NextResponse.json({ error: 'PIN', pin: true }, { status: 401 });
-      if (isAdmin && !p.by) p.by = 'Oficina';
+      if (!isCob && !(await sellerAccessOk(req, p.sellerId))) return NextResponse.json({ error: 'PIN', pin: true }, { status: 401 });
+      if (isCob && !p.by) p.by = actor || 'Oficina';
+      if (actor) p.by = actor;
       const existing0 = await db.distPago.findUnique({ where: { id: p.id } });
       if (existing0) return NextResponse.json({ pago: parse(existing0) }); // reintento: ya estaba guardado
-      const bad = await checkPago(p, isAdmin);
+      const bad = await checkPago(p, isCob);
       if (bad) return NextResponse.json({ error: bad }, { status: 422 });
       // Pago anterior (ya está en FileMaker): si lo registra la oficina queda confirmado; si es el vendedor, la oficina lo confirma
-      if (p.origen === 'anterior' && isAdmin) { p.status = 'aprobado'; p.review = { by: p.by || 'Oficina', at: new Date().toISOString(), motivo: 'Pago anterior registrado por la oficina' }; }
+      if (p.origen === 'anterior' && isCob) { p.status = 'aprobado'; p.review = { by: p.by || 'Oficina', at: new Date().toISOString(), motivo: 'Pago anterior registrado por la oficina' }; }
       const existing = await db.distPago.findUnique({ where: { id: p.id } });
       if (existing) return NextResponse.json({ pago: parse(existing) }); // reintento: ya estaba guardado
       const refs = p.lines.filter((l) => l.ref).map((l) => l.ref);
@@ -326,13 +332,13 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'credito') {
-      if (!isAdmin) return NextResponse.json({ error: 'Solo la oficina (cobranza) ajusta el crédito' }, { status: 401 });
+      if (!isCob) return NextResponse.json({ error: 'Solo la oficina o cobranzas ajustan el crédito' }, { status: 401 });
       const clientId = str(body.clientId, 120), modo = str(body.modo, 10), limite = r2(Number(body.limite) || 0);
       if (!clientId || !['auto', 'credito', 'contado'].includes(modo) || limite < 0 || limite > 1e6) return NextResponse.json({ error: 'Datos inválidos' }, { status: 400 });
       const name = `cred:${clientId}`;
       const prevRow = await db.distSetting.findUnique({ where: { name } });
       const prev = prevRow ? (JSON.parse(prevRow.value) as CredSetting) : null;
-      const v: CredSetting = { modo: modo as CredSetting['modo'], limite, nota: str(body.nota, 300), by: str(body.by, 80) || 'Cobranza', at: new Date().toISOString() };
+      const v: CredSetting = { modo: modo as CredSetting['modo'], limite, nota: str(body.nota, 300), by: actor || str(body.by, 80) || 'Cobranza', at: new Date().toISOString() };
       v.hist = [...(prev ? [{ modo: prev.modo, limite: prev.limite, nota: prev.nota, by: prev.by, at: prev.at }] : []), ...((prev && prev.hist) || [])].slice(0, 20);
       const value = JSON.stringify(v);
       await db.$executeRaw`INSERT INTO "DistSetting" ("name", "value") VALUES (${name}, ${value}) ON CONFLICT ("name") DO UPDATE SET "value" = EXCLUDED."value"`;
@@ -363,11 +369,11 @@ export async function POST(req: NextRequest) {
       const row = await db.distPago.findUnique({ where: { id } });
       if (!row) return NextResponse.json({ error: 'No existe ese pago' }, { status: 404 });
       const p = parse(row);
-      if (!isAdmin && (p.sellerId !== str(body.sellerId, 120) || !(await sellerAccessOk(req, p.sellerId)))) return NextResponse.json({ error: 'Solo el vendedor del pago o la oficina' }, { status: 403 });
+      if (!isCob && (p.sellerId !== str(body.sellerId, 120) || !(await sellerAccessOk(req, p.sellerId)))) return NextResponse.json({ error: 'Solo el vendedor del pago o la oficina' }, { status: 403 });
       if (p.status !== 'espera') return NextResponse.json({ error: 'Cobranza ya lo verificó: pide a la oficina que lo reabra' }, { status: 409 });
       const next = await db.$transaction(async (tx) => {
         await tx.distPagoRef.deleteMany({ where: { pagoId: id } });
-        return setStatus(p, 'anulado', { by: isAdmin ? 'Oficina' : p.sellerName || 'Vendedor', at: new Date().toISOString(), motivo: str(body.motivo, 200) || 'Anulado' }, tx);
+        return setStatus(p, 'anulado', { by: actor || (isAdmin ? 'Oficina' : p.sellerName || 'Vendedor'), at: new Date().toISOString(), motivo: str(body.motivo, 200) || 'Anulado' }, tx);
       });
       return NextResponse.json({ pago: next });
     }
@@ -385,7 +391,8 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'review' || action === 'reabrir' || action === 'import' || action === 'importar') {
-      const denied = requireAdmin(req);
+      // Verificar, reabrir e importar de FileMaker: oficina o cobranzas. Restaurar un respaldo: solo la oficina.
+      const denied = action === 'import' || !isCob ? requireAdmin(req) : null;
       if (denied) return denied;
       if (action === 'importar') {
         // Pagos que ya cargó cobranza en FileMaker. Cada fila trae su llave (fecha|cliente|nota|monto|referencia): volver a
@@ -464,7 +471,7 @@ export async function POST(req: NextRequest) {
       const id = str(body.id, 80);
       const row = await db.distPago.findUnique({ where: { id } });
       if (!row) return NextResponse.json({ error: 'No existe ese pago' }, { status: 404 });
-      const p = parse(row), review = { by: str(body.by, 80) || 'Cobranza', at: new Date().toISOString(), motivo: str(body.motivo, 200) };
+      const p = parse(row), review = { by: actor || str(body.by, 80) || 'Cobranza', at: new Date().toISOString(), motivo: str(body.motivo, 200) };
       if (action === 'review') {
         const status = str(body.status, 20);
         if (status !== 'aprobado' && status !== 'rechazado') return NextResponse.json({ error: 'Estado inválido' }, { status: 400 });

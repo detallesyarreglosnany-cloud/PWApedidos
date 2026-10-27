@@ -56,19 +56,23 @@
     };
   }
 
-  PV.renderSupervisor = function (tab) {
-    if (!S.settings.supervisorKey) return renderGate();
+  // opts (Gerencia): { base, head(), wire() } — la misma consulta con su propio encabezado y su sesión con PIN
+  PV.renderSupervisor = function (tab, opts) {
+    if (!opts && !S.settings.supervisorKey) return renderGate();
     if (!TABS.some(([k]) => k === tab)) tab = 'resumen';
-    const app = document.getElementById('app');
+    const app = document.getElementById('app'), base = (opts && opts.base) || '#/supervisor';
     app.innerHTML = `
-      ${brandHeader('Supervisor', 'Solo consulta · Puerto Venado',
+      ${opts ? opts.head() : brandHeader('Supervisor', 'Solo consulta · Puerto Venado',
         `<button id="syncPill" class="pill" type="button"></button><a class="btn btn-sm" href="#/" id="supOut">Salir</a>`)}
-      <nav class="tabs">${TABS.map(([k, l]) => `<a class="tab ${k === tab ? 'active' : ''}" href="#/supervisor/${k}">${l}</a>`).join('')}</nav>
+      <nav class="tabs">${TABS.map(([k, l]) => `<a class="tab ${k === tab ? 'active' : ''}" href="${base}/${k}">${l}</a>`).join('')}</nav>
       <div class="container" id="supBody"></div>
       ${creditFooter()}`;
-    $('#syncPill').onclick = () => runSync(true);
-    $('#supOut').onclick = async () => { await saveSettings({ supervisorKey: '' }); };
-    updateSyncPill();
+    if (opts) opts.wire();
+    else {
+      $('#syncPill').onclick = () => runSync(true);
+      $('#supOut').onclick = async () => { await saveSettings({ supervisorKey: '' }); };
+      updateSyncPill();
+    }
     const body = $('#supBody');
     ({ resumen: renderResumen, reportes: renderReportes, historial: renderHistorial })[tab](body);
   };

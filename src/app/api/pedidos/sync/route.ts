@@ -2,6 +2,7 @@ import { NextRequest, NextResponse, after } from 'next/server';
 import { Prisma } from '@prisma/client';
 import { db, TX_WAIT } from '@/lib/db';
 import { isAdminReq, isSupervisorReq, syncOk } from '@/lib/keys';
+import { userHeaderInvalid, userOf } from '@/lib/roles';
 import { sendPush, type PushMsg } from '@/lib/push';
 import { RESET_LOCK, currentEpoch, epochAt } from '@/lib/epoch';
 import { ordersOfLoads, syncKardexForOrders } from '@/lib/vacios';
@@ -361,8 +362,12 @@ export async function POST(req: NextRequest) {
   // Supervisor: ve todo (igual que la oficina para la bajada), pero nunca puede
   // escribir nada — el bloqueo está más abajo, en el propio bucle de escritura.
   const supHeader = req.headers.get('x-supervisor-key');
-  const isSupervisor = isSupervisorReq(req);
-  if (supHeader && !isSupervisor) {
+  // Gerencia y Cobranzas (usuario con PIN): por ahora leen todo como el supervisor y no publican nada
+  if (!isAdmin && (await userHeaderInvalid(req))) {
+    return NextResponse.json({ error: 'Tu sesión venció: vuelve a entrar con tu PIN', userExpired: true }, { status: 401 });
+  }
+  const isSupervisor = isSupervisorReq(req) || (!isAdmin && !!(await userOf(req)));
+  if (supHeader && !isSupervisorReq(req)) {
     return NextResponse.json({ error: 'Clave de supervisor inválida' }, { status: 401 });
   }
 
