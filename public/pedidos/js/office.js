@@ -57,31 +57,40 @@
     };
   }
 
-  PV.renderOffice = function (tab) {
-    if (isLocked()) return renderLock();
-    touchUnlock();
-    if (!TABS.some(([k]) => k === tab)) tab = 'cargas';
+  // Gerencia ve las mismas pantallas de la oficina, en consulta (salvo pedidos, clientes e inventario)
+  const GER_TABS = ['pedidos', 'cargas', 'archivo', 'envases', 'pagos', 'inventario', 'reportes', 'clientes', 'historial'];
+  const roGer = () => document.body.classList.contains('ro-ger'); // Gerencia: hojas y liquidaciones en consulta
+  const baseHash = () => (location.hash.startsWith('#/gerencia') ? '#/gerencia' : '#/oficina');
+  PV.renderOffice = function (tab, opts) {
+    const ger = !!(opts && opts.role === 'gerencia');
+    document.body.classList.toggle('ro-ger', ger);
+    if (!ger) {
+      if (isLocked()) return renderLock();
+      touchUnlock();
+    }
+    if (ger ? !GER_TABS.includes(tab) : !TABS.some(([k]) => k === tab)) tab = ger ? 'pedidos' : 'cargas';
     Object.assign(S.ui.office, { date: U().date || today(), mode: U().mode || 'bultos' });
-    autoPack();
-    applyReturnableTemplate();
-    upperClients();
+    if (!ger) { autoPack(); applyReturnableTemplate(); upperClients(); } // arreglos automáticos: solo la oficina
     // Crédito y semáforo de los clientes para las hojas de carga; al llegar, se redibuja si nadie está escribiendo
-    if (window.Cobranza && S.settings && S.settings.adminKey) Cobranza.warmOffice().then((ch) => { const a = document.activeElement; if (ch && location.hash.startsWith('#/oficina/cargas') && !document.querySelector('.overlay') && !(a && /INPUT|TEXTAREA|SELECT/.test(a.tagName))) PV.render(); }).catch(() => {});
+    if (window.Cobranza && S.settings && (S.settings.adminKey || ger)) Cobranza.warmOffice().then((ch) => { const a = document.activeElement; if (ch && /^#\/(oficina|gerencia)\/cargas/.test(location.hash) && !document.querySelector('.overlay') && !(a && /INPUT|TEXTAREA|SELECT/.test(a.tagName))) PV.render(); }).catch(() => {});
     const app = document.getElementById('app');
     const waiting = S.loads.filter((l) => !l.deleted && !Loads.isClosed(l)).length;
     const toVerify = S.clients.filter((c) => !c.deleted && !Clientes.isVerified(c)).length;
     app.innerHTML = `
-      ${PV.brandHeader('Hola, ' + (S.config.adminName || 'administrador'), 'Oficina · Puerto Venado',
+      ${ger ? opts.head() : PV.brandHeader('Hola, ' + (S.config.adminName || 'administrador'), 'Oficina · Puerto Venado',
         `<button id="bell" class="bell" type="button" aria-label="Notificaciones">🔔</button><button id="syncPill" class="pill" type="button"></button><a class="btn btn-sm" href="#/" id="offOut">Salir</a>`)}
       <nav class="tabs">${TABS.map(([k, l]) => `<a class="tab ${k === tab ? 'active' : ''}" href="#/oficina/${k}">${l}${k === 'cargas' && waiting ? ` <span class="count">${waiting}</span>` : ''}${k === 'clientes' && toVerify ? ` <span class="count" title="Clientes por verificar">${toVerify}</span>` : ''}</a>`).join('')}</nav>
       <div class="container" id="officeBody"></div>
       ${PV.creditFooter()}`;
-    $('#syncPill').onclick = () => PV.runSync(true);
-    $('#offOut').onclick = () => lockOffice();
-    $('#bell').onclick = PV.notifSheet;
-    PV.updateSyncPill(); PV.updateBell();
+    if (ger) opts.wire();
+    else {
+      $('#syncPill').onclick = () => PV.runSync(true);
+      $('#offOut').onclick = () => lockOffice();
+      $('#bell').onclick = PV.notifSheet;
+      PV.updateSyncPill(); PV.updateBell();
+    }
     const body = $('#officeBody');
-    if (!S.products.length && tab !== 'ajustes') body.insertAdjacentHTML('beforebegin', setupBanner());
+    if (!ger && !S.products.length && tab !== 'ajustes') body.insertAdjacentHTML('beforebegin', setupBanner());
     ({ cargas: renderLoads, pedidos: renderOrders, archivo: renderArchive, envases: renderEnvases, reportes: (root) => { upgradeLiquidations(root); Reportes.render(root, U().rep || (U().rep = {})); }, pagos: (root) => window.Pagos.renderOffice(root), usuarios: (root) => window.Roles.renderAdmin(root), inventario: renderInventory,
       clientes: renderClients, vendedores: renderSellers, historial: renderHistory, ajustes: renderSettings })[tab](body);
     const sb = $('#setupImport');
@@ -175,7 +184,7 @@
       if (g) {
         const l = S.loads.find((y) => y.id === g.dataset.goload); sh.close(); if (!l) return;
         // Al cambiar de pestaña la oficina limpia la hoja abierta: se abre después del cambio
-        const closed = Loads.isClosed(l), target = closed ? '#/oficina/archivo' : '#/oficina/cargas';
+        const closed = Loads.isClosed(l), target = closed ? baseHash() + '/archivo' : baseHash() + '/cargas';
         const go = () => { U().liqId = null; U().loadId = closed ? null : l.id; U().archiveId = closed ? l.id : null; PV.render(); };
         if (location.hash !== target) { window.addEventListener('hashchange', go, { once: true }); location.hash = target; } else go();
         return;
@@ -388,7 +397,7 @@
     const u = Loads.usage(load, ordersById, S.config);
     const st = Loads.statusOf(load, S.config);
     const closed = Loads.isClosed(load);
-    const editableLoad = !st.locked && !closed;
+    const editableLoad = !st.locked && !closed && !roGer();
     const edit = editableLoad && U().editQty;
     const m = Matrix.build(os, 'bultos', { keepOrder: true, money: false, rubros: rubros(), productRank: productRank() });
     const short = closed ? [] : Loads.shortages(os, S.products);
@@ -486,7 +495,7 @@
     const saveLoad = async (patch) => { await saveDocs('loads', { ...cur(), ...patch }); refresh(); };
     $('#dBack').onclick = () => {
       U().loadId = null; U().archiveId = null; U().editQty = false;
-      if (closed && !location.hash.includes('archivo')) location.hash = '#/oficina/archivo'; else PV.render();
+      if (closed && !location.hash.includes('archivo')) location.hash = baseHash() + '/archivo'; else PV.render();
     };
     const ctx = () => ({ config: S.config, products: S.products, usage: Loads.usage(cur(), byIdMap(S.orders), S.config), draft: !cur().number, clientsById: byIdMap(S.clients),
       load: cur(), productRank: productRank(), statusName: stName(cur()) });
@@ -886,12 +895,12 @@
       const o = { id: DB.uid('o'), sellerId: seller.id, sellerName: seller.name,
         clientId: client.id, clientRif: client.rif || '', clientName: client.name, clientKey: norm(client.name),
         route: d.route, routeDate: d.date, status: 'enviado', lines: d.lines, sentLines: JSON.parse(JSON.stringify(d.lines)),
-        notes: d.notes, loadId: null, createdAt: at, sentAt: at, createdBy: 'oficina', createdByName: (S.config && S.config.adminName) || 'Oficina',
+        notes: d.notes, loadId: null, createdAt: at, sentAt: at, createdBy: roGer() ? 'gerencia' : 'oficina', createdByName: roGer() ? (S.settings.userName || 'Gerencia') : ((S.config && S.config.adminName) || 'Oficina'),
         deviceId: await Sync.deviceId(), deleted: false, ...(d.modo === 'retiro' ? { modo: 'retiro' } : {}) };
       await saveOrder(o);
-      await log('pedido_oficina', `Oficina cargó el pedido de ${o.clientName} a nombre de ${seller.name} · ${tot.cajas} cj + ${tot.unidades} un · ${usd(tot.monto)}`, { orderId: o.id, clientName: o.clientName, amount: tot.monto });
+      await log('pedido_oficina', `${roGer() ? 'Gerencia (' + (S.settings.userName || '') + ')' : 'Oficina'} cargó el pedido de ${o.clientName} a nombre de ${seller.name} · ${tot.cajas} cj + ${tot.unidades} un · ${usd(tot.monto)}`, { orderId: o.id, clientName: o.clientName, amount: tot.monto });
       sh.close();
-      await autoPack();
+      if (!roGer()) await autoPack(); // armar las hojas lo hace la oficina
       const placed = orderById(o.id), load = placed && placed.loadId ? S.loads.find((l) => l.id === placed.loadId) : null;
       toast(`Pedido de ${o.clientName} enviado a nombre de ${seller.name}${load ? ' · hoja ' + Loads.labelOf(load) : ''}`, 'ok');
       PV.runSync(false);
@@ -1069,7 +1078,7 @@
         const closed = Loads.isClosed(l);
         toast(`Hoja recuperada · está en ${closed ? 'Archivo' : 'Cargas'}${Loads.loadOrders({ ...l, deleted: false }, byIdMap(S.orders)).length ? '' : ' (sin pedidos)'}`, 'ok');
         U().trash = null;
-        if (closed) { U().archiveId = l.id; PV.render(); } else { location.hash = '#/oficina/cargas'; setTimeout(() => { U().loadId = l.id; PV.render(); }, 80); }
+        if (closed) { U().archiveId = l.id; PV.render(); } else { location.hash = baseHash() + '/cargas'; setTimeout(() => { U().loadId = l.id; PV.render(); }, 80); }
         return;
       } else {
         const o = st.data.orders.find((x) => x.id === bo.dataset.ro); if (!o) return;
@@ -1216,7 +1225,7 @@
   function renderLiquidation(root, load) {
     const { os, liq, carry, rows, vac, probs } = liqState(load);
     const done = Liq.isDone(load);
-    const dis = done ? 'disabled' : '';
+    const dis = done || roGer() ? 'disabled' : '';
     const pedido$ = (o) => Matrix.orderTotals(o).monto, entregado$ = (o) => Matrix.orderTotals(Liq.delivered(o, liq)).monto;
     const totPed = os.reduce((a, o) => a + pedido$(o), 0), totEnt = os.reduce((a, o) => a + entregado$(o), 0);
     const carrySrcs = carry ? carry.fromIds.map((id) => S.loads.find((l) => l.id === id)).filter(Boolean) : [];
@@ -2595,7 +2604,7 @@
   /** Abre una hoja desde cualquier lugar: la hoja de carga (si sigue abierta) o su liquidación / archivo. */
   function openLoad(lid, liq) {
     const l = S.loads.find((y) => y.id === lid); if (!l) { toast('Esa hoja no está en este equipo', 'err'); return; }
-    const closed = Loads.isClosed(l), target = closed ? '#/oficina/archivo' : '#/oficina/cargas';
+    const closed = Loads.isClosed(l), target = closed ? baseHash() + '/archivo' : baseHash() + '/cargas';
     const go = () => { U().liqId = liq ? l.id : null; U().loadId = closed || liq ? null : l.id; U().archiveId = closed && !liq ? l.id : null; PV.render(); window.scrollTo(0, 0); };
     if (location.hash !== target) { window.addEventListener('hashchange', go, { once: true }); location.hash = target; } else go();
   }

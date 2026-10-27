@@ -192,9 +192,28 @@
   };
 
   /** Guarda (y marca pendiente de sync) uno o varios docs de un tipo. */
+  /**
+   * Gerencia (sin clave de oficina): solo pedidos, clientes, productos, categorías e historial. Las hojas, liquidaciones,
+   * ajustes y lo que decide la oficina de un pedido no se guardan ni en el equipo (el servidor también los rechaza).
+   */
+  async function gerenciaBlocks(kind, docs) {
+    if (!(window.Roles && Roles.isRole('gerencia')) || S.settings.adminKey) return '';
+    if (!['orders', 'clients', 'products', 'config', 'events'].includes(kind)) return 'Gerencia: las hojas de carga, liquidaciones y ajustes son solo de consulta';
+    if (kind === 'config' && docs.some((d) => Object.keys(d).some((k) => k !== 'rubros' && k !== 'updatedAt' && k !== 'fv' && JSON.stringify(d[k]) !== JSON.stringify(S.config[k])))) return 'Gerencia: los ajustes los cambia la oficina';
+    if (kind === 'orders') {
+      for (const d of docs) {
+        const prev = await DB.get('orders', d.id); if (!prev) continue;
+        if (Sync.isLocked(prev)) return 'Gerencia: ese pedido ya está aprobado o despachado: lo cambia la oficina';
+        const offSt = Sync.OFFICE_ORDER_STATUS, eq = (a, b) => JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b);
+        if (Sync.OFFICE_ORDER_FIELDS.some((f) => !eq(prev[f], d[f])) || ((offSt.includes(prev.status) || offSt.includes(d.status)) && prev.status !== d.status)) return 'Gerencia: la hoja, la aprobación y la liquidación de un pedido las decide la oficina';
+      }
+    }
+    return '';
+  }
   async function saveDocs(kind, docs) {
     docs = [].concat(docs).filter(Boolean);
     if (!docs.length) return;
+    { const why = await gerenciaBlocks(kind, docs); if (why) { toast(why, 'err'); throw new Error(why); } }
     // Datos reiniciados (en esta u otra pestaña): la pantalla tiene datos viejos, no se guardan
     if (await epochChanged()) { location.reload(); return; }
     // Pedidos y hojas: se anota qué campos cambiaron (fusión campo por campo entre
@@ -307,7 +326,10 @@
   ['pointerdown', 'keydown', 'touchstart', 'wheel'].forEach((ev) => window.addEventListener(ev, onUserInput, { passive: true, capture: true }));
 
   const isSupervisor = () => location.hash.startsWith('#/supervisor');
-  const syncScope = () => (isOffice() || isSupervisor() ? {} : (S.session && S.session.sellerId ? { sellerId: S.session.sellerId } : {}));
+  // Gerencia tomando pedidos: la pantalla del vendedor con todos los clientes (el pedido va a nombre del vendedor del cliente)
+  const gerMode = () => !!(S.session && S.session.gerencia && window.Roles && Roles.isRole('gerencia'));
+  const isRoleHash = () => /^#\/(gerencia|cobranzas)/.test(location.hash);
+  const syncScope = () => (isOffice() || isSupervisor() || isRoleHash() || gerMode() ? {} : (S.session && S.session.sellerId ? { sellerId: S.session.sellerId } : {}));
   // Una sola sincronización a la vez: si llega otra (aviso push, volver a la app,
   // temporizador) espera la que está en curso en vez de procesar dos veces.
   let syncing = null, again = false;
@@ -744,8 +766,8 @@
     return o && o.routeDate === today() && editable(o) ? o : null;
   }
   function myClients() {
-    const sid = S.session.sellerId;
-    return S.clients.filter((c) => c.sellerId === sid && c.active !== false)
+    const sid = S.session.sellerId, all = gerMode();
+    return S.clients.filter((c) => (all || c.sellerId === sid) && c.active !== false)
       .sort((a, b) => a.name.localeCompare(b.name, 'es'));
   }
 
@@ -827,6 +849,11 @@
       return;
     }
     if (client) name = client.name;
+    // Gerencia: el pedido va a nombre del vendedor del cliente (luego se puede cambiar)
+    if (gerMode() && client && client.sellerId && client.sellerId !== S.session.sellerId && sellerById(client.sellerId)) {
+      await setSession({ ...S.session, sellerId: client.sellerId, activeOrderId: null });
+      return openClientNow(name, { ...opts, client });
+    }
     const key = norm(name);
     // 2) Pedido de hoy aún editable: se abre ese (no se crea otro)
     let o = pendingOrdersToday().find((x) => x.clientKey === key || (client && x.clientId === client.id));
@@ -845,6 +872,7 @@
         route: client.route || S.session.route || '', routeDate: today(),
         status: 'abierto', lines: {}, notes: '', loadId: null,
         createdAt: DB.now(), deviceId: await Sync.deviceId(), deleted: false, ...(opts.extra ? { extraOk: true } : {}),
+        ...(gerMode() ? { createdBy: 'gerencia', createdByName: S.settings.userName || 'Gerencia' } : {}),
       };
       await saveOrder(o);
       await logEvent('pedido_nuevo', `Abrió pedido de ${client.name}`, { orderId: o.id, clientId: client.id, clientName: client.name });
@@ -945,7 +973,7 @@
     const routes = (seller.routes && seller.routes.length) ? seller.routes : (S.config.routes || []);
     const clients = myClients();
     app.innerHTML = `
-      ${brandHeader(seller.name, 'Ruta ' + (S.session.route || '—') + ' · ' + fmtDate(today()),
+      ${brandHeader(gerMode() ? `👔 ${S.settings.userName || 'Gerencia'}` : seller.name, gerMode() ? `Tomando pedidos · a nombre de ${seller.name}` : 'Ruta ' + (S.session.route || '—') + ' · ' + fmtDate(today()),
         `<button id="bell" class="bell" type="button" aria-label="Notificaciones">🔔</button><button id="syncPill" class="pill" type="button"></button><button class="icon-btn ghost" id="menuBtn" aria-label="Opciones (sincronizar, PIN, conexión)" title="Opciones: sincronizar, PIN, conexión">⚙</button>`)}
       <nav class="quick-nav" id="quickNav" aria-label="Accesos">
         <button type="button" data-go="pedidos">🧾 Mis pedidos</button><button type="button" data-go="hojas">🚚 Mis hojas</button>
@@ -988,7 +1016,7 @@
     updateSyncPill();
     loadActividad();
     if (window.Cobranza) Cobranza.refresh(S.session.sellerId, () => { if (location.hash === '#/ruta' && !document.querySelector('.overlay')) renderProductList(); });
-    if (window.PinGate) PinGate.check();
+    if (window.PinGate && !gerMode()) PinGate.check(); // el PIN del vendedor no se le pide a Gerencia
 
     const rs = $('#routeSel');
     if (rs) rs.onchange = async () => { await setSession({ ...S.session, route: rs.value }); renderSeller(); };
@@ -1044,7 +1072,7 @@
       renderProductList();
     };
     $('#syncPill').onclick = () => runSync(true);
-    $('#menuBtn').onclick = sellerMenu;
+    $('#menuBtn').onclick = gerMode() ? () => { location.hash = '#/gerencia/pedidos'; } : sellerMenu;
     $('#bell').onclick = notifSheet;
     updateBell();
 
@@ -1076,6 +1104,7 @@
     if (o && o.dupWith && o.dupWith.length) hint += dupHint(o);
     if (o && editable(o)) hint += inactivityHint(o);
     if (o && editable(o) && window.Cobranza) hint += Cobranza.hintFor(o.clientId, o);
+    if (o && editable(o) && gerMode()) hint = `<div class="hint">👔 Pedido a nombre de <select id="gerSeller" class="select" style="display:inline-block;width:auto;min-height:36px">${S.sellers.filter((x) => x.active !== false).map((x) => `<option value="${esc(x.id)}" ${x.id === o.sellerId ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select> <span class="muted">(por defecto, el vendedor del cliente)</span></div>` + hint;
     if (o && o.loadId && editable(o)) hint += `<div class="hint">✏️ Este pedido ya está en una hoja de carga (<b>${esc(Loads.orderLabel(o))}</b>). Aún puedes modificarlo; la oficina verá los cambios.</div>`;
     if (!S.products.length) {
       list.innerHTML = `<div class="empty"><strong>Catálogo vacío</strong>Toca ⟳ para sincronizar con la oficina.</div>`;
@@ -1091,6 +1120,16 @@
     }).join('');
     list.innerHTML = hint + (items.length ? html
       : `<div class="empty"><strong>Sin resultados</strong>Prueba con otra palabra o rubro.</div>`);
+    // Gerencia cambia el vendedor del pedido (p. ej. lo hizo otro vendedor)
+    const gs = $('#gerSeller');
+    if (gs && o) gs.onchange = async () => {
+      const ns = sellerById(gs.value); if (!ns || ns.id === o.sellerId) return;
+      const prev = o.sellerName;
+      await saveOrder({ ...o, sellerId: ns.id, sellerName: ns.name });
+      await setSession({ ...S.session, sellerId: ns.id, activeOrderId: o.id });
+      await logEvent('pedido_modificado', `Gerencia pasó el pedido de ${o.clientName} de ${prev} a ${ns.name}`, { orderId: o.id, clientName: o.clientName });
+      toast(`Pedido a nombre de ${ns.name}`, 'ok'); renderSeller();
+    };
   }
 
   /** Todos los clientes de hoy en una lista (más cómoda que deslizar cuando son muchos). */
@@ -1870,7 +1909,7 @@
       <div class="row"><h2 class="grow">${esc(o.clientName)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
       <div class="grid2" style="margin:8px 0 12px">${info.map(([k, v]) => `<div><small class="muted">${esc(k)}</small><div><b>${esc(v)}</b></div></div>`).join('')}</div>
       ${editable(o) && !liqd ? `<div class="row" style="margin-bottom:8px"><button type="button" class="btn btn-primary" id="mosEdit">✎ Editar este pedido</button></div>` : ''}
-      ${o.createdBy === 'oficina' ? '<div class="hint">🏢 Este pedido lo cargó la oficina a tu nombre.</div>' : ''}
+      ${o.createdBy === 'oficina' ? '<div class="hint">🏢 Este pedido lo cargó la oficina a tu nombre.</div>' : o.createdBy === 'gerencia' ? `<div class="hint">👔 Este pedido lo cargó Gerencia${o.createdByName ? ' (' + esc(o.createdByName) + ')' : ''} a tu nombre.</div>` : ''}
       ${o.dupWith && o.dupWith.length ? dupHint(o) : ''}
       ${o.officeEdited ? `<div class="hint warn">✏️ La oficina ajustó este pedido${sentL ? ': las filas marcadas cambiaron respecto a lo que enviaste.' : '.'}</div>` : ''}
       <table class="lines"><thead><tr><th style="text-align:left">Producto</th>${sentL ? '<th class="num">Pediste</th>' : ''}<th class="num">${g === 'despachados' ? 'Despachado' : 'Queda'}</th>${liqd ? '<th class="num">Entregado</th>' : ''}</tr></thead>

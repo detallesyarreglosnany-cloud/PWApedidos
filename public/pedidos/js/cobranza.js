@@ -313,7 +313,7 @@
 
   async function creditSheet() {
     const P = PV(), { esc, usd, openSheet, toast, S } = P;
-    const st = { q: '', sem: '', seller: '' };
+    const st = { q: '', sem: '', seller: '' }, canEdit = !!(S.settings && (S.settings.adminKey || S.settings.userRole === 'cobranzas')); // Gerencia: consulta
     const sh = openSheet(`<div class="row"><h2 class="grow">🚦 Crédito de clientes</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
       <p class="muted">El sistema sugiere; <b>cobranza decide</b>. El límite sugerido baja <span id="crPct">…</span>% por cada día de atraso y se recupera al pagar.</p>
       <div class="row wrap" style="gap:8px;align-items:flex-end"><label class="field grow"><span>Buscar cliente</span><input id="crQ" class="input" autocomplete="off"></label>
@@ -336,7 +336,7 @@
           <td>${k.modo === 'contado' ? '<b class="warn-txt">CONTADO</b>' : k.modo === 'nuevo' ? `Nuevo ${k.nuevo.n}/${k.nuevo.need}` : 'Crédito'}${k.fijado !== 'auto' ? ' <small class="muted">(cobranza)</small>' : ''}</td>
           <td class="n">${k.limite ? usd(k.limite) + (k.base === 'promedio' ? '<br><small class="muted">promedio</small>' : '') : '—'}</td><td class="n">${k.deuda ? usd(k.deuda) : ''}</td><td class="n">${k.vencido ? usd(k.vencido) : ''}</td>
           <td class="n">${k.atrasoMax ? k.atrasoMax + ' d' : ''}</td><td>${k.pagadas ? `${k.aTiempo}/${k.pagadas} a tiempo${k.promAtraso ? ` · prom. ${String(k.promAtraso).replace('.', ',')} d` : ''}` : ''}</td>
-          <td class="n">${k.limite > 0 && k.bajaPct > 0 ? `<b class="warn-txt">${usd(k.sugerido)}</b><br><small>−${k.bajaPct}%</small>` : ''}</td><td><button class="btn btn-sm" data-ed="${esc(k.clientId)}">Ajustar</button></td></tr>`).join('')}</tbody></table></div>
+          <td class="n">${k.limite > 0 && k.bajaPct > 0 ? `<b class="warn-txt">${usd(k.sugerido)}</b><br><small>−${k.bajaPct}%</small>` : ''}</td><td>${canEdit ? `<button class="btn btn-sm" data-ed="${esc(k.clientId)}">Ajustar</button>` : ''}</td></tr>`).join('')}</tbody></table></div>
         ${l.length > 400 ? '<p class="muted">Se muestran 400: usa el buscador.</p>' : ''}`;
     };
     el.querySelector('#crQ').oninput = (e) => { st.q = e.target.value; draw(); };

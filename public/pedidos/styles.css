@@ -592,3 +592,9 @@ body.side-open .side-scrim { display: block; position: fixed; inset: 0; z-index:
 }
 @media print { .side, .side-scrim, .side-toggle { display: none !important; } body.has-side #app { margin-left: 0 !important; } }
 @media (max-width: 520px) { body.has-side .topbar .brand-mark { display: none; } body.has-side .topbar { gap: 6px; padding-left: 10px; padding-right: 10px; } }
+/* Gerencia: pantallas de la oficina en consulta (el guardado y el servidor también lo impiden) */
+body.ro-ger #lNew, body.ro-ger #lSync, body.ro-ger #lOrder, body.ro-ger #lLimit, body.ro-ger #lMax, body.ro-ger #lMeasure, body.ro-ger #lSeller ~ .btn,
+body.ro-ger #dEdit, body.ro-ger #dMerge, body.ro-ger #dDel, body.ro-ger [data-move], body.ro-ger [data-hold], body.ro-ger [data-release], body.ro-ger [data-left], body.ro-ger [data-right],
+body.ro-ger #qReopen, body.ro-ger #qClose, body.ro-ger #qRetAdd, body.ro-ger #qPrevAdd, body.ro-ger #qAllNext, body.ro-ger #qAllStore, body.ro-ger #cutOk,
+body.ro-ger #setupImport, body.ro-ger #kdOk, body.ro-ger #pvOk, body.ro-ger #prOk, body.ro-ger #kxRetry, body.ro-ger [data-real], body.ro-ger [data-anu], body.ro-ger #cMerge, body.ro-ger [data-cmerge] { display: none !important; }
+body.ro-ger .valery-in, body.ro-ger #dStatus, body.ro-ger #dDisp, body.ro-ger #dRoute, body.ro-ger #dLabel, body.ro-ger #dDate { pointer-events: none; opacity: .75; }
