@@ -87,21 +87,60 @@
     return '';
   }
 
-  /** Aviso al tomar un pedido: crédito del cliente y si debe (no bloquea) o está al día. */
+  /** Deuda del cliente según la cartera del teléfono: vencido, por vencer y sus notas. */
+  function debtOf(clientId) {
+    const S = PV().S, sid = S.session && S.session.sellerId, c = sid ? lsGet(key(sid)) : null;
+    if (!c || !c.data) return null;
+    const notas = c.data.notas.filter((n) => n.clientId === clientId).sort((x, y) => x.dias - y.dias);
+    const sum = (l) => Math.round(l.reduce((a, n) => a + n.resta, 0) * 100) / 100;
+    const ven = notas.filter((n) => n.dias < 0);
+    return { notas, total: sum(notas), vencido: sum(ven), porVencer: sum(notas.filter((n) => n.dias >= 0)), alDia: !notas.length && (c.data.alDia || []).includes(clientId) };
+  }
+  /** Bloque de deuda con acciones al instante: enviarle la deuda por WhatsApp, registrar el pago, ver el detalle. */
+  function debtHTML(clientId) {
+    const P = PV(), { esc, usd, fmtDate } = P, d = debtOf(clientId); if (!d) return '';
+    if (!d.notas.length) return d.alDia ? '<div class="hint">✅ Cliente <b>al día</b> con sus pagos.</div>' : '';
+    const row = (n) => `<div class="row" style="gap:6px;font-size:13px"><span class="grow">📄 Nota ${esc(n.nota || '—')} · ${usd(n.resta)}${n.resta < n.monto - 0.01 ? ` de ${usd(n.monto)}` : ''}</span><span class="${n.dias < 0 ? 'warn-txt' : n.dias <= 1 ? 'pay-rev' : 'muted'}">${esc(diasTxt(n.dias))} · ${esc(fmtDate(n.vence))}</span></div>`;
+    return `<div class="hint warn cob-debt">💵 <b>Debe ${usd(d.total)}</b>${d.vencido ? ` · <b class="warn-txt">vencido ${usd(d.vencido)}</b>` : ''}${d.porVencer ? ` · por vencer ${usd(d.porVencer)}` : ''}
+      <div style="margin:6px 0">${d.notas.slice(0, 5).map(row).join('')}${d.notas.length > 5 ? `<div class="muted" style="font-size:12px">… y ${d.notas.length - 5} notas más</div>` : ''}</div>
+      ${d.vencido ? '<div style="font-size:13px">Pídele que cancele lo vencido para hacer su nuevo pedido y mantener su crédito.</div>' : ''}
+      <div class="row wrap" style="gap:6px;margin-top:6px"><button type="button" class="btn btn-sm btn-primary" data-cob-wa="${esc(clientId)}">📲 Enviarle la deuda</button><button type="button" class="btn btn-sm" data-cob-pay="${esc(clientId)}">💵 Registrar pago</button><button type="button" class="btn btn-sm" data-cob-cid="${esc(clientId)}">📄 Ver detalle</button></div></div>`;
+  }
+
+  /** Aviso al tomar un pedido: crédito del cliente y su deuda con acciones (no bloquea). */
   function hintFor(clientId, o) {
     const P = PV(), S = P.S, sid = S.session && S.session.sellerId; if (!sid || !clientId) return '';
     const monto = o && global.Matrix ? global.Matrix.orderTotals(o).monto : 0;
-    const cred = credHTML(credOf(clientId), monto);
-    const c = lsGet(key(sid)); if (!c || !c.data) return cred;
-    const notas = c.data.notas.filter((n) => n.clientId === clientId), usd = P.usd, esc = P.esc;
-    if (!notas.length) return cred + ((c.data.alDia || []).includes(clientId) ? '<div class="hint">✅ Cliente <b>al día</b> con sus pagos.</div>' : '');
-    const total = notas.reduce((a, n) => a + n.resta, 0), peor = notas.reduce((a, n) => (n.dias < a.dias ? n : a), notas[0]);
-    return cred + `<div class="hint warn">💵 <b>Este cliente tiene ${notas.length} ${plural(notas.length, 'nota pendiente', 'notas pendientes')} por ${usd(total)}</b> · ${esc(diasTxt(peor.dias))}${peor.dias < 0 ? ' (afecta su crédito)' : ''}.
-      Pídele que cancele para hacer su nuevo pedido. <button type="button" class="btn btn-sm" data-cob-cid="${esc(clientId)}">Ver sus notas</button></div>`;
+    return credHTML(credOf(clientId), monto) + debtHTML(clientId);
+  }
+  /** Después de un pago registrado desde el pedido: se recalcula la cartera y el semáforo al instante. */
+  async function afterPay(clientId) {
+    const P = PV(), sid = P.S.session && P.S.session.sellerId; if (!sid) return;
+    const before = credOf(clientId);
+    await load(sid, true);
+    const now = credOf(clientId), d = debtOf(clientId);
+    if (location.hash === '#/ruta' && P.render) P.render();
+    if (location.hash === '#/ruta/cobrar') renderSeller(false);
+    if (d && !d.notas.length) P.toast(`✅ ${(P.clientById(clientId) || {}).name || 'El cliente'} quedó al día${before && now && before.semaforo !== now.semaforo ? ' · semáforo ' + (DOT[now.semaforo] || '') : ''}`, 'ok');
+    else if (d) P.toast(`Pago registrado · aún debe ${P.usd(d.total)}`, 'ok');
+  }
+  /** Al enviar un pedido: si el cliente tiene algo vencido o que vence en 1 día, se lo recuerda con las acciones. */
+  function afterSend(clientId, clientName) {
+    const P = PV(), d = debtOf(clientId); if (!d || !d.notas.length || !(d.vencido > 0 || d.notas.some((n) => n.dias <= 1))) return;
+    const k = credOf(clientId);
+    P.openSheet(`<div class="row"><h2 class="grow">✓ Pedido enviado</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <p><b>${P.esc(clientName || '')}</b> tiene deuda pendiente${k && DOT[k.semaforo] ? ` · ${DOT[k.semaforo]} ${P.esc(SEM[k.semaforo] || '')}` : ''}. Aprovecha que estás con el cliente:</p>${debtHTML(clientId)}
+      <div class="actions"><button class="btn" data-close>Ahora no</button></div>`);
   }
   document.addEventListener('click', (e) => {
-    const b = e.target.closest('[data-cob-cid]'); if (!b) return;
-    const P = PV(), sid = P.S.session && P.S.session.sellerId; if (global.Pagos && sid) global.Pagos.cuentaSheet(sid, b.dataset.cobCid);
+    const P = PV(), sid = P.S.session && P.S.session.sellerId;
+    const b = e.target.closest('[data-cob-cid]'), wa = e.target.closest('[data-cob-wa]'), pay = e.target.closest('[data-cob-pay]'), of = e.target.closest('[data-cob-of]');
+    if (of) { const [s0, c0] = of.dataset.cobOf.split('|'); if (global.Pagos) global.Pagos.cuentaSheet(s0, c0); return; }
+    if (!sid || !(b || wa || pay)) return;
+    const closeOv = () => { const ov = e.target.closest('.overlay'); if (ov) { const x = ov.querySelector('[data-close]'); if (x) x.click(); } };
+    if (b && global.Pagos) { closeOv(); global.Pagos.cuentaSheet(sid, b.dataset.cobCid); return; }
+    if (wa) { const cid = wa.dataset.cobWa, d = debtOf(cid), c = P.clientById(cid) || { id: cid, name: d && d.notas[0] ? d.notas[0].clientName : '' }; if (d && d.notas.length) openWA(c, d.notas); return; }
+    if (pay && global.Pagos) { const cid = pay.dataset.cobPay; closeOv(); global.Pagos.payForm({ sellerId: sid, clientId: cid, onSaved: () => afterPay(cid) }); }
   });
 
   /* ---------------- WhatsApp ---------------- */
@@ -236,20 +275,31 @@
   const CMAP = 'pv_credmap';
   /** Guarda qué clientes van de contado para marcarlos en la hoja de carga. */
   async function warmOffice(force) {
-    const c = lsGet(CMAP); if (!force && c && Date.now() - c.at < 15 * 60000) return;
-    if (!navigator.onLine) return;
-    const r = await global.Sync.pagosCall({ action: 'creditos' }); if (!r.ok) return;
-    const map = {}; r.data.clientes.forEach((k) => { map[k.clientId] = k.modo; });
-    lsSet(CMAP, { at: Date.now(), map });
+    const c = lsGet(CMAP); if (!force && c && Date.now() - c.at < 15 * 60000 && c.v === 3) return false;
+    if (!navigator.onLine) return false;
+    const r = await global.Sync.pagosCall({ action: 'creditos' }); if (!r.ok) return false;
+    const map = {}; r.data.clientes.forEach((k) => { map[k.clientId] = { m: k.modo, s: k.semaforo, d: k.deuda, v: k.vencido, a: k.atrasoMax }; });
+    lsSet(CMAP, { at: Date.now(), v: 3, map }); return true;
   }
   /** 'contado' | 'nuevo' | '' para la hoja de carga (oficina). */
-  function contadoOf(clientId) {
-    const c = lsGet(CMAP), m = c && c.map && c.map[clientId];
-    if (m) return m === 'credito' ? '' : m;
+  /** Crédito de un cliente para la hoja de carga (oficina): { m: 'credito'|'contado'|'nuevo', s: semáforo } o null. */
+  function credMark(clientId) {
+    const c = lsGet(CMAP), x = c && c.map && c.map[clientId];
+    if (x) return typeof x === 'string' ? { m: x, s: x === 'nuevo' ? 'nuevo' : '' } : x;
     // Cliente creado después de la última consulta: si es nuevo según Ajustes, va de contado
     const P = PV(), cl = P.clientById(clientId), R = (P.S.config && P.S.config.creditRules) || {}, nd = R.nuevosDesde || '2026-10-27', nu = R.nuevas === undefined || R.nuevas === '' ? 3 : +R.nuevas;
-    return cl && nu > 0 && (cl.source === 'campo' || cl.source === 'oficina') && String(cl.createdAt || '').slice(0, 10) >= nd ? 'nuevo' : '';
+    return cl && nu > 0 && (cl.source === 'campo' || cl.source === 'oficina') && String(cl.createdAt || '').slice(0, 10) >= nd ? { m: 'nuevo', s: 'nuevo' } : null;
   }
+  /** 'contado' | 'nuevo' | '' para la hoja de carga (oficina). */
+  const contadoOf = (clientId) => { const x = credMark(clientId); return x && x.m !== 'credito' ? x.m : ''; };
+  /** Oficina: etiqueta del cliente de un pedido con semáforo y deuda; al tocarla abre su estado de cuenta. */
+  function officeChip(o) {
+    const x = credMark(o.clientId); if (!x) return '';
+    const P = PV(), usd = P.usd, esc = P.esc, txt = [x.m === 'contado' ? 'CONTADO' : x.m === 'nuevo' ? 'nuevo · contado' : '', x.d ? 'debe ' + usd(x.d) : '', x.v ? 'vencido ' + usd(x.v) : ''].filter(Boolean).join(' · ') || (SEM[x.s] || '');
+    return ` <button type="button" class="status cob-chip" data-cob-of="${esc(o.sellerId || '')}|${esc(o.clientId)}" title="${esc(SEM[x.s] || '')}${x.a ? ' · ' + x.a + ' días de atraso' : ''} · toca para ver su estado de cuenta">${DOT[x.s] || ''} ${esc(txt)}</button>`;
+  }
+  /** Semáforo del cliente para la hoja de carga: 'verde' | 'amarillo' | 'rojo' | 'nuevo' | ''. */
+  const semOf = (clientId) => { const x = credMark(clientId); return (x && x.s) || ''; };
 
   async function creditSheet() {
     const P = PV(), { esc, usd, openSheet, toast, S } = P;
@@ -265,7 +315,7 @@
     if (!r.ok) { out.innerHTML = `<div class="hint warn">${esc(r.error || 'No se pudo consultar')}</div>`; return; }
     el.querySelector('#crPct').textContent = String(r.data.reglas.penal).replace('.', ',');
     let list = r.data.clientes.slice().sort((a, b) => b.atrasoMax - a.atrasoMax || b.deuda - a.deuda || a.clientName.localeCompare(b.clientName, 'es'));
-    const map = {}; list.forEach((k) => { map[k.clientId] = k.modo; }); lsSet(CMAP, { at: Date.now(), map });
+    const map = {}; list.forEach((k) => { map[k.clientId] = { m: k.modo, s: k.semaforo, d: k.deuda, v: k.vencido, a: k.atrasoMax }; }); lsSet(CMAP, { at: Date.now(), v: 3, map });
     const sname = (k) => ((P.sellerById(k.sellerId) || {}).name || k.sellerName || '—');
     const filt = () => list.filter((k) => (!st.q || P.norm(k.clientName).includes(P.norm(st.q))) && (!st.seller || k.sellerId === st.seller)
       && (!st.sem || (st.sem === 'contado' ? k.modo === 'contado' : st.sem === 'sug' ? k.limite > 0 && k.bajaPct > 0 : k.semaforo === st.sem)));
@@ -304,12 +354,12 @@
         if (!x.ok) { toast(x.error || 'No se pudo guardar', 'err'); return; }
         P.logEvent('credito', `Crédito de ${k.clientName}: ${q('#ceM').value === 'contado' ? 'contado' : q('#ceM').value === 'credito' ? 'crédito' : 'según el sistema'}${lim ? ' · límite $' + lim : ''}`);
         f.close(); toast('Crédito guardado: le llega al vendedor', 'ok');
-        const r2 = await global.Sync.pagosCall({ action: 'creditos' }); if (r2.ok) { list = r2.data.clientes.slice().sort((a, b) => b.atrasoMax - a.atrasoMax || b.deuda - a.deuda || a.clientName.localeCompare(b.clientName, 'es')); const m = {}; list.forEach((z) => { m[z.clientId] = z.modo; }); lsSet(CMAP, { at: Date.now(), map: m }); }
+        const r2 = await global.Sync.pagosCall({ action: 'creditos' }); if (r2.ok) { list = r2.data.clientes.slice().sort((a, b) => b.atrasoMax - a.atrasoMax || b.deuda - a.deuda || a.clientName.localeCompare(b.clientName, 'es')); const m = {}; list.forEach((z) => { m[z.clientId] = { m: z.modo, s: z.semaforo, d: z.deuda, v: z.vencido, a: z.atrasoMax }; }); lsSet(CMAP, { at: Date.now(), v: 3, map: m }); }
         draw();
       };
     }
     draw();
   }
 
-  global.Cobranza = { load, refresh, hintFor, credOf, barNote, renderSeller, officeSheet, creditSheet, warmOffice, contadoOf, waText, phoneOf, diasTxt, SEG };
+  global.Cobranza = { load, refresh, hintFor, credOf, barNote, debtOf, afterSend, afterPay, officeChip, renderSeller, officeSheet, creditSheet, warmOffice, contadoOf, semOf, DOT, SEM, waText, phoneOf, diasTxt, SEG };
 })(window);

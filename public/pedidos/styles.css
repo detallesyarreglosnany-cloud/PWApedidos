@@ -548,3 +548,6 @@ table.inv td.al-c .qin, table.grid td.al-c .cell-in { text-align: center; }
 .pay-st { font-size: 13px; margin-top: 4px; }
 .pay-ok { color: var(--ok); font-weight: 700; }
 .pay-rev { color: var(--accent); font-weight: 700; }
+table.grid tr.sem-row th { font-size: 14px; letter-spacing: 0; }
+table.grid tr.sem-row th small { font: 700 10px var(--display); color: #ffb4b4; margin-left: 2px; }
+button.status.cob-chip { border: 0; cursor: pointer; font-size: 12px; }

@@ -1306,6 +1306,7 @@
       sh.close(); renderSeller();
       toast('Pedido enviado. ' + (navigator.onLine ? 'Subiendo…' : 'Se subirá al tener señal.'), 'ok');
       runSync(false);
+      if (window.Cobranza) Cobranza.afterSend(o.clientId, o.clientName);
       setTimeout(() => { const i = $('#clientInput'); if (i) i.focus(); }, 50);
     };
     $('#delOrder', sh.el).onclick = async () => {
