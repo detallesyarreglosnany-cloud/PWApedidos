@@ -3,7 +3,8 @@ import { Prisma } from '@prisma/client';
 import { db } from '@/lib/db';
 import { isAdminReq, isSupervisorReq, requireAdmin, syncOk } from '@/lib/keys';
 import { sellerAccessOk } from '@/lib/pin';
-import { allocate, cleanPago, noteKey, notaNum, noteStatus, r2, type Pago } from '@/lib/pagos';
+import { createHash } from 'crypto';
+import { METHODS, allocate, cleanPago, normRef, noteKey, notaNum, noteStatus, r2, type Pago } from '@/lib/pagos';
 
 // Pagos de clientes (Fase 4 · cobranza).
 // POST /api/pedidos/pagos
@@ -20,6 +21,8 @@ import { allocate, cleanPago, noteKey, notaNum, noteStatus, r2, type Pago } from
 //     { action: 'review', id, status: 'aprobado' | 'rechazado', motivo? } → { pago }  (rechazado libera las referencias)
 //     { action: 'reabrir', id }                   → { pago }   vuelve a «en espera de cobranza»
 //     { action: 'import', pagos }                 → { added }  restaurar un respaldo
+//     { action: 'importar', rows }                → { creados, repetidos, conciliados, errores }  pagos de FileMaker (Excel/CSV)
+// Listas por fecha: by = 'subido' (día en que se subió, hora de Venezuela) o 'pago' (fecha del pago). status 'espera' + all: todos los pendientes.
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
@@ -28,8 +31,15 @@ const MAX_LIST = 5000;
 const str = (v: unknown, max: number) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const isDay = (s: unknown): s is string => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s);
 const NO_STORE = { 'Cache-Control': 'no-store' };
-const parse = (r: { data: string }) => JSON.parse(r.data) as Pago;
+const parse = (r: { data: string; createdAt?: Date }) => { const p = JSON.parse(r.data) as Pago; if (r.createdAt && !p.createdAt) p.createdAt = r.createdAt.toISOString(); return p; };
 const LIVE = ['espera', 'aprobado'];
+// Día de Venezuela (UTC−4, sin horario de verano) → rango en UTC para createdAt
+const vzRange = (from: string, to: string) => ({ gte: new Date(from + 'T04:00:00.000Z'), lt: new Date(Date.parse(to + 'T04:00:00.000Z') + 86400000) });
+function dateWhere(body: Record<string, unknown>) {
+  if (body.status === 'espera' && body.all === true) return {};
+  if (!isDay(body.from) || !isDay(body.to)) return null;
+  return body.by === 'subido' ? { createdAt: vzRange(body.from, body.to) } : { date: { gte: body.from, lte: body.to } };
+}
 
 async function setStatus(p: Pago, status: string, review: Pago['review'], tx: Prisma.TransactionClient) {
   const next = { ...p, status, review };
@@ -54,6 +64,8 @@ export async function POST(req: NextRequest) {
       if (typeof p === 'string') return NextResponse.json({ error: p }, { status: 400 });
       if (!isAdmin && !(await sellerAccessOk(req, p.sellerId))) return NextResponse.json({ error: 'PIN', pin: true }, { status: 401 });
       if (isAdmin && !p.by) p.by = 'Oficina';
+      // Pago anterior (ya está en FileMaker): si lo registra la oficina queda confirmado; si es el vendedor, la oficina lo confirma
+      if (p.origen === 'anterior' && isAdmin) { p.status = 'aprobado'; p.review = { by: p.by || 'Oficina', at: new Date().toISOString(), motivo: 'Pago anterior registrado por la oficina' }; }
       const existing = await db.distPago.findUnique({ where: { id: p.id } });
       if (existing) return NextResponse.json({ pago: parse(existing) }); // reintento: ya estaba guardado
       const refs = p.lines.filter((l) => l.ref).map((l) => l.ref);
@@ -78,9 +90,11 @@ export async function POST(req: NextRequest) {
 
     if (action === 'mine') {
       const sellerId = str(body.sellerId, 120);
-      if (!sellerId || !isDay(body.from) || !isDay(body.to)) return NextResponse.json({ error: 'Datos inválidos' }, { status: 400 });
+      const dw = dateWhere(body);
+      if (!sellerId || !dw) return NextResponse.json({ error: 'Datos inválidos' }, { status: 400 });
       if (!isReader && !(await sellerAccessOk(req, sellerId))) return NextResponse.json({ error: 'PIN', pin: true }, { status: 401 });
-      const rows = await db.distPago.findMany({ where: { sellerId, date: { gte: body.from, lte: body.to } }, orderBy: [{ date: 'desc' }, { createdAt: 'desc' }], take: MAX_LIST });
+      const st = str(body.status, 20);
+      const rows = await db.distPago.findMany({ where: { sellerId, ...dw, ...(st ? { status: st } : {}) }, orderBy: [{ createdAt: 'desc' }], take: MAX_LIST });
       return NextResponse.json({ pagos: rows.map(parse) }, { headers: NO_STORE });
     }
 
@@ -176,18 +190,66 @@ export async function POST(req: NextRequest) {
 
     if (action === 'list') {
       if (!isReader) return NextResponse.json({ error: 'Solo oficina o supervisor' }, { status: 401 });
-      if (!isDay(body.from) || !isDay(body.to)) return NextResponse.json({ error: 'Rango de fechas inválido' }, { status: 400 });
+      const dw = dateWhere(body);
+      if (!dw) return NextResponse.json({ error: 'Rango de fechas inválido' }, { status: 400 });
       const sellerId = str(body.sellerId, 120), status = str(body.status, 20);
       const rows = await db.distPago.findMany({
-        where: { date: { gte: body.from, lte: body.to }, ...(sellerId ? { sellerId } : {}), ...(status ? { status } : {}) },
-        orderBy: [{ date: 'asc' }, { createdAt: 'asc' }], take: MAX_LIST,
+        where: { ...dw, ...(sellerId ? { sellerId } : {}), ...(status ? { status } : {}) },
+        orderBy: [{ createdAt: 'asc' }], take: MAX_LIST,
       });
       return NextResponse.json({ pagos: rows.map(parse) }, { headers: NO_STORE });
     }
 
-    if (action === 'review' || action === 'reabrir' || action === 'import') {
+    if (action === 'review' || action === 'reabrir' || action === 'import' || action === 'importar') {
       const denied = requireAdmin(req);
       if (denied) return denied;
+      if (action === 'importar') {
+        // Pagos que ya cargó cobranza en FileMaker. Cada fila trae su llave (fecha|cliente|nota|monto|referencia): volver a
+        // importar el mismo archivo no duplica. Si un pago subido por el vendedor tiene la misma referencia y sigue en espera,
+        // queda aprobado (cobranza ya lo cargó en FileMaker) en vez de crear otro.
+        const res = { creados: 0, repetidos: 0, conciliados: 0, errores: [] as string[] };
+        const rows = (Array.isArray(body.rows) ? body.rows : []).slice(0, 2000);
+        for (const raw of rows) {
+          const x = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+          const fila = String(x.fila || '');
+          const date = str(x.date, 10), clientId = str(x.clientId, 120), clientName = str(x.clientName, 120), sellerId = str(x.sellerId, 120) || '—';
+          const nota = notaNum(x.nota), usd = r2(Number(x.usd) || 0), montoNota = r2(Number(x.montoNota) || 0), ref = normRef(x.ref);
+          if (!isDay(date) || !clientId || !(usd > 0)) { res.errores.push(`Fila ${fila}: falta fecha, cliente o monto`); continue; }
+          const id = 'fm' + createHash('sha1').update([date, clientId, nota, usd.toFixed(2), ref, str(x.key, 200)].join('|')).digest('hex').slice(0, 24);
+          if (await db.distPago.findUnique({ where: { id } })) { res.repetidos++; continue; }
+          if (ref && ref.length >= 4) {
+            const used = await db.distPagoRef.findUnique({ where: { ref } });
+            if (used) {
+              const other = await db.distPago.findUnique({ where: { id: used.pagoId } });
+              const op = other ? parse(other) : null;
+              if (op && op.status === 'espera' && op.origen !== 'filemaker') {
+                await db.$transaction(async (tx) => { await setStatus(op, 'aprobado', { by: 'FileMaker', at: new Date().toISOString(), motivo: 'Conciliado con FileMaker (misma referencia)' }, tx); });
+                res.conciliados++;
+              } else res.repetidos++;
+              continue;
+            }
+          }
+          const method = METHODS[str(x.method, 30)] && str(x.method, 30) !== 'anterior' ? str(x.method, 30) : 'anterior';
+          const amount = r2(Number(x.amount) || usd), currency = METHODS[method].currency;
+          const p: Pago = {
+            id, date, sellerId, sellerName: str(x.sellerName, 80), clientId, clientName, notas: [{ orderId: str(x.orderId, 120) || (nota ? 'manual:' + nota : 'fm:' + id), nota, monto: montoNota > 0 ? montoNota : usd }],
+            rate: r2(Number(x.rate) || 0), copRate: 0, lines: [{ method, bank: str(x.bank, 80), ref: ref.length >= 4 ? ref : '', currency, amount: currency === 'USD' ? usd : amount, usd }], adjusts: [],
+            debe: montoNota > 0 ? montoNota : usd, pagado: usd, ajustes: 0, diferencia: r2((montoNota > 0 ? montoNota : usd) - usd), comment: str(x.comment, 300), origen: 'filemaker', info: str(x.info, 200),
+            status: 'aprobado', by: 'FileMaker', createdAt: new Date().toISOString(), review: { by: 'FileMaker', at: new Date().toISOString(), motivo: 'Importado de FileMaker' },
+          };
+          try {
+            await db.$transaction(async (tx) => {
+              if (p.lines[0].ref) await tx.distPagoRef.create({ data: { ref: p.lines[0].ref, pagoId: p.id } });
+              await tx.distPago.create({ data: { id: p.id, date: p.date, sellerId: p.sellerId, clientId: p.clientId, status: p.status, data: JSON.stringify(p) } });
+            });
+            res.creados++;
+          } catch (e) {
+            if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') res.repetidos++;
+            else { console.error('[pagos importar]', e); res.errores.push(`Fila ${fila}: no se pudo guardar`); }
+          }
+        }
+        return NextResponse.json(res);
+      }
       if (action === 'import') {
         let added = 0;
         for (const raw of (Array.isArray(body.pagos) ? body.pagos : []).slice(0, 20000)) {

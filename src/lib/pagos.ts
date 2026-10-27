@@ -9,7 +9,10 @@ export const METHODS: Record<string, { label: string; currency: 'VES' | 'USD' | 
   zelle: { label: 'Zelle', currency: 'USD', ref: true, bank: false },
   binance: { label: 'Binance', currency: 'USD', ref: true, bank: false },
   efectivo_cop: { label: 'Pesos colombianos', currency: 'COP', ref: false, bank: false },
+  // Pago que ya se cargó en FileMaker (antes de la plataforma, o importado): no pasa por la cola de cobranza
+  anterior: { label: 'Pago anterior (FileMaker)', currency: 'USD', ref: false, bank: false },
 };
+export const ORIGENES = ['app', 'anterior', 'filemaker'] as const;
 export const ADJUSTS: Record<string, string> = { colaboracion: 'Colaboración', autoconsumo: 'Autoconsumo', donativo: 'Donativo', descuento: 'Descuento' };
 export const STATUSES = ['espera', 'aprobado', 'rechazado', 'anulado'] as const;
 
@@ -25,7 +28,7 @@ export type PagoNota = { orderId: string; nota: string; monto: number };
 export type Pago = {
   id: string; date: string; sellerId: string; sellerName: string; clientId: string; clientName: string;
   notas: PagoNota[]; rate: number; copRate: number; lines: PagoLine[]; adjusts: PagoAdj[];
-  debe: number; pagado: number; ajustes: number; diferencia: number; comment: string;
+  debe: number; pagado: number; ajustes: number; diferencia: number; comment: string; origen: string; info: string;
   status: string; by: string; createdAt: string; review?: { by: string; at: string; motivo: string } | null;
 };
 
@@ -44,7 +47,11 @@ export function cleanPago(raw: Record<string, unknown>): Pago | string {
     return { orderId: str(x.orderId, 120), nota: String(x.nota ?? '').replace(/\D/g, '').slice(0, 20), monto: r2(Math.max(0, num(x.monto) || 0)) };
   }).filter((n) => n.orderId);
   if (!notas.length) return 'Elige la nota (o notas) que paga';
+  const origen = str(raw.origen, 20) || 'app';
+  if (origen !== 'app' && origen !== 'anterior') return 'Origen del pago inválido';
   const rawLines = Array.isArray(raw.lines) ? raw.lines : [];
+  if (origen === 'anterior' && rawLines.some((l) => !l || (l as Record<string, unknown>).method !== 'anterior')) return 'Un pago anterior se registra solo con su monto';
+  if (origen === 'app' && rawLines.some((l) => l && (l as Record<string, unknown>).method === 'anterior')) return 'Forma de pago inválida';
   if (rawLines.length > 12) return 'Demasiadas formas de pago en un solo pago';
   const lines: PagoLine[] = [];
   for (const l of rawLines) {
@@ -80,7 +87,7 @@ export function cleanPago(raw: Record<string, unknown>): Pago | string {
   const pagado = r2(lines.reduce((a, l) => a + l.usd, 0)), ajustes = r2(adjusts.reduce((a, x) => a + x.usd, 0));
   return {
     id, date, sellerId, sellerName: str(raw.sellerName, 80), clientId, clientName, notas, rate: Math.round(rate * 10000) / 10000, copRate: Math.round(copRate * 10000) / 10000, lines, adjusts,
-    debe, pagado, ajustes, diferencia: r2(debe - pagado - ajustes), comment: str(raw.comment, 300),
+    debe, pagado, ajustes, diferencia: r2(debe - pagado - ajustes), comment: str(raw.comment, 300), origen, info: str(raw.info, 200),
     status: 'espera', by: str(raw.by, 80), createdAt: new Date().toISOString(), review: null,
   };
 }
