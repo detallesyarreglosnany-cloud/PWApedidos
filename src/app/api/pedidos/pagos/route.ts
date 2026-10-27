@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import { db } from '@/lib/db';
 import { isAdminReq, isSupervisorReq, requireAdmin, syncOk } from '@/lib/keys';
 import { sellerAccessOk } from '@/lib/pin';
-import { cleanPago, type Pago } from '@/lib/pagos';
+import { allocate, cleanPago, noteKey, notaNum, noteStatus, r2, type Pago } from '@/lib/pagos';
 
 // Pagos de clientes (Fase 4 · cobranza).
 // POST /api/pedidos/pagos
@@ -12,6 +12,8 @@ import { cleanPago, type Pago } from '@/lib/pagos';
 //     { action: 'mine', sellerId, from, to }      → { pagos }
 //     { action: 'saldo', orderIds }               → { byOrder: { id: { pagado, aprobado } } }   lo abonado a cada nota
 //     { action: 'anular', id, sellerId }          → { pago }   solo si cobranza aún no lo verificó; libera las referencias
+//     { action: 'cuenta', clientId, sellerId }    → { notas, deuda, enEspera }  estado de cuenta: cada nota del cliente con su estado de pago
+//     { action: 'estado', notas: [{ nota, orderId, monto }] } → { byKey: { 'n:85643': { estado, texto, resta, ... } } }
 //   Oficina / supervisor (lectura):
 //     { action: 'list', from, to, sellerId?, status? } → { pagos }
 //   Oficina (cobranza):
@@ -102,6 +104,60 @@ export async function POST(req: NextRequest) {
         });
       }
       return NextResponse.json({ byOrder: Object.fromEntries(Object.entries(byOrder).filter(([k]) => ids.includes(k))) }, { headers: NO_STORE });
+    }
+
+    if (action === 'cuenta') {
+      const clientId = str(body.clientId, 120), sellerId = str(body.sellerId, 120);
+      if (!clientId) return NextResponse.json({ error: 'Falta el cliente' }, { status: 400 });
+      if (!isReader && !(await sellerAccessOk(req, sellerId))) return NextResponse.json({ error: 'PIN', pin: true }, { status: 401 });
+      type Line = { cajas?: number; unidades?: number; boxPrice?: number; unitPrice?: number };
+      type Ord = { id: string; deleted?: boolean; status?: string; routeDate?: string; valeryNote?: string; loadId?: string | null; lines?: Record<string, Line>;
+        delivery?: { at?: string; date?: string; result?: string; monto?: number; newValery?: string; loadId?: string } | null };
+      const orows = await db.$queryRaw<{ data: string }[]>`
+        SELECT "data" FROM "DistDoc" WHERE "kind" = 'orders' AND "deleted" = false AND ("data"::jsonb ->> 'clientId') = ${clientId}`;
+      const lrows = await db.distDoc.findMany({ where: { kind: 'loads', deleted: false }, select: { id: true, data: true } });
+      const loadLabel = new Map(lrows.map((r) => { const l = JSON.parse(r.data) as { label?: string; number?: number }; return [r.id, `${l.label || ''}${l.number ? ' C-' + String(l.number).padStart(5, '0') : ''}`.trim()]; }));
+      const lineMoney = (l: Line) => r2((Number(l.cajas) || 0) * (Number(l.boxPrice) || 0) + (Number(l.unidades) || 0) * (Number(l.unitPrice) || 0));
+      type Nota = { key: string; nota: string; orderId: string; date: string; monto: number; liquidado: boolean; hoja: string; manual: boolean };
+      const notas = new Map<string, Nota>();
+      for (const r of orows) {
+        const o = JSON.parse(r.data) as Ord;
+        if (o.deleted) continue;
+        const d = o.delivery && o.delivery.at ? o.delivery : null;
+        if (!d && o.status !== 'despachado') continue; // solo lo despachado o liquidado se cobra
+        if (d && d.result === 'anulada') continue;
+        const monto = d ? r2(Number(d.monto) || 0) : r2(Object.values(o.lines || {}).reduce((a, l) => a + lineMoney(l), 0));
+        if (!(monto > 0)) continue;
+        const nota = notaNum((d && d.newValery) || o.valeryNote);
+        const n: Nota = { key: noteKey({ nota, orderId: o.id }), nota, orderId: o.id, date: String((d && d.date) || o.routeDate || ''), monto, liquidado: !!d, hoja: loadLabel.get(String((d && d.loadId) || o.loadId || '')) || '', manual: false };
+        notas.set(n.key, n);
+      }
+      const prows = await db.distPago.findMany({ where: { clientId, status: { in: ['espera', 'aprobado'] } } });
+      const pagos = prows.map(parse);
+      // Notas agregadas a mano (de antes de la plataforma): quedan en la cuenta del cliente
+      for (const p of pagos) for (const n of p.notas) {
+        const k = noteKey(n);
+        if (!notas.has(k)) notas.set(k, { key: k, nota: notaNum(n.nota), orderId: n.orderId, date: p.date, monto: n.monto, liquidado: false, hoja: '', manual: true });
+      }
+      // Lo que vale de una nota a mano es lo que se dijo la primera vez (el mayor monto registrado)
+      for (const p of pagos) for (const n of p.notas) { const x = notas.get(noteKey(n)); if (x && x.manual && n.monto > x.monto) x.monto = n.monto; }
+      const ab = allocate(pagos);
+      const list = [...notas.values()].map((n) => { const a = ab.get(n.key); return { ...n, pagado: a ? a.pagado : 0, aprobado: a ? a.aprobado : 0, espera: a ? a.espera : 0, ...noteStatus(n.monto, a) }; })
+        .sort((a, b) => (a.estado === 'pagada' ? 1 : 0) - (b.estado === 'pagada' ? 1 : 0) || String(b.date).localeCompare(String(a.date)));
+      return NextResponse.json({ notas: list, deuda: r2(list.reduce((a, n) => a + n.resta, 0)), enEspera: r2(list.reduce((a, n) => a + n.espera, 0)) }, { headers: NO_STORE });
+    }
+
+    if (action === 'estado') {
+      const want = (Array.isArray(body.notas) ? body.notas : []).slice(0, 300).map((x) => { const o = (x && typeof x === 'object' ? x : {}) as Record<string, unknown>; return { nota: notaNum(o.nota), orderId: str(o.orderId, 120), monto: r2(Number(o.monto) || 0) }; });
+      if (!want.length) return NextResponse.json({ byKey: {} });
+      const nums = want.map((w) => w.nota).filter(Boolean), oids = want.map((w) => w.orderId).filter(Boolean);
+      const rows = await db.$queryRaw<{ data: string }[]>`
+        SELECT "data" FROM "DistPago" WHERE "status" IN ('espera', 'aprobado')
+          AND EXISTS (SELECT 1 FROM jsonb_array_elements("data"::jsonb -> 'notas') n WHERE regexp_replace(regexp_replace(COALESCE(n ->> 'nota', ''), '\D', '', 'g'), '^0+(?=\d)', '') = ANY(${nums}) OR n ->> 'orderId' = ANY(${oids}))`;
+      const ab = allocate(rows.map(parse));
+      const byKey: Record<string, unknown> = {};
+      for (const w of want) { const k = noteKey(w); const a = ab.get(k); byKey[k] = { pagado: a ? a.pagado : 0, aprobado: a ? a.aprobado : 0, ...noteStatus(w.monto, a) }; }
+      return NextResponse.json({ byKey }, { headers: NO_STORE });
     }
 
     if (action === 'anular') {
