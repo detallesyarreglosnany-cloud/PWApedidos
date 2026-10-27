@@ -187,9 +187,12 @@ export async function POST(req: NextRequest) {
       type Line = { cajas?: number; unidades?: number; boxPrice?: number; unitPrice?: number };
       type Ord = { id: string; deleted?: boolean; status?: string; routeDate?: string; valeryNote?: string; loadId?: string | null; lines?: Record<string, Line>;
         delivery?: { at?: string; date?: string; result?: string; monto?: number; newValery?: string; loadId?: string } | null };
+      // LIKE (texto) descarta rápido; la comparación JSON exacta solo se hace en los que coinciden
       const orows = await db.$queryRaw<{ data: string }[]>`
-        SELECT "data" FROM "DistDoc" WHERE "kind" = 'orders' AND "deleted" = false AND ("data"::jsonb ->> 'clientId') = ${clientId}`;
-      const lrows = await db.distDoc.findMany({ where: { kind: 'loads', deleted: false }, select: { id: true, data: true } });
+        SELECT "data" FROM "DistDoc" WHERE "kind" = 'orders' AND "deleted" = false AND "data" LIKE ${'%' + clientId.replace(/[\\%_]/g, '\\$&') + '%'} AND ("data"::jsonb ->> 'clientId') = ${clientId}`;
+      // Solo las hojas de esos pedidos (antes se leían todas las hojas de la historia)
+      const loadIds = [...new Set(orows.flatMap((r) => { const o = JSON.parse(r.data) as { loadId?: string | null; delivery?: { loadId?: string } | null }; return [o.loadId, o.delivery && o.delivery.loadId].filter((x): x is string => !!x); }))];
+      const lrows = loadIds.length ? await db.distDoc.findMany({ where: { kind: 'loads', id: { in: loadIds }, deleted: false }, select: { id: true, data: true } }) : [];
       const loadLabel = new Map(lrows.map((r) => { const l = JSON.parse(r.data) as { label?: string; number?: number }; return [r.id, `${l.label || ''}${l.number ? ' C-' + String(l.number).padStart(5, '0') : ''}`.trim()]; }));
       const lineMoney = (l: Line) => r2((Number(l.cajas) || 0) * (Number(l.boxPrice) || 0) + (Number(l.unidades) || 0) * (Number(l.unitPrice) || 0));
       type Nota = { key: string; nota: string; orderId: string; date: string; monto: number; liquidado: boolean; hoja: string; manual: boolean };

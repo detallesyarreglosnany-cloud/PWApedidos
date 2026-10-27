@@ -129,6 +129,24 @@
     return reqP(tx(db, store, 'readonly').get(id));
   }
 
+  /*
+   * Pendientes de subir: por cada store sincronizable, la lista de ids con dirty=true vive en meta «dq:<store>» y se
+   * actualiza en la MISMA transacción que la escritura (atómico, también con dos pestañas). Así la sincronización no
+   * relee todos los pedidos del equipo cada vez. Si la lista no existe o se pide revisar, se reconstruye leyendo todo.
+   */
+  const DQ = (store) => 'dq:' + store;
+  const tracked = (store) => STORES.includes(store);
+  function trackDirty(t, store, docs, removedIds) {
+    const m = t.objectStore('meta'), g = m.get(DQ(store));
+    g.onsuccess = () => {
+      const row = g.result; if (!row) return; // aún sin lista: se arma completa en la próxima revisión
+      const set = new Set(row.value || []);
+      docs.forEach((d) => { if (d.dirty) set.add(d.id); else set.delete(d.id); });
+      (removedIds || []).forEach((id) => set.delete(id));
+      m.put({ key: DQ(store), value: [...set] });
+    };
+  }
+
   async function putMany(store, docs) {
     if (!docs.length) return;
     const db = await open();
@@ -140,9 +158,10 @@
       return;
     }
     await new Promise((res, rej) => {
-      const t = db.transaction(store, 'readwrite');
+      const t = db.transaction(tracked(store) ? [store, 'meta'] : store, 'readwrite');
       const s = t.objectStore(store);
       docs.forEach((d) => s.put(d));
+      if (tracked(store)) trackDirty(t, store, docs);
       t.oncomplete = res;
       t.onerror = () => rej(t.error);
       t.onabort = () => rej(t.error);
@@ -151,18 +170,83 @@
 
   async function put(store, doc) { return putMany(store, [doc]); }
 
+  /** Varios documentos por id en una sola transacción (los que no existen no vienen). */
+  async function getMany(store, ids) {
+    if (!ids.length) return [];
+    const db = await open();
+    if (useFallback || !db) { const all = ls.read(store); return ids.map((id) => all[id]).filter(Boolean); }
+    return new Promise((res, rej) => {
+      const t = db.transaction(store, 'readonly'), s = t.objectStore(store), out = [];
+      ids.forEach((id) => { const r = s.get(id); r.onsuccess = () => { if (r.result) out.push(r.result); }; });
+      t.oncomplete = () => res(out); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error);
+    });
+  }
+
+  /** Documentos de un índice desde un valor (p. ej. pedidos con routeDate >= desde) sin leer todo el store. */
+  async function getFrom(store, index, from) {
+    const db = await open();
+    if (useFallback || !db) return Object.values(ls.read(store)).filter((d) => d && String(d[index] || '') >= from);
+    return reqP(db.transaction(store, 'readonly').objectStore(store).index(index).getAll(IDBKeyRange.lowerBound(from)));
+  }
+
+  /**
+   * Retención: borra del EQUIPO (no del servidor) los documentos con índice < hasta para los que drop() da true.
+   * Nunca borra lo que tiene cambios sin subir. Devuelve cuántos borró.
+   */
+  async function pruneBefore(store, index, hasta, drop) {
+    const db = await open();
+    if (useFallback || !db) return 0;
+    return new Promise((res, rej) => {
+      const t = db.transaction([store, 'meta'], 'readwrite'), s = t.objectStore(store), ids = [];
+      const cur = s.index(index).openCursor(IDBKeyRange.upperBound(hasta, true));
+      cur.onsuccess = () => { const c = cur.result; if (!c) return; const d = c.value; if (d && !d.dirty && drop(d)) { c.delete(); ids.push(d.id); } c.continue(); };
+      t.oncomplete = () => res(ids.length); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error);
+    });
+  }
+
+  /** Documentos con cambios locales sin subir. full=true: revisa todo el store y rehace la lista (red de seguridad). */
+  async function getDirty(store, full) {
+    const db = await open();
+    if (useFallback || !db) return Object.values(ls.read(store)).filter((d) => d && d.dirty);
+    return new Promise((res, rej) => {
+      const t = db.transaction([store, 'meta'], 'readwrite'), s = t.objectStore(store), m = t.objectStore('meta');
+      let out = [];
+      const g = m.get(DQ(store));
+      g.onsuccess = () => {
+        const row = g.result;
+        if (!row || full) {
+          const a = s.getAll();
+          a.onsuccess = () => { out = (a.result || []).filter((d) => d && d.dirty); m.put({ key: DQ(store), value: out.map((d) => d.id) }); };
+          return;
+        }
+        (row.value || []).forEach((id) => { const r = s.get(id); r.onsuccess = () => { if (r.result && r.result.dirty) out.push(r.result); }; });
+      };
+      t.oncomplete = () => res(out); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error);
+    });
+  }
+
   async function remove(store, id) {
     const db = await open();
     if (useFallback || !db) {
       const all = ls.read(store); delete all[id]; ls.write(store, all); return;
     }
-    return reqP(tx(db, store, 'readwrite').delete(id));
+    await new Promise((res, rej) => {
+      const t = db.transaction(tracked(store) ? [store, 'meta'] : store, 'readwrite');
+      t.objectStore(store).delete(id);
+      if (tracked(store)) trackDirty(t, store, [], [id]);
+      t.oncomplete = res; t.onerror = () => rej(t.error); t.onabort = () => rej(t.error);
+    });
   }
 
   async function clear(store) {
     const db = await open();
     if (useFallback || !db) { ls.write(store, {}); return; }
-    return reqP(tx(db, store, 'readwrite').clear());
+    await new Promise((res, rej) => {
+      const t = db.transaction(tracked(store) ? [store, 'meta'] : store, 'readwrite');
+      t.objectStore(store).clear();
+      if (tracked(store)) t.objectStore('meta').put({ key: DQ(store), value: [] });
+      t.oncomplete = res; t.onerror = () => rej(t.error); t.onabort = () => rej(t.error);
+    });
   }
 
   async function getMeta(key, fallback) {
@@ -290,7 +374,7 @@
   }
 
   global.DB = {
-    STORES, open, getAll, get, put, putMany, remove, getMeta, setMeta, getCookie, setCookie,
+    STORES, open, getAll, get, getMany, getDirty, getFrom, pruneBefore, put, putMany, remove, getMeta, setMeta, getCookie, setCookie,
     uid, now, touch, setClockOffset, requestPersistence, clear, stampFields, mergeFields, after, FV_GROUPS: GROUPS,
     get isFallback() { return useFallback; },
   };

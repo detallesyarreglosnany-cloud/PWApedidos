@@ -13,8 +13,14 @@
   'use strict';
   const PV = () => global.PV;
   const SEG = { ya_pago: 'Ya pagó', no_paga: 'Aún no paga', datos_enviados: 'Se le enviaron los datos de pago', no_recibio: 'El cliente no ha recibido', sin_devolucion: 'No se le ha hecho la devolución', incompleto: 'No recibió completo' };
-  const lsGet = (k) => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } };
-  const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* noop */ } };
+  // Lectura con memoria: el texto guardado solo se vuelve a interpretar si cambió (las listas de la oficina lo leen
+  // por cada pedido; interpretar 100 KB cada vez trababa la pantalla)
+  const memo = new Map();
+  const lsGet = (k) => {
+    try { const raw = localStorage.getItem(k); const m = memo.get(k); if (m && m.raw === raw) return m.val; const val = JSON.parse(raw || 'null'); memo.set(k, { raw, val }); return val; }
+    catch (e) { return null; }
+  };
+  const lsSet = (k, v) => { try { const raw = JSON.stringify(v); localStorage.setItem(k, raw); memo.set(k, { raw, val: v }); } catch (e) { /* noop */ } };
   const key = (sid) => 'pv_cart:' + sid;
 
   /** Cartera del vendedor (del servidor; sin señal, la última guardada). */
@@ -274,10 +280,14 @@
   /* ---------------- Oficina: crédito de clientes (lo ajusta cobranza) ---------------- */
   const CMAP = 'pv_credmap';
   /** Guarda qué clientes van de contado para marcarlos en la hoja de carga. */
+  // Una consulta a la vez, y si falla se espera 5 minutos antes de reintentar (no una por cada redibujo de pantalla)
+  let warming = null, warmFailAt = 0;
   async function warmOffice(force) {
     const c = lsGet(CMAP); if (!force && c && Date.now() - c.at < 15 * 60000 && c.v === 3) return false;
-    if (!navigator.onLine) return false;
-    const r = await global.Sync.pagosCall({ action: 'creditos' }); if (!r.ok) return false;
+    if (!navigator.onLine || warming || (!force && Date.now() - warmFailAt < 5 * 60000)) return false;
+    warming = global.Sync.pagosCall({ action: 'creditos' });
+    let r; try { r = await warming; } finally { warming = null; }
+    if (!r.ok) { warmFailAt = Date.now(); return false; }
     const map = {}; r.data.clientes.forEach((k) => { map[k.clientId] = { m: k.modo, s: k.semaforo, d: k.deuda, v: k.vencido, a: k.atrasoMax }; });
     lsSet(CMAP, { at: Date.now(), v: 3, map }); return true;
   }

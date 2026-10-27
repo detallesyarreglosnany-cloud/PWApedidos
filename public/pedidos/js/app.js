@@ -140,6 +140,30 @@
     const all = await Promise.all(['products', 'sellers', 'orders', 'clients', 'loads', 'config'].map((k) => DB.getAll(k)));
     [S.products, S.sellers, S.orders, S.clients, S.loads] = all.slice(0, 5).map((a) => a.filter((x) => !x.deleted));
     S.config = all[5].find((c) => c.id === 'main') || Seed.defaultConfig();
+    idxVer++;
+    await loadMeta();
+  }
+  /**
+   * Tras sincronizar: solo los documentos que cambiaron se actualizan en memoria (con un año de pedidos, recargar
+   * todo en cada sincronización congelaba la pantalla). Si cambiaron muchos, se recarga todo.
+   */
+  async function refreshLocal(touched) {
+    const kinds = ['products', 'sellers', 'orders', 'clients', 'loads'];
+    const n = touched ? Object.values(touched).reduce((a, ids) => a + ids.length, 0) : Infinity;
+    if (!touched || n > 3000) return loadAll();
+    for (const k of kinds) {
+      const ids = touched[k]; if (!ids || !ids.length) continue;
+      const got = new Map((await DB.getMany(k, ids)).map((d) => [d.id, d])), set = new Set(ids), out = [];
+      // Mismo orden; lo cambiado se reemplaza, lo eliminado sale y lo nuevo se agrega al final
+      S[k].forEach((x) => { if (!set.has(x.id)) { out.push(x); return; } const d = got.get(x.id); if (d && !d.deleted) out.push(d); got.delete(x.id); });
+      got.forEach((d) => { if (!d.deleted) out.push(d); });
+      S[k] = out;
+    }
+    if (touched.config && touched.config.length) S.config = (await DB.get('config', 'main')) || S.config;
+    idxVer++;
+    await loadMeta();
+  }
+  async function loadMeta() {
     S.settings = { ...DEFAULT_SETTINGS, ...(await DB.getMeta('settings', {})) };
     S.session = await DB.getMeta('session', null);
     S.notifs = await DB.getMeta('notifs', []);
@@ -147,7 +171,16 @@
     S.officePin = await DB.getMeta('officePin', '');
     S.wipeNotice = await DB.getMeta('wipeNotice', null);
   }
-  const byId = (arr, id) => arr.find((x) => x.id === id);
+  // Búsqueda por id con índice (por lista y versión): saveDocs y loadAll suben la versión al cambiar las listas
+  let idxVer = 0;
+  const idxCache = new WeakMap();
+  const byId = (arr, id) => {
+    if (!arr) return undefined;
+    let c = idxCache.get(arr);
+    if (!c || c.v !== idxVer || c.n !== arr.length) { c = { v: idxVer, n: arr.length, m: new Map(arr.map((x) => [x.id, x])) }; idxCache.set(arr, c); }
+    const x = c.m.get(id);
+    return x && x.id === id ? x : arr.find((y) => y.id === id);
+  };
   const productById = (id) => byId(S.products, id);
   const sellerById = (id) => byId(S.sellers, id);
   const orderById = (id) => byId(S.orders, id);
@@ -181,6 +214,7 @@
         if (d.deleted) { if (i >= 0) arr.splice(i, 1); }
         else if (i >= 0) arr[i] = d; else arr.push(d);
       });
+      idxVer++;
     }
     notifyChange();
   }
@@ -308,13 +342,15 @@
     // si no, la pantalla seguiría mostrando (y volvería a guardar) la copia vieja.
     if (r.ok && (r.pulled || r.reverted)) {
       const before = new Map(S.orders.map((o) => [o.id, o])), beforeCli = new Set(S.clients.map((c) => c.id));
-      await loadAll();
-      if (!firstSync) await detectNotifs(before, beforeCli);
+      await refreshLocal(r.touched);
+      if (!firstSync) await detectNotifs(before, beforeCli, r.touched);
       refreshAfterRemote();
     }
     updateSyncPill();
     scheduleSync(syncEvery());
     if (r.ok) warmImages();
+    // Una vez al día: el equipo suelta lo muy viejo ya subido (en el servidor sigue todo)
+    if (r.ok) Sync.pruneLocal(!!(S.settings.adminKey || S.settings.supervisorKey)).then((n) => { if (n) loadAll().then(refreshAfterRemote); }).catch(() => {});
     return r;
   }
   // Precarga en segundo plano las fotos que este equipo aún no tiene (una vez por
@@ -379,7 +415,7 @@
    * modificado o eliminado por el vendedor, cliente duplicado.
    * Vendedor: su pedido fue aprobado, puesto en espera, despachado, ajustado o eliminado por la oficina.
    */
-  async function detectNotifs(before, beforeCli) {
+  async function detectNotifs(before, beforeCli, touched) {
     const office = isOffice();
     const sid = S.session && S.session.sellerId;
     if (!office && (!sid || isSupervisor())) return;
@@ -388,11 +424,12 @@
     if (office) {
       // Cliente nuevo registrado por un vendedor: la oficina lo verifica
       const prevCli = beforeCli || new Set(S.clients.map((c) => c.id));
-      (await DB.getAll('clients')).forEach((c) => {
+      // Solo los que cambiaron en esta sincronización (si no se sabe, todos)
+      (touched ? await DB.getMany('clients', touched.clients || []) : await DB.getAll('clients')).forEach((c) => {
         if (!c.deleted && !prevCli.has(c.id) && c.verified === false && c.source === 'campo') out.push({ icon: '🕓', kind: 'cliente', orderId: c.id, msg: `${c.name} · registrado por ${c.createdByName || 'un vendedor'}: revisa sus datos y verifícalo`, warn: true });
       });
     }
-    const all = await DB.getAll('orders');
+    const all = touched ? await DB.getMany('orders', touched.orders || []) : await DB.getAll('orders');
     all.forEach((o) => {
       const p = before.get(o.id);
       if (office) {

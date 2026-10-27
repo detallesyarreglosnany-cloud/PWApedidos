@@ -123,9 +123,17 @@
   }
 
   /** Pedidos del mismo cliente el mismo día (mismo u otro vendedor): alerta, no bloquea. */
-  function dupIndex() {
-    // Mismo cliente o nombre parecido con ±4 días, en cualquier hoja y estado: dedup.js
-    return Dedup.pairs(S.orders.filter((o) => !o.deleted && Matrix.orderTotals(o).items));
+  function dupIndex(focus) {
+    // Mismo cliente o nombre parecido con ±4 días, en cualquier hoja y estado: dedup.js. Con «focus» (los pedidos que
+    // se muestran) solo se miran los pedidos de esas fechas ±4 días: mismo resultado para ellos, sin recorrer todo el año
+    let from = '', to = '';
+    if (focus) {
+      const ds = [].concat(focus).map((o) => String((o && o.routeDate) || '')).filter(Boolean).sort();
+      if (!ds.length) return new Map();
+      const sh = (d, n) => new Date(Date.parse(d + 'T12:00:00Z') + n * 86400000).toISOString().slice(0, 10), w = Dedup.WINDOW_DAYS + 1;
+      from = sh(ds[0], -w); to = sh(ds[ds.length - 1], w);
+    }
+    return Dedup.pairs(S.orders.filter((o) => !o.deleted && (!focus || (String(o.routeDate || '') >= from && String(o.routeDate || '') <= to)) && Matrix.orderTotals(o).items));
   }
   /** Dónde está el otro pedido: hoja (código y estado) o estado del pedido, fecha y vendedor. */
   function dupWhere(x) {
@@ -145,7 +153,7 @@
   /** Revisión detallada: los pedidos que coinciden, con su hoja, nota, monto y productos. */
   function dupSheet(oid) {
     const o = orderById(oid); if (!o) return;
-    const hits = dupIndex().get(oid) || [];
+    const hits = dupIndex([o]).get(oid) || [];
     const card = (x, kind) => {
       const l = x.loadId ? S.loads.find((y) => y.id === x.loadId) : null, t = Matrix.orderTotals(x);
       const lines = Object.values(x.lines || {}).map((ln) => `${ln.cajas ? ln.cajas + ' cj' : ''}${ln.cajas && ln.unidades ? ' + ' : ''}${ln.unidades ? ln.unidades + ' un' : ''} ${ln.name}`).join(' · ');
@@ -286,7 +294,7 @@
           <td style="white-space:nowrap"><button class="btn btn-sm" data-edit="${esc(o.id)}">Editar</button>
             <button class="btn btn-sm" data-move="${esc(o.id)}">⇄ A una hoja</button>
             <button class="btn btn-sm btn-primary" data-release="${esc(o.id)}">↩ Reincorporar</button></td></tr>`;
-      }).join(''))(dupIndex())}</table></div>` : '<p class="muted">Ninguno.</p>'}`;
+      }).join(''))(dupIndex(held))}</table></div>` : '<p class="muted">Ninguno.</p>'}`;
 
     $('#lSeller').onchange = (e) => { U().loadSeller = e.target.value; renderLoads(root); };
     $('#lSync').onclick = () => PV.runSync(true);
@@ -414,7 +422,7 @@
     const stickKey = m.footer.some((f) => f.key === 'TOTAL_BULTOS') ? 'TOTAL_BULTOS' : (m.footer[0] || {}).key;
     const foot = m.footer.map((f) => `<tr class="${f.key === stickKey ? 'stick' : ''}"><td class="sticky-col">${esc(f.label)}</td>${f.cells.map((v) => `<td class="n">${nf0.format(v)}</td>`).join('')}<td class="n tot">${nf0.format(f.total)}</td></tr>`).join('') + vacFoot;
     const totalUSD = os.reduce((a, o) => a + Matrix.orderTotals(o).monto, 0);
-    const dups = dupIndex();
+    const dups = dupIndex(os);
     const initialsRow = `<tr class="ini-row"><th class="sticky-col">Vendedor →</th>${m.cols.map((c) => `<th>${esc(Loads.initials(c.order.sellerName))}</th>`).join('')}<th class="tot"></th></tr>`;
     // Semáforo de crédito de cada cliente (lo calcula cobranza): 🟢 al día · 🟡 atraso · 🔴 atraso grave · 🆕 nuevo
     const semOf = (o) => (window.Cobranza ? Cobranza.semOf(o.clientId) : ''), conOf = (o) => (window.Cobranza ? Cobranza.contadoOf(o.clientId) : '');
@@ -597,7 +605,7 @@
     }
     // Antes de aprobar o cerrar: pedidos que parecen duplicados (mismo cliente con ±1 día)
     if ((st.locked && !cur.locked) || closing) {
-      const idx = dupIndex(), dl = os.filter((o) => (idx.get(o.id) || []).some((x) => !x.extra));
+      const idx = dupIndex(os), dl = os.filter((o) => (idx.get(o.id) || []).some((x) => !x.extra));
       const txt = (o) => `• ${o.clientName} (${o.sellerName})\n${idx.get(o.id).filter((x) => !x.extra).map((x) => `   ${x.kind === 'same' ? '⚠ mismo cliente' : '≈ nombre parecido «' + x.clientName + '»'} en ${dupWhere(x)}`).join('\n')}`;
       if (dl.length && !confirm(`⚠ Posibles pedidos DUPLICADOS en esta hoja:\n\n${dl.slice(0, 10).map(txt).join('\n')}${dl.length > 10 ? `\n… y ${dl.length - 10} más` : ''}\n\nPregunta al vendedor antes de despachar (se entregaría dos veces). ¿${st.name} igual?`)) return back();
     }
@@ -905,7 +913,7 @@
       <h3>${esc(name)}</h3><div class="big num">${usd(st.monto)}</div>
       <div class="kpis"><span>${st.n} clientes</span>${st.abiertos ? `<span class="status abierto">${st.abiertos} abiertos</span>` : ''}</div></button>`; };
     const source = day.filter((o) => !sid || o.sellerId === sid);
-    const dupIdx = dupIndex();
+    const dupIdx = dupIndex(source);
     const m = Matrix.build(source, mode, { rubros: rubros(), productRank: productRank() });
     const money = mode === 'monto';
     root.innerHTML = `

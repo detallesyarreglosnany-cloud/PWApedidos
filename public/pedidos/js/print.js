@@ -49,11 +49,15 @@
    * Una columna es de números si la mayoría de sus celdas tienen la clase n o num. La primera columna
    * (nombres) y los encabezados girados (clientes de la hoja) no se tocan.
    */
+  // Tablas ya alineadas: si sus filas son las mismas (mismas primera y última fila, misma cantidad) no se repasan
+  const aligned = new WeakMap();
   function alignCols(root) {
     (root || document).querySelectorAll('table').forEach((t) => {
       const head = t.tHead && t.tHead.rows.length ? t.tHead.rows[t.tHead.rows.length - 1] : null;
       const bodyRows = [].concat(...[...t.tBodies].map((b) => [...b.rows]));
       if (!bodyRows.length) return;
+      const prev = aligned.get(t), f = bodyRows[0], l = bodyRows[bodyRows.length - 1];
+      if (prev && prev.f === f && prev.l === l && prev.n === bodyRows.length && prev.h === head && f.getElementsByClassName('al-c').length === prev.c) return;
       const isLines = t.classList.contains('lines');
       const colsOf = (r) => { const out = []; let c = 0; [...r.cells].forEach((cell) => { const span = cell.colSpan || 1; out.push({ cell, c, span }); c += span; }); return out; };
       const stat = new Map();
@@ -71,6 +75,7 @@
       if (head) colsOf(head).forEach(({ cell, c, span }) => { if (span === 1 && numeric(c) && !cell.classList.contains('cl') && !cell.classList.contains('client')) cell.classList.add('al-c'); });
       bodyRows.forEach(mark);
       if (t.tFoot) [...t.tFoot.rows].forEach(mark);
+      aligned.set(t, { f, l, n: bodyRows.length, h: head, c: f.getElementsByClassName('al-c').length });
     });
   }
 
