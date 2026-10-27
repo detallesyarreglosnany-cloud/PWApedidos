@@ -529,11 +529,12 @@
     root.onchange = async (e) => {
       const vi = e.target.closest('.valery-in');
       if (vi) {
-        const o = orderById(vi.dataset.oid), v = vi.value.replace(/\s+/g, '').toUpperCase();
-        if (!o || (o.valeryNote || '') === v) return;
-        await saveOrder({ ...o, valeryNote: v });
-        const dup = v && S.orders.find((x) => x.id !== o.id && !x.deleted && x.valeryNote === v);
-        toast(dup ? `Ojo: la nota ${v} también está en ${dup.clientName}` : (v ? `Nota ${v} guardada · ${o.clientName}` : 'Nota borrada'), dup ? 'err' : 'ok');
+        const o = orderById(vi.dataset.oid), v = digitsOnly(vi.value);
+        if (!o || (o.valeryNote || '') === v) { if (o) vi.value = o.valeryNote || ''; return; }
+        if (v && !(await noteFree(o, v))) { vi.value = o.valeryNote || ''; return; }
+        await saveOrder({ ...orderById(o.id), valeryNote: v });
+        vi.value = v;
+        toast(v ? `Nota ${v} guardada · ${o.clientName}` : 'Nota borrada', 'ok');
         PV.logEvent('nota_valery', `Nota Valery ${v || '(borrada)'} para ${o.clientName} (${o.sellerName})`, { orderId: o.id, clientName: o.clientName }, { onceKey: 'val:' + o.id, everyMin: 1 });
         return;
       }
@@ -1386,22 +1387,33 @@
       const t = e.target;
       const vi = t.closest('.valery-in');
       if (vi) {
-        const o = orderById(vi.dataset.oid), v = vi.value.replace(/\s+/g, '').toUpperCase();
-        if (o && (o.valeryNote || '') !== v) { await saveOrder({ ...o, valeryNote: v }); toast(v ? `Nota ${v} guardada · ${o.clientName}` : 'Nota borrada', 'ok'); }
+        const o = orderById(vi.dataset.oid), v = digitsOnly(vi.value);
+        if (!o) return;
+        if ((o.valeryNote || '') === v) { vi.value = o.valeryNote || ''; return; }
+        if (v && !(await noteFree(o, v))) { vi.value = o.valeryNote || ''; return; }
+        await saveOrder({ ...orderById(o.id), valeryNote: v }); vi.value = v; toast(v ? `Nota ${v} guardada · ${o.clientName}` : 'Nota borrada', 'ok');
         return;
       }
       const tr = t.closest('tr');
       if (t.dataset.q && tr && tr.dataset.oid) {
-        const oid = tr.dataset.oid, k = t.dataset.q, val = t.value.trim();
+        const oid = tr.dataset.oid, k = t.dataset.q;
+        let val = t.value.trim();
+        // Nota nueva (devolución parcial) y nota del retiro: solo números y sin repetir
+        if (k === 'newValery' || k === 'retiroNote') {
+          val = digitsOnly(val); t.value = val;
+          const ox = orderById(oid), prevEn = ((load.liq || {}).orders || {})[oid] || {};
+          if (val && ox && k === 'newValery' && normNote(val) === normNote(ox.valeryNote)) { toast('La nota nueva tiene que ser distinta de la que se anula', 'err'); t.value = prevEn.newValery || ''; return; }
+          if (val && ox && !(k === 'retiroNote' && normNote(val) === normNote(ox.valeryNote)) && !(await noteFree(ox, val, k === 'newValery' ? 'nota nueva' : 'nota del retiro'))) { t.value = prevEn[k] || ''; return; }
+        }
         await saveLiq((q) => {
           const en = { result: 'entregada', ...(q.orders[oid] || {}) };
-          en[k] = k === 'newValery' ? val.replace(/\s+/g, '').toUpperCase() : val;
+          en[k] = val;
           if (k === 'result' && val === 'entregada') { delete en.ret; delete en.nf; delete en.newValery; delete en.motivo; }
           if (k === 'result' && val !== 'nofact') delete en.nf;
           if (k === 'result' && val === 'nofact') { delete en.ret; delete en.newValery; }
           if (k === 'result' && val !== 'retiro') delete en.retiroNote;
           if (k === 'result' && val === 'retiro') { delete en.ret; delete en.nf; delete en.newValery; if (!en.motivo) en.motivo = 'RETIRÓ POR OFICINA'; }
-          if (k === 'retiroNote') en.retiroNote = val.replace(/\s+/g, '').toUpperCase();
+          if (k === 'retiroNote') en.retiroNote = val;
           if (k === 'result' && val === 'anulada') delete en.newValery;
           if (k === 'result' && (val === 'pendiente' || val === 'anulada')) delete en.ret;
           q.orders[oid] = en;
@@ -2527,6 +2539,55 @@
   }
 
   /* ============================= VENDEDORES ============================= */
+  /* ============ Notas Valery: secuenciales, ningún número se repite ============ */
+  const normNote = (v) => String(v == null ? '' : v).replace(/\D/g, '').replace(/^0+(?=\d)/, '');
+  const digitsOnly = (v) => String(v == null ? '' : v).replace(/\D/g, '');
+  /** Números de nota que usa un pedido (su nota, la nota nueva de una devolución y la del retiro), ya liquidado o en borrador. */
+  function notesOfOrder(o) {
+    const out = new Set([normNote(o.valeryNote)]);
+    if (o.delivery) { out.add(normNote(o.delivery.newValery)); out.add(normNote(o.delivery.retiroNote)); }
+    out.delete('');
+    return out;
+  }
+  /** «Se entrega después» puede llevar la misma nota del pedido que la originó. */
+  const sameChain = (a, b) => (a.pendingFrom && (b.id === a.pendingFrom || b.pendingFrom === a.pendingFrom)) || b.pendingFrom === a.id;
+  /**
+   * ¿Se puede usar este número de nota en el pedido o? Revisa este equipo (pedidos y liquidaciones en borrador)
+   * y, con internet, todo el servidor. Si ya lo tiene otro, muestra cuál y no deja guardarlo.
+   */
+  async function noteFree(o, v, label) {
+    const n = normNote(v); if (!n) return true;
+    const lab = (lid) => { const l = lid && S.loads.find((y) => y.id === lid); return l ? `${Loads.labelOf(l)}${l.number ? ' ' + Loads.loadCode(l) : ''}` : ''; };
+    const hits = [];
+    S.orders.forEach((x) => { if (!x.deleted && x.id !== o.id && !sameChain(o, x) && notesOfOrder(x).has(n)) hits.push({ orderId: x.id, clientName: x.clientName, sellerName: x.sellerName, loadId: (x.delivery && x.delivery.loadId) || x.loadId || '', loadLabel: lab((x.delivery && x.delivery.loadId) || x.loadId) }); });
+    // Liquidaciones en borrador: nota nueva de devolución o nota de retiro todavía sin cerrar
+    S.loads.forEach((l) => Object.entries((l.liq && l.liq.orders) || {}).forEach(([oid, en]) => {
+      if (oid === o.id || !en || hits.some((h) => h.orderId === oid)) return;
+      if (normNote(en.newValery) === n || normNote(en.retiroNote) === n) { const x = orderById(oid); if (x && !x.deleted && !sameChain(o, x)) hits.push({ orderId: oid, clientName: x.clientName, sellerName: x.sellerName, loadId: l.id, loadLabel: lab(l.id) }); }
+    }));
+    if (!hits.length && navigator.onLine) {
+      const r = await Sync.readerCall('notas', { action: 'check', note: n, orderId: o.id, pendingFrom: o.pendingFrom || '' });
+      if (r.ok && r.data && Array.isArray(r.data.conflicts)) hits.push(...r.data.conflicts);
+    }
+    if (!hits.length) return true;
+    const sh = openSheet(`<div class="row"><h2 class="grow">⛔ La nota ${esc(n)} ya existe</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <p>Las notas Valery son secuenciales: un número no se puede repetir. No se guardó${label ? ' como ' + esc(label) : ''} en <b>${esc(o.clientName)}</b>.</p>
+      ${hits.slice(0, 5).map((h) => `<div class="card card-pad" style="margin-top:8px"><b>${esc(h.clientName)}</b> <span class="muted">· ${esc(h.sellerName || '')}${h.loadLabel ? ' · hoja ' + esc(h.loadLabel) : ' · sin hoja'}${h.field ? ' · ' + esc(h.field) : ''}</span>
+        ${h.loadId ? `<div style="margin-top:6px"><button class="btn btn-sm" data-goto="${esc(h.loadId)}">Abrir esa hoja</button></div>` : ''}</div>`).join('')}
+      <p class="muted" style="margin-top:10px">Revisa el número en la nota impresa. Si la otra está mal, corrígela primero.</p>
+      <div class="actions"><button class="btn btn-primary" data-close>Entendido</button></div>`);
+    sh.el.addEventListener('click', (e) => { const g = e.target.closest('[data-goto]'); if (g) { sh.close(); openLoad(g.dataset.goto); } });
+    return false;
+  }
+  /** Abre una hoja desde cualquier lugar: la hoja de carga (si sigue abierta) o su liquidación / archivo. */
+  function openLoad(lid, liq) {
+    const l = S.loads.find((y) => y.id === lid); if (!l) { toast('Esa hoja no está en este equipo', 'err'); return; }
+    const closed = Loads.isClosed(l), target = closed ? '#/oficina/archivo' : '#/oficina/cargas';
+    const go = () => { U().liqId = liq ? l.id : null; U().loadId = closed || liq ? null : l.id; U().archiveId = closed && !liq ? l.id : null; PV.render(); window.scrollTo(0, 0); };
+    if (location.hash !== target) { window.addEventListener('hashchange', go, { once: true }); location.hash = target; } else go();
+  }
+  PV.openLoad = openLoad;
+
   /** PIN (voluntario) y último contacto de los teléfonos de cada vendedor. */
   async function loadPinInfo(root) {
     const r = await Sync.adminCall('pin', { action: 'list' });

@@ -301,6 +301,7 @@
           <label class="field"><span>Hasta</span><input type="date" class="input" data-q="to" value="${esc(range.to)}"></label>`}
         <button class="btn btn-primary" id="qzGo">Consultar</button>
         ${f.mode === 'q' ? '<button class="btn btn-sm" id="qzCur">Quincena actual</button><button class="btn btn-sm" id="qzPrev">Quincena anterior</button>' : ''}
+        <button class="btn btn-sm" id="qzNotas" title="Notas Valery repetidas y saltos en la secuencia">🔢 Revisión de notas Valery</button>
       </div>
       <p class="muted">Del <b>${esc(fmtDate(range.from))}</b> al <b>${esc(fmtDate(range.to))}</b>, por fecha de entrega (fecha de la carga). La <b>Venta liquidada</b> es lo que realmente se vendió (hojas con la liquidación cerrada, sin devoluciones ni notas anuladas). La <b>Venta en proceso</b> todavía puede cambiar y no suma a nadie.</p>
       <div id="qzOut">${st.data && st.key === range.from + range.to ? '' : '<p class="muted">Pulsa <b>Consultar</b>.</p>'}</div>`;
@@ -313,6 +314,7 @@
     };
     const goQ = (q) => { Object.assign(f, { mode: 'q', y: q.y, m: q.m, half: q.half }); st.auto = true; render(root, st); };
     const bc = $('#qzCur'); if (bc) bc.onclick = () => goQ(quincenaOf(today()));
+    $('#qzNotas').onclick = () => notasSheet(range);
     const bp = $('#qzPrev'); if (bp) bp.onclick = () => goQ(prevQuincena(today()));
     $('#qzGo').onclick = async () => {
       const r0 = f.mode === 'q' ? quincena(f.y, f.m, f.half) : { from: f.from, to: f.to };
@@ -420,6 +422,35 @@
       $('#qzPrint').onclick = () => global.Print.printQuincena(d, { config: S.config, title: titleOf(f2), RES });
       $('#qzCsv').onclick = () => global.Exporta.save(`reporte_${d.from}_a_${d.to}.xlsx`, reportSheets(d, titleOf(f2), S.config.rubros));
     }
+  }
+
+  /* -------- Revisión de notas Valery: repetidas y saltos en la secuencia (solo informa, no cambia nada) -------- */
+  function notasSheet(range) {
+    const { esc, openSheet, nf0, fmtDate } = global.PV;
+    const sh = openSheet(`<div class="row"><h2 class="grow">🔢 Revisión de notas Valery</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <p class="muted">Las notas son secuenciales y no se repiten. Aquí ves las que están repetidas y los números que faltan en la secuencia (pedidos de esas fechas). No cambia nada: tú decides qué corregir.</p>
+      <div class="row wrap" style="gap:8px;align-items:flex-end"><label class="field"><span>Desde</span><input id="nvFrom" type="date" class="input" value="${esc(range.from)}"></label>
+        <label class="field"><span>Hasta</span><input id="nvTo" type="date" class="input" value="${esc(range.to)}"></label><button class="btn btn-primary" id="nvGo">Revisar</button></div>
+      <div id="nvOut" style="margin-top:10px"></div>`, { wide: true });
+    const out = sh.el.querySelector('#nvOut');
+    const run = async () => {
+      out.innerHTML = '<p class="muted">Revisando…</p>';
+      const r = await global.Sync.readerCall('notas', { action: 'review', from: sh.el.querySelector('#nvFrom').value, to: sh.el.querySelector('#nvTo').value });
+      if (!r.ok) { out.innerHTML = `<div class="hint warn">${esc(r.error || 'No se pudo revisar')}</div>`; return; }
+      const d = r.data, office = !!global.PV.openLoad && location.hash.startsWith('#/oficina');
+      out.innerHTML = `<div class="kpi-row"><div class="kpi"><small>Notas registradas</small><b>${nf0.format(d.total)}</b><small>${d.min !== null ? `de la ${d.min} a la ${d.max}` : 'ninguna'}</small></div>
+          <div class="kpi"><small>Repetidas</small><b class="${d.dups.length ? 'warn-txt' : ''}">${d.dups.length}</b><small>${d.dups.length ? 'corrígelas' : '✓ ninguna'}</small></div>
+          <div class="kpi"><small>Faltan en la secuencia</small><b>${nf0.format(d.missing)}</b><small>${d.gapsTotal} salto${d.gapsTotal === 1 ? '' : 's'}</small></div></div>
+        ${d.dups.length ? `<h3>⛔ Repetidas</h3>${d.dups.map((x) => `<div class="card card-pad" style="margin-bottom:8px"><b>Nota ${esc(x.note)}</b> · ${x.orders.length} pedidos
+          ${x.orders.map((o) => `<div class="row" style="gap:8px;align-items:center;margin-top:4px"><span class="grow">${esc(o.clientName)} <span class="muted">· ${esc(o.sellerName)} · ${esc(fmtDate(o.routeDate))}${o.loadLabel ? ' · hoja ' + esc(o.loadLabel) : ''} · ${esc(o.field)}</span></span>
+            ${office && o.loadId ? `<button class="btn btn-sm" data-goto="${esc(o.loadId)}">Abrir hoja</button>` : ''}</div>`).join('')}</div>`).join('')}` : ''}
+        ${d.gaps.length ? `<h3>Números que faltan</h3><p class="muted">Pueden ser notas anuladas sin registrar o notas que no se cargaron en ninguna hoja.</p>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">${d.gaps.map((g) => `<span class="tag">${g.count === 1 ? g.from : g.from + ' – ' + g.to + ' (' + g.count + ')'}</span>`).join('')}</div>
+          ${d.gapsTotal > d.gaps.length ? `<p class="muted">… y ${d.gapsTotal - d.gaps.length} saltos más: acorta las fechas.</p>` : ''}` : '<p class="muted">✓ Sin saltos en la secuencia.</p>'}`;
+    };
+    sh.el.querySelector('#nvGo').onclick = run;
+    sh.el.addEventListener('click', (e) => { const g = e.target.closest('[data-goto]'); if (g) { sh.close(); global.PV.openLoad(g.dataset.goto); } });
+    run();
   }
 
   /* -------- Cuadre de despachos (camiones) y kardex del camión, por despachador -------- */

@@ -538,3 +538,8 @@ table.grid.sheet-grid .cell-in { min-height: 30px; }
 .goal-bar i.g1 { background: linear-gradient(90deg, #5f070e, var(--brand-2)); }
 .goal.g-ok .goal-bar i.g1 { background: linear-gradient(90deg, #14703f, var(--ok)); }
 .goal-msg { font-size: 14px; color: var(--ink-2); }
+
+/* ---------- Columnas de números: centradas justo debajo de su encabezado (print.js · alignCols) ---------- */
+@media (min-width: 761px) { table.inv th.al-c, table.inv td.al-c { text-align: center !important; } }
+table.lines th.al-c, table.lines td.al-c, table.grid td.al-c, table.grid th.al-c { text-align: center !important; }
+table.inv td.al-c .qin, table.grid td.al-c .cell-in { text-align: center; }
