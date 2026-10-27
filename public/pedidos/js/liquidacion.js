@@ -218,7 +218,7 @@
     const addRow = (k) => {
       if (rows.some((r) => r.key === k)) return;
       const [pid, um] = k.split('|'), p = opts.productsById.get(pid) || {};
-      rows.push({ key: k, productId: pid, um, code: p.code || pid, name: p.name || pid, presentation: p.presentation || '', category: p.category || '', pedido: 0 });
+      rows.push({ key: k, productId: pid, um, code: (um === 'UN' && p.unitCode) || p.code || pid, name: p.name || pid, presentation: p.presentation || '', category: p.category || '', pedido: 0 });
     };
     Object.keys(carryRows).forEach((k) => { if (carryRows[k] > 0) addRow(k); });
     Object.keys(ant).forEach(addRow);

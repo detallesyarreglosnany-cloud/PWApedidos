@@ -892,7 +892,7 @@
       if (S.ui.cat && p.category !== S.ui.cat) return false;
       if (S.ui.onlyInOrder && !(o && o.lines[p.id])) return false;
       if (!tokens.length) return true;
-      const hay = norm(p.code + ' ' + p.name + ' ' + p.presentation + ' ' + p.category + ' ' + (p.brand || ''));
+      const hay = norm(p.code + ' ' + (p.unitCode || '') + ' ' + p.name + ' ' + p.presentation + ' ' + p.category + ' ' + (p.brand || ''));
       return tokens.every((t) => hay.includes(t));
     }).sort(productSort(order));
   }
@@ -929,6 +929,18 @@
     };
   })();
 
+  // ⭐ Más vendidos: los productos que más pedidos llevaron en los últimos 30 días (con lo que hay en este equipo)
+  let topMemo = { k: '', set: new Set() };
+  function topSellers() {
+    const from = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10), k = S.orders.length + '|' + from;
+    if (topMemo.k === k) return topMemo.set;
+    const n = new Map();
+    S.orders.forEach((o) => { if (o.deleted || String(o.routeDate || '') < from) return; Object.keys(o.lines || {}).forEach((pid) => n.set(pid, (n.get(pid) || 0) + 1)); });
+    const top = n.size >= 5 ? [...n.entries()].filter((x) => x[1] >= 3).sort((a, b) => b[1] - a[1]).slice(0, Math.min(10, Math.ceil(n.size / 5))) : [];
+    topMemo = { k, set: new Set(top.map(([pid]) => pid)) };
+    return topMemo.set;
+  }
+
   function productHTML(p, o) {
     const l = o && o.lines[p.id];
     const cj = l ? l.cajas : 0, un = l ? l.unidades : 0;
@@ -941,9 +953,10 @@
     return `
       <article class="pitem ${req ? 'has-qty' : ''}" data-pid="${esc(p.id)}" style="--grp:${grpHue(p.category + '|' + (p.subgroup || ''))}">
         <div class="pimg">${hasPhoto(p) ? `<img src="${esc(imgSrc(p))}" alt="" loading="lazy">` : `<span aria-hidden="true">${rubroIcon(p.category)}</span>`}
+          ${topSellers().has(p.id) ? '<em class="hot-badge">⭐ Más vendido</em>' : ''}
           ${req ? `<em class="qty-badge">${cj ? cj + 'cj' : ''}${cj && un ? '+' : ''}${un ? un + 'u' : ''}</em>` : ''}</div>
         <div class="pname">${esc(p.name)}</div>
-        <div class="pcode mono">${esc(p.code)}</div>
+        <div class="pcode mono">${p.unitCode && p.unitCode !== p.code && p.sellBy !== 'caja' ? (p.sellBy === 'unidad' ? esc(p.unitCode) : `<span class="${cj ? 'on' : ''}" title="Código al mayor (caja)">CJ ${esc(p.code)}</span> · <span class="${un ? 'on' : ''}" title="Código por unidad">UN ${esc(p.unitCode)}</span>`) : esc(p.code)}</div>
         <div class="ppres">${esc(p.presentation)}${p.brand && !norm(p.name).includes(norm(p.brand)) ? ' · ' + esc(p.brand) : ''}</div>
         <div class="pprice">${prices.map((x) => '<div>' + x + '</div>').join('')}</div>
         ${hasStock(p) ? `<div class="pmeta"><span class="${over || low ? 'stock-low' : ''}">${over ? '⚠ ' : ''}${fmtStock(p.stock, p.unitsPerBox, p.sellBy)}</span></div>` : ''}
@@ -1180,10 +1193,11 @@
     value = Math.max(0, Math.min(99999, int(value)));
     const line = o.lines[pid] || {
       // Snapshot: el pedido conserva precio y descripción del momento de la venta
-      code: p.code, name: p.name, presentation: p.presentation, category: p.category,
+      code: p.code, unitCode: p.unitCode || '', name: p.name, presentation: p.presentation, category: p.category,
       unitsPerBox: p.unitsPerBox, unitPrice: p.unitPrice, boxPrice: p.boxPrice, cajas: 0, unidades: 0,
     };
     line[kind] = value;
+    if (!line.unitCode && p.unitCode) line.unitCode = p.unitCode; // líneas de antes: enlaza el código por unidad
     if (!line.cajas && !line.unidades) delete o.lines[pid]; else o.lines[pid] = line;
     if (o.status === 'enviado') {
       o.status = 'abierto'; toast('Pedido reabierto: recuerda enviarlo de nuevo');
@@ -1284,7 +1298,7 @@
     const rate = +S.config.exchangeRate || 0;
     if (!lines.length) return '<div class="empty"><strong>Pedido vacío</strong>Agrega productos desde el catálogo.</div>';
     return `<table class="lines">${groupedRows(lines, 2, ({ l, t }) => `
-        <tr><td><b>${esc(l.name)} ${esc(l.presentation)}</b><div class="muted mono" style="font-size:12px">${esc(l.code)} · ${t.cajas ? t.cajas + ' cj × ' + usd(l.boxPrice) : ''}${t.cajas && t.unidades ? ' + ' : ''}${t.unidades ? t.unidades + ' un × ' + usd(l.unitPrice) : ''}</div></td>
+        <tr><td><b>${esc(l.name)} ${esc(l.presentation)}</b><div class="muted mono" style="font-size:12px">${esc(Matrix.lineCode(l))} · ${t.cajas ? t.cajas + ' cj × ' + usd(l.boxPrice) : ''}${t.cajas && t.unidades ? ' + ' : ''}${t.unidades ? t.unidades + ' un × ' + usd(l.unitPrice) : ''}</div></td>
             <td class="num">${usd(t.monto)}</td></tr>`)}
         <tr class="total-row"><td><b>TOTAL</b> · ${tot.cajas} cj + ${tot.unidades} un</td>
             <td class="num">${usd(tot.monto)}${rate ? `<div class="muted" style="font-size:12px">${bs(tot.monto * rate)}</div>` : ''}</td></tr>
@@ -1542,7 +1556,7 @@
         const rows = groupedRows(Object.entries(o.lines || {}).map(([pid, l]) => ({ pid, l })), dl ? 4 : 2, ({ pid, l: x }) => {
           const got = dl ? dl[pid] : null;
           const ret = dl ? { cajas: Math.max(0, (+x.cajas || 0) - (got ? +got.cajas || 0 : 0)), unidades: Math.max(0, (+x.unidades || 0) - (got ? +got.unidades || 0 : 0)) } : null;
-          return `<tr><td>${esc(x.code)} ${esc(x.name)} ${esc(x.presentation || '')}</td><td class="num">${qty(x)}</td>${dl ? `<td class="num">${qty(got)}</td><td class="num">${ret.cajas || ret.unidades ? qty(ret) : ''}</td>` : ''}</tr>`;
+          return `<tr><td>${esc(Matrix.lineCode(x))} ${esc(x.name)} ${esc(x.presentation || '')}</td><td class="num">${qty(x)}</td>${dl ? `<td class="num">${qty(got)}</td><td class="num">${ret.cajas || ret.unidades ? qty(ret) : ''}</td>` : ''}</tr>`;
         });
         return `<details class="card card-pad sr" style="margin-bottom:8px"><summary><b>${esc(o.clientName)}</b> · ${esc(fmtDate(o.routeDate))}${office ? ' · ' + esc(o.sellerName) : ''} · ${usd(d ? d.monto : t.monto)}
           <div style="margin-top:3px">${noteStatusHTML(o, isNum ? digits : '')}</div>${payStatusHTML(o)}
@@ -1815,7 +1829,7 @@
         + (o.status === 'abierto' && o.sentAt ? '<div class="hint warn" style="margin-top:6px">⚠ Lo modificaste antes de que entrara a una hoja: quedó <b>sin enviar</b>. Al terminar pulsa <b>✓ Enviar pedido</b> para que vuelva a la oficina.</div>' : '');
       $('#qeBody', sh.el).innerHTML = lines.length ? `<table class="lines">${groupedRows(lines, 3, ({ pid, l, t, p }) => {
         const sb = p ? p.sellBy : (l.boxPrice ? (l.unitPrice ? 'ambos' : 'caja') : 'unidad');
-        return `<tr><td><b>${esc(l.name)} ${esc(l.presentation || '')}</b><div class="muted mono" style="font-size:12px">${esc(l.code)} · ${usd(t.monto)}</div></td>
+        return `<tr><td><b>${esc(l.name)} ${esc(l.presentation || '')}</b><div class="muted mono" style="font-size:12px">${esc(Matrix.lineCode(l))} · ${usd(t.monto)}</div></td>
           <td style="white-space:nowrap">${sb !== 'unidad' ? `<label class="mini">CJ <input class="input mini-in" inputmode="numeric" data-pid="${esc(pid)}" data-kind="cajas" value="${t.cajas || ''}"></label>` : ''}
             ${sb !== 'caja' ? `<label class="mini">UN <input class="input mini-in" inputmode="numeric" data-pid="${esc(pid)}" data-kind="unidades" value="${t.unidades || ''}"></label>` : ''}</td>
           <td><button type="button" class="icon-btn" data-qedel="${esc(pid)}" aria-label="Quitar ${esc(l.name)}" title="Quitar">✕</button></td></tr>`; })}
@@ -1857,7 +1871,7 @@
     const sIn = $('#qeSearch', sh.el);
     sIn.oninput = () => {
       const tokens = norm(sIn.value).split(' ').filter(Boolean);
-      const res = tokens.length ? S.products.filter((p) => p.active && !p.deleted && tokens.every((t) => norm(p.code + ' ' + p.name + ' ' + p.presentation).includes(t))).slice(0, 8) : [];
+      const res = tokens.length ? S.products.filter((p) => p.active && !p.deleted && tokens.every((t) => norm(p.code + ' ' + (p.unitCode || '') + ' ' + p.name + ' ' + p.presentation).includes(t))).slice(0, 8) : [];
       $('#qeRes', sh.el).innerHTML = res.map((p) => `<button class="result" data-qeadd="${esc(p.id)}"><b>${esc(p.name)}</b> ${esc(p.presentation || '')} <span class="muted mono">${esc(p.code)}</span></button>`).join('');
     };
     draw();
@@ -1886,7 +1900,7 @@
       const fin = (o.lines || {})[pid], was = sentL ? sentL[pid] : null, ref = fin || was;
       const changed = sentL && qty(was) !== qty(fin);
       const ret = liqd ? retOf(pid) : null;
-      return `<tr${changed ? ' class="short"' : ''}><td><b>${esc(ref.name)} ${esc(ref.presentation || '')}</b><div class="muted mono" style="font-size:12px">${esc(ref.code || '')}</div></td>
+      return `<tr${changed ? ' class="short"' : ''}><td><b>${esc(ref.name)} ${esc(ref.presentation || '')}</b><div class="muted mono" style="font-size:12px">${esc(ref.code ? Matrix.lineCode(ref) : '')}</div></td>
         ${sentL ? `<td class="num">${esc(qty(was))}</td>` : ''}<td class="num">${esc(qty(fin))}${changed ? ' ✏️' : ''}</td>${liqd ? `<td class="num"><b>${esc(qty(dl[pid]))}</b>${ret ? `<div class="muted" style="font-size:12px">↩ ${esc(qty(ret))}</div>` : ''}</td>` : ''}</tr>`;
     }).join('');
     const vacD = liqd && o.delivery.vac ? Object.values(o.delivery.vac) : [];
