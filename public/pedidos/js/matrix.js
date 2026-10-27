@@ -11,6 +11,25 @@
 
   const r2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
+  // Código según cómo se vende: lo vendido por unidad lleva el código de unidad del producto (si tiene uno).
+  // Pedidos anteriores no guardaban el código de unidad en la línea: se toma del catálogo por el código al mayor.
+  let ucSrc = null, ucLen = -1, ucMap = new Map();
+  function unitCodeOf(l) {
+    if (l && l.unitCode) return l.unitCode;
+    const prods = global.PV && global.PV.S && global.PV.S.products;
+    if (!prods || !l) return '';
+    if (prods !== ucSrc || prods.length !== ucLen) { ucSrc = prods; ucLen = prods.length; ucMap = new Map(prods.filter((p) => p.unitCode && !p.deleted).map((p) => [String(p.code), p.unitCode])); }
+    return ucMap.get(String(l.code)) || '';
+  }
+  /** um 'UN' → código de unidad · 'CJ' → código al mayor · sin um: según lo que lleva la línea (ambos: «mayor / unidad»). */
+  function lineCode(l, um) {
+    const u = unitCodeOf(l); if (!u || u === l.code) return l.code;
+    if (um === 'UN') return u;
+    if (um === 'CJ') return l.code;
+    const t = lineTotals(l);
+    return t.unidades && !t.cajas ? u : t.unidades && t.cajas ? `${l.code} / ${u}` : l.code;
+  }
+
   /** Totales de una línea de pedido (usa el precio congelado en la línea). */
   function lineTotals(line) {
     const cajas = +line.cajas || 0;
@@ -59,7 +78,7 @@
         rowsByKey.set(key, {
           key, um,
           productId: line.productId,
-          code: line.code, name: line.name, presentation: line.presentation,
+          code: um === 'UN' && mode === 'bultos' ? lineCode(line, 'UN') : line.code, name: line.name, presentation: line.presentation,
           category: line.category || '', unitsPerBox: line.unitsPerBox,
           cells: new Array(cols.length).fill(0), total: 0,
         });
@@ -165,7 +184,7 @@
         const t = lineTotals(l);
         if (!t.cajas && !t.unidades) return;
         out.push([o.routeDate, safeText(sellerName || o.sellerName), safeText(o.clientName),
-          safeText(l.code), safeText(l.name), safeText(l.presentation), safeText(l.category),
+          safeText(lineCode(l)), safeText(l.name), safeText(l.presentation), safeText(l.category),
           t.cajas, t.unidades, l.unitsPerBox, t.totalUnidades,
           num(+l.boxPrice || 0, dec, true), num(+l.unitPrice || 0, dec, true), num(t.monto, dec, true),
           o.status, o.id]);
@@ -174,5 +193,5 @@
     return encode(out, sep);
   }
 
-  global.Matrix = { build, toDelimited, toFlat, lineTotals, orderTotals, r2 };
+  global.Matrix = { build, toDelimited, toFlat, lineTotals, orderTotals, lineCode, unitCodeOf, r2 };
 })(window);

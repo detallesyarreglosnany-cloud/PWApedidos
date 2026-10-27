@@ -173,10 +173,16 @@ textarea.input { padding: 12px 14px; min-height: 90px; resize: vertical; }
   text-align: center; min-width: 0;
 }
 .pitem.has-qty { border-color: var(--brand-2); box-shadow: var(--glow); outline: 3px solid var(--brand-2); outline-offset: -2px; }
-.pimg { position: relative; background: #fff; border-radius: 10px; aspect-ratio: 4 / 3; display: grid; place-items: center; overflow: hidden; font-size: 40px; }
-.pimg img { width: 100%; height: 100%; object-fit: contain; }
+/* Foto del producto: siempre completa (la imagen va encima del recuadro, nunca lo estira ni se corta abajo),
+   sobre un fondo tipo estudio con sombra al piso para que el producto resalte */
+.pimg { position: relative; background: radial-gradient(ellipse at 50% 38%, #fff 0%, #f6f7f9 55%, #e4e7ec 100%); border-radius: 10px; aspect-ratio: 1 / 1; display: grid; place-items: center; overflow: hidden; font-size: 40px; }
+.pimg img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; padding: 7% 7% 9%; mix-blend-mode: multiply; transition: transform .2s ease; } /* el fondo blanco de la foto se funde con el de estudio */
+.pimg:has(img)::after { content: ""; position: absolute; left: 22%; right: 22%; bottom: 5%; height: 6%; border-radius: 50%; background: radial-gradient(closest-side, rgba(0, 0, 0, .22), transparent); }
+.pitem:active .pimg img, .pitem.has-qty .pimg img { transform: scale(1.04); }
+.hot-badge { position: absolute; top: 6px; left: 6px; z-index: 1; background: linear-gradient(135deg, #ffb300, #ff6d00); color: #fff; font: 700 11px var(--display); font-style: normal; padding: 3px 8px; border-radius: 999px; box-shadow: 0 2px 6px rgba(0, 0, 0, .3); text-transform: uppercase; letter-spacing: .02em; }
+.pcode .on { color: #fff; background: var(--brand-2); border-radius: 6px; padding: 0 5px; }
 .pimg.big { width: 160px; font-size: 56px; }
-.qty-badge { position: absolute; top: 6px; right: 6px; background: var(--brand-2); color: #fff; font: 700 12px var(--display); font-style: normal; padding: 2px 8px; border-radius: 999px; }
+.qty-badge { z-index: 1; position: absolute; top: 6px; right: 6px; background: var(--brand-2); color: #fff; font: 700 12px var(--display); font-style: normal; padding: 2px 8px; border-radius: 999px; }
 .pname { font: 800 27px/1.15 var(--display); text-transform: uppercase; letter-spacing: .01em; word-break: break-word; text-shadow: 0 1px 3px rgba(0,0,0,.5); }
 .ppres { color: #fff; font-size: 21px; font-weight: 700; }
 .pprice { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
