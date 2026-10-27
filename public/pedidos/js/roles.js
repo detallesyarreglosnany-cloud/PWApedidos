@@ -89,13 +89,14 @@
     return P.renderOffice(tab, { role: 'gerencia', head: () => shell('gerencia', 'Puerto Venado'), wire });
   }
 
-  /* ---------------- Cobranzas (D2: pagos y crédito; D4 suma las hojas por aprobar) ---------------- */
+  /* ---------------- Cobranzas: pagos y crédito (D2) y hojas de carga por aprobar (D4) ---------------- */
   function renderCobranzas(tab) {
     if (!isRole('cobranzas')) return renderGate('cobranzas');
     const P = PV(), app = document.getElementById('app');
     P.S.ui.office = P.S.ui.office || {};
-    app.innerHTML = `${shell('cobranzas', 'Pagos y crédito')}<div class="container" id="cobBody"></div>${P.creditFooter()}`;
+    app.innerHTML = `${shell('cobranzas', tab === 'hojas' ? 'Hojas por aprobar' : 'Pagos y crédito')}<div class="container" id="cobBody"></div>${P.creditFooter()}`;
     wire();
+    if (tab === 'hojas') return global.Revision.render(document.getElementById('cobBody'));
     global.Pagos.renderOffice(document.getElementById('cobBody'));
   }
 

@@ -829,9 +829,17 @@
         <label class="field"><span>Compras de contado de un cliente nuevo</span><input id="crNue" class="input" inputmode="numeric" value="${esc(cur.nuevas ?? DEF_RULES.nuevas)}" style="max-width:120px"></label>
         <label class="field"><span>Cuentan como nuevos los creados desde</span><input id="crNd" type="date" class="input" value="${esc(cur.nuevosDesde || DEF_RULES.nuevosDesde)}"></label></div>
       <p class="muted" style="font-size:13px">Cliente nuevo = creado en la app (por el vendedor o la oficina) desde esa fecha. Paga de contado sus primeras compras; luego el límite sugerido es el promedio de esas compras. Cobranza puede cambiarlo en Pagos → 🚦 Crédito de clientes.</p>
-      <div class="row" style="gap:8px;margin-top:10px"><button class="btn btn-sm" id="crAdd">＋ Plazo por categoría</button><button class="btn btn-sm btn-primary" id="crSave">Guardar plazos y crédito</button></div>`;
+      <div class="row" style="gap:8px;margin-top:10px"><button class="btn btn-sm" id="crAdd">＋ Plazo por categoría</button><button class="btn btn-sm btn-primary" id="crSave">Guardar plazos y crédito</button></div>
+      <h3 style="margin-top:16px">🧾 Revisión de cobranzas</h3>
+      <label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" id="crObl" ${S.config.cobObligatoria ? 'checked' : ''}> <span>Aprobación de cobranzas <b>obligatoria</b> antes de aprobar la hoja de carga<br><small class="muted">Apagado: es solo un aviso para la oficina. Encendido: la hoja no pasa a 🔒 hasta que la oficina la envíe a cobranzas, cobranzas revise todos los clientes y no quede ninguno retenido.</small></span></label>`;
     const read = () => ({ def: Math.round(Number(box.querySelector('#crDef').value)) || 0, desde: box.querySelector('#crDesde').value || DEF_RULES.desde,
       penal: Number(String(box.querySelector('#crPen').value).replace(',', '.')), nuevas: Math.round(Number(box.querySelector('#crNue').value)), nuevosDesde: box.querySelector('#crNd').value || DEF_RULES.nuevosDesde, rules: [...box.querySelectorAll('[data-cr]')].map((row) => ({ category: row.querySelector('[data-k="category"]').value.trim(), days: Math.round(Number(row.querySelector('[data-k="days"]').value)) || 0 })) });
+    box.querySelector('#crObl').onchange = async (e) => {
+      const on = e.target.checked;
+      await P.saveDocs('config', { ...S.config, cobObligatoria: on });
+      P.logEvent('ajustes', `Revisión de cobranzas ${on ? 'obligatoria' : 'como aviso (no bloquea)'}`);
+      toast(on ? 'Cobranzas debe aprobar cada hoja antes de aprobarla' : 'La revisión de cobranzas queda como aviso', 'ok'); P.runSync(false);
+    };
     box.querySelector('#crAdd').onclick = (e) => { e.stopPropagation(); const r = read(); r.rules.push({ category: '', days: 8 }); renderRules(box, r); };
     box.querySelector('#crSave').onclick = async (e) => {
       e.stopPropagation();

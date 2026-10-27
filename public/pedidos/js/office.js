@@ -259,6 +259,12 @@
     // Hojas de carga (despacho) y hojas de RETIRO POR OFICINA: nunca se mezclan
     const desp = active.filter((l) => !Loads.isRetiro(l)), retiros = active.filter((l) => Loads.isRetiro(l));
     const groups = Loads.statuses(S.config).filter((st) => !st.closing).map((st) => ({ st, list: desp.filter((l) => Loads.statusOf(l, S.config).id === st.id) }));
+    // Cómo va la revisión de cobranzas de la hoja (solo si se le envió)
+    const cobTag = (l) => {
+      if (!window.Revision || !(l.cobSent && l.cobSent.at)) return '';
+      const g = Revision.status(l, Loads.loadOrders(l, ordersById));
+      return g.ret.length ? ` <span class="status over" title="Cobranzas retuvo clientes">🧾 ⏸ ${g.ret.length}</span>` : ` <span class="status ${g.pending ? 'espera' : 'en_carga'}" title="Revisión de cobranzas">🧾 ${g.decided}/${g.total}</span>`;
+    };
     const card = (l) => {
       const u = Loads.usage(l, ordersById, S.config);
       const st = Loads.statusOf(l, S.config);
@@ -268,7 +274,7 @@
         ${bar(u.pct, u.used > u.limit, `${nf0.format(u.used)} / ${nf0.format(u.limit)} ${u.measure}`)}
         ${bar(u.pctClients, u.clients > u.maxClients, `${u.clients} / ${u.maxClients} clientes`)}
         <div class="row"><span class="status ${st.locked ? 'locked' : 'espera'}">${st.locked ? '🔒 ' : ''}${esc(st.name)}</span>
-          ${u.over ? '<span class="status over">EXCEDIDA</span>' : u.full ? '<span class="status full">CARGA COMPLETA</span>' : ''}
+          ${u.over ? '<span class="status over">EXCEDIDA</span>' : u.full ? '<span class="status full">CARGA COMPLETA</span>' : ''}${cobTag(l)}
           <span class="grow"></span><span class="muted">${esc(l.dispatcherName || 'sin despachador')}</span></div>
       </button>`;
     };
@@ -298,7 +304,7 @@
       <div class="section-title" id="navEspera">⏸ Clientes en espera (no se pierde el pedido)</div>
       ${held.length ? `<div class="card"><table class="inv">${((dupIdx0) => held.map((o) => {
         const t = Matrix.orderTotals(o);
-        return `<tr><td><b>${esc(o.clientName)}</b>${dupBadge(o, dupIdx0)}<div class="muted">${esc(o.sellerName)} · ${esc(o.route || '')} · ${esc(fmtDate(o.routeDate))}</div>${dupLines(o, dupIdx0)}</td>
+        return `<tr><td><b>${esc(o.clientName)}</b>${dupBadge(o, dupIdx0)}${window.Revision ? Revision.heldNote(o) : ''}${window.Cobranza ? Cobranza.officeChip(o) : ''}<div class="muted">${esc(o.sellerName)} · ${esc(o.route || '')} · ${esc(fmtDate(o.routeDate))}</div>${dupLines(o, dupIdx0)}</td>
           <td class="n">${t.bultos} bultos</td><td class="n">${usd(t.monto)}</td>
           <td style="white-space:nowrap"><button class="btn btn-sm" data-edit="${esc(o.id)}">Editar</button>
             <button class="btn btn-sm" data-move="${esc(o.id)}">⇄ A una hoja</button>
@@ -432,6 +438,7 @@
     const foot = m.footer.map((f) => `<tr class="${f.key === stickKey ? 'stick' : ''}"><td class="sticky-col">${esc(f.label)}</td>${f.cells.map((v) => `<td class="n">${nf0.format(v)}</td>`).join('')}<td class="n tot">${nf0.format(f.total)}</td></tr>`).join('') + vacFoot;
     const totalUSD = os.reduce((a, o) => a + Matrix.orderTotals(o).monto, 0);
     const dups = dupIndex(os);
+    const revG = window.Revision && !closed ? Revision.status(load, os) : null; // revisión de cobranzas
     const initialsRow = `<tr class="ini-row"><th class="sticky-col">Vendedor →</th>${m.cols.map((c) => `<th>${esc(Loads.initials(c.order.sellerName))}</th>`).join('')}<th class="tot"></th></tr>`;
     // Semáforo de crédito de cada cliente (lo calcula cobranza): 🟢 al día · 🟡 atraso · 🔴 atraso grave · 🆕 nuevo
     const semOf = (o) => (window.Cobranza ? Cobranza.semOf(o.clientId) : ''), conOf = (o) => (window.Cobranza ? Cobranza.contadoOf(o.clientId) : '');
@@ -458,6 +465,7 @@
         </div>
       </div>
       ${st.locked && !closed ? `<div class="hint">🔒 <b>${esc(st.name)}</b>: los pedidos ya no se pueden editar. Para modificarlos, vuelve la hoja a un estado sin 🔒.</div>` : ''}
+      ${window.Revision && !closed ? Revision.officeBlock(load, os, !roGer()) : ''}
       ${short.length ? `<div class="hint warn">⚠ Inventario insuficiente: ${short.map((x) => `<b>${esc(x.product.name)}</b> (pedido ${fmtStock(x.need, x.product.unitsPerBox, x.product.sellBy)}, hay ${fmtStock(x.stock, x.product.unitsPerBox, x.product.sellBy)})`).join(' · ')}. Ajusta con ✎.</div>` : ''}
       <div class="toolbar no-print">
         ${editableLoad ? `<button class="btn ${edit ? 'btn-accent' : ''}" id="dEdit">${edit ? '✓ Terminar edición' : '✎ Editar cantidades'}</button>
@@ -481,7 +489,7 @@
           <td style="white-space:nowrap">${editableLoad ? `<button class="btn btn-sm" data-left="${i}" ${i ? '' : 'disabled'} aria-label="Mover a la izquierda">←</button><button class="btn btn-sm" data-right="${i}" ${i < os.length - 1 ? '' : 'disabled'} aria-label="Mover a la derecha">→</button>` : ''}</td>
           <td><b>${esc(o.clientName)}</b> <span class="muted">${esc(fmtDate(o.routeDate))}</span>${dupBadge(o, dups)}${dupLines(o, dups)}
             ${o.officeEdited ? ' <span class="status abierto">editado oficina</span>' : ''}${o.sellerEdited ? ' <span class="status en_espera">modificado por vendedor</span>' : ''}
-            ${o.factura ? ' <span class="status en_carga">🧾 FACTURA</span>' : ''}${window.Cobranza ? Cobranza.officeChip(o) : ''}
+            ${o.factura ? ' <span class="status en_carga">🧾 FACTURA</span>' : ''}${window.Cobranza ? Cobranza.officeChip(o) : ''}${revG ? Revision.chip(load, o, revG) : ''}
             ${o.notes ? `<div class="muted">📝 ${esc(o.notes)}</div>` : ''}${(o.officeMsgs || []).length ? `<div class="muted">💬 ${o.officeMsgs.length} mensaje${o.officeMsgs.length > 1 ? 's' : ''} de oficina</div>` : ''}${(o.sellerMsgs || []).length ? `<div class="muted">↩ ${o.sellerMsgs.length} respuesta${o.sellerMsgs.length > 1 ? 's' : ''} del vendedor</div>` : ''}</td>
           <td><span class="tag">${esc(Loads.initials(o.sellerName))}</span></td>
           <td class="n" data-l="Bultos">${t.bultos}</td><td class="n" data-l="Unid.">${t.totalUnidades}</td><td class="n" data-l="Monto">${usd(t.monto)}</td>
@@ -522,6 +530,13 @@
     $('#dDisp').onchange = (e) => {
       const d = (S.config.dispatchers || []).find((x) => x.id === e.target.value);
       saveLoad({ dispatcherId: d ? d.id : '', dispatcherName: d ? d.name : '' });
+    };
+    const dc = $('#dCob');
+    if (dc) dc.onclick = async () => {
+      const by = (S.config && S.config.adminName) || 'Oficina';
+      await saveLoad({ cobSent: { at: DB.now(), by } });
+      await log('cobranzas_envio', `Envió la hoja ${Loads.labelOf(cur())} (${cur().sellerName}) a cobranzas`, { loadId: load.id });
+      toast('Hoja enviada a cobranzas', 'ok'); PV.runSync(false);
     };
     const de = $('#dEdit'); if (de) de.onclick = () => { U().editQty = !U().editQty; refresh(); };
     const dm = $('#dMerge'); if (dm) dm.onclick = () => mergeLoadsDialog(cur(), refresh);
@@ -612,6 +627,8 @@
     } else if (!st.closing && Loads.isClosed(load)) {
       if (!confirm(`Reabrir la carga como "${st.name}": el inventario descontado se devuelve y los pedidos ${st.locked ? 'siguen bloqueados' : 'se podrán editar de nuevo'}. Los números de carga y notas se conservan. ¿Continuar?`)) return back();
     }
+    // Revisión de cobranzas: obligatoria (Ajustes) bloquea; si no, solo pregunta cuando quedó incompleta
+    if (((st.locked && !cur.locked) || closing) && window.Revision && !Revision.gate(load, os, st.name)) return back();
     // Antes de aprobar o cerrar: pedidos que parecen duplicados (mismo cliente con ±1 día)
     if ((st.locked && !cur.locked) || closing) {
       const idx = dupIndex(os), dl = os.filter((o) => (idx.get(o.id) || []).some((x) => !x.extra));
