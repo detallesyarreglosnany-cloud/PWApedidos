@@ -81,6 +81,11 @@
               return;
             }
           }
+          // Pedido ya bloqueado por la oficina: gana la versión del servidor, pero un mensaje del vendedor aún sin subir no se pierde
+          if (frozen && Array.isArray(l.sellerMsgs) && l.sellerMsgs.length > (Array.isArray(r.sellerMsgs) ? r.sellerMsgs.length : 0)) {
+            toPut.push({ ...r, sellerMsgs: l.sellerMsgs, fv: { ...(r.fv || {}), sellerMsgs: (l.fv && l.fv.sellerMsgs) || l.updatedAt }, dirty: true });
+            return;
+          }
         } else if ((isAdmin || store === 'clients') && newer(l, r)) {
           return; // la oficina editó después: se subirá en el próximo push
         }
@@ -455,6 +460,14 @@
     if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
     return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/mis-ventas'), headers, { sellerId, from, to });
   }
+  /** Fecha del último pedido y cantidad de pedidos de cada cliente del vendedor (el teléfono solo guarda las últimas semanas). */
+  async function actividad(sellerId) {
+    if (!navigator.onLine) return { ok: false, offline: true };
+    const cfg = await settings();
+    const headers = { 'Content-Type': 'application/json' };
+    if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
+    return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/actividad'), headers, { sellerId });
+  }
   /** Metas del vendedor para una quincena: { action: 'get' | 'set', sellerId, period, goals? }. */
   async function metas(body) {
     if (!navigator.onLine) return { ok: false, offline: true };
@@ -556,5 +569,5 @@
     return n;
   }
 
-  global.Sync = { KINDS, isLocked, syncNow, pendingCount, diagnose, forceUpload, redownload, hasCursor, reserveNumbers, adminCall, readerCall, report, pushCall, keysCall, myVacios, myVentas, metas, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
+  global.Sync = { KINDS, isLocked, syncNow, pendingCount, diagnose, forceUpload, redownload, hasCursor, reserveNumbers, adminCall, readerCall, report, pushCall, keysCall, myVacios, myVentas, metas, actividad, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
 })(window);

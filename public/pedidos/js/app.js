@@ -367,10 +367,10 @@
   const NOTIF_TITLE = {
     pedido: '🧾 Nuevo pedido', editado: '✏️ Pedido modificado', duplicado: '⚠️ Cliente duplicado', borrado: '🗑 Pedido eliminado', mensaje: '💬 Mensaje de la oficina',
     aprobado: '✅ Pedido aprobado', espera: '⏸ Pedido en espera', despachado: '🚚 Pedido despachado', ajustado: '✏️ Pedido ajustado',
-    liquidado: '✓ Pedido liquidado', oficina: '🏢 Pedido cargado por la oficina', cliente: '🕓 Cliente por verificar',
+    liquidado: '✓ Pedido liquidado', oficina: '🏢 Pedido cargado por la oficina', cliente: '🕓 Cliente por verificar', respuesta: '💬 Mensaje del vendedor',
   };
   // Mismo tag que usa el servidor en el aviso push: si llegan los dos, se ve uno solo
-  const NOTIF_EV = { mensaje: 'msg', pedido: 'new', editado: 'mod', borrado: 'del', aprobado: 'apr', espera: 'esp', despachado: 'desp', ajustado: 'aj', duplicado: 'dup', liquidado: 'liq', oficina: 'ofi', cliente: 'cli' };
+  const NOTIF_EV = { mensaje: 'msg', pedido: 'new', editado: 'mod', borrado: 'del', aprobado: 'apr', espera: 'esp', despachado: 'desp', ajustado: 'aj', duplicado: 'dup', liquidado: 'liq', oficina: 'ofi', cliente: 'cli', respuesta: 'smsg' };
   const SENT = ['enviado', 'en_carga', 'en_espera', 'despachado'];
   const isSent = (x) => !!x && !x.deleted && SENT.includes(x.status);
   /**
@@ -400,6 +400,7 @@
         if (isSent(o) && !isSent(p)) add('pedido', o, o.createdBy === 'oficina' ? `Oficina cargó un pedido para ${who}: ${o.clientName}` : `Nuevo pedido de ${who}: ${o.clientName}`);
         else if (o.deleted && isSent(p)) add('borrado', o, `${o.deletedBy === 'oficina' ? 'La oficina' : who} eliminó el pedido de ${o.clientName}`);
         else if (!o.deleted && o.sellerEdited && p && p.sellerEdited !== o.sellerEdited) add('editado', o, `${who} modificó el pedido de ${o.clientName}`);
+        if (!o.deleted && p && (o.sellerMsgs || []).length > (p.sellerMsgs || []).length) { const lm = o.sellerMsgs[o.sellerMsgs.length - 1]; add('respuesta', o, `${who} · ${o.clientName}: ${lm.text}`, true); }
         if (!o.deleted && (o.dupWith || []).length && !(p && (p.dupWith || []).length)) add('duplicado', o, `Cliente duplicado: ${o.clientName} (${who} y ${o.dupWith.map((d) => d.sellerName).join(', ')})`, true);
         return;
       }
@@ -578,9 +579,39 @@
   /** Nota del vendedor + mensajes de la oficina de un pedido, en orden. */
   function msgThreadHTML(o) {
     const fmt = (iso) => new Date(iso).toLocaleString('es-VE', { dateStyle: 'short', timeStyle: 'short' });
-    const items = (o.notes ? [`<div class="msg msg-seller"><small>📝 Nota de ${esc(o.sellerName || 'vendedor')}</small>${esc(o.notes)}</div>`] : [])
-      .concat((o.officeMsgs || []).map((m) => `<div class="msg msg-office"><small>💬 ${esc(m.by || 'Oficina')} · ${esc(fmt(m.at))}</small>${esc(m.text)}</div>`));
+    // La nota del vendedor va primero; después, los mensajes de la oficina y las respuestas del vendedor por hora
+    const talk = (o.officeMsgs || []).map((m) => ({ at: m.at, html: `<div class="msg msg-office"><small>💬 ${esc(m.by || 'Oficina')} · ${esc(fmt(m.at))}</small>${esc(m.text)}</div>` }))
+      .concat((o.sellerMsgs || []).map((m) => ({ at: m.at, html: `<div class="msg msg-seller"><small>↩ ${esc(m.by || o.sellerName || 'Vendedor')} · ${esc(fmt(m.at))}</small>${esc(m.text)}</div>` })))
+      .sort((a, b) => String(a.at).localeCompare(String(b.at)));
+    const items = (o.notes ? [`<div class="msg msg-seller"><small>📝 Nota de ${esc(o.sellerName || 'vendedor')}</small>${esc(o.notes)}</div>`] : []).concat(talk.map((x) => x.html));
     return items.length ? `<div class="msg-list">${items.join('')}</div>` : '<p class="muted" style="margin:0 0 8px">Sin mensajes en este pedido.</p>';
+  }
+
+  /** Hilo con caja para responder a la oficina (el vendedor escribe aunque el pedido ya esté aprobado o despachado). */
+  const threadBlock = (o) => `<div class="msg-thread">${msgThreadHTML(o)}</div>
+    <div class="row reply-box" style="gap:8px;align-items:flex-end"><label class="field grow"><span>Responder a la oficina</span><textarea class="input rp-txt" rows="2" maxlength="300" placeholder="Escribe tu respuesta…"></textarea></label>
+      <button class="btn btn-primary rp-send" type="button">Enviar</button></div>`;
+  async function sendReply(oid, text) {
+    const cur = orderById(oid); if (!cur) return false;
+    const msg = { id: DB.uid('m'), at: DB.now(), text: String(text).trim().slice(0, 300), by: cur.sellerName || (sellerById(S.session.sellerId) || {}).name || 'Vendedor' };
+    if (!msg.text) return false;
+    await saveOrder({ ...cur, sellerMsgs: (cur.sellerMsgs || []).concat(msg).slice(-30) });
+    logEvent('mensaje_vendedor', `Escribió a la oficina sobre ${cur.clientName}: ${msg.text}`, { orderId: cur.id, clientName: cur.clientName });
+    runSync(false);
+    return true;
+  }
+  function bindReply(sh, oid) {
+    const send = sh.el.querySelector('.rp-send'), ta = sh.el.querySelector('.rp-txt'); if (!send) return;
+    send.onclick = async () => {
+      if (!ta.value.trim()) { ta.focus(); return; }
+      send.disabled = true;
+      const ok = await sendReply(oid, ta.value);
+      send.disabled = false;
+      if (!ok) { toast('No se pudo enviar el mensaje', 'err'); return; }
+      ta.value = '';
+      sh.el.querySelector('.msg-thread').innerHTML = msgThreadHTML(orderById(oid));
+      toast(navigator.onLine ? 'Mensaje enviado a la oficina' : 'Mensaje guardado: se enviará al tener señal', 'ok');
+    };
   }
 
   /* ============================== Acerca de ============================== */
@@ -908,6 +939,7 @@
     renderProductList();
     renderBottomBar();
     updateSyncPill();
+    loadActividad();
 
     const rs = $('#routeSel');
     if (rs) rs.onchange = async () => { await setSession({ ...S.session, route: rs.value }); renderSeller(); };
@@ -991,6 +1023,7 @@
     if (!o) hint = `<div class="hint">👆 Primero escribe o elige el cliente. Las cantidades se cargan a ese cliente.</div>`;
     else if (!editable(o)) hint = `<div class="hint warn">🔒 Este pedido está <b>${esc(Loads.orderLabel(o))}</b>: la carga ya fue aprobada y no se puede modificar.</div>`;
     if (o && o.dupWith && o.dupWith.length) hint += dupHint(o);
+    if (o && editable(o)) hint += inactivityHint(o);
     if (o && o.loadId && editable(o)) hint += `<div class="hint">✏️ Este pedido ya está en una hoja de carga (<b>${esc(Loads.orderLabel(o))}</b>). Aún puedes modificarlo; la oficina verá los cambios.</div>`;
     if (!S.products.length) {
       list.innerHTML = `<div class="empty"><strong>Catálogo vacío</strong>Toca ⟳ para sincronizar con la oficina.</div>`;
@@ -1028,8 +1061,9 @@
     markSeen(o);
     const sh = openSheet(`
       <div class="row"><h2 class="grow">💬 ${esc(o.clientName)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
-      ${msgThreadHTML(o)}
+      ${threadBlock(o)}
       <div class="actions"><button class="btn btn-primary" id="msgOpen">Abrir el pedido</button><button class="btn" data-close>Cerrar</button></div>`);
+    bindReply(sh, o.id);
     sh.el.querySelector('#msgOpen').onclick = async () => { S.ui.pickedOid = o.id; await setSession({ ...S.session, activeOrderId: o.id }); sh.close(); renderSeller(); };
     sh.el.addEventListener('click', (e) => { if (e.target.closest('[data-close]')) setTimeout(() => { if (location.hash === '#/ruta') renderSeller(); }, 0); });
   }
@@ -1086,6 +1120,35 @@
     renderBottomBar();
     const chip = $(`#clientChips [data-oid="${CSS.escape(o.id)}"]`);
     if (chip) chip.innerHTML = `${esc(o.clientName)} <span class="badge">${usd(Matrix.orderTotals(o).monto)}</span>`;
+  }
+
+  /* ====== Clientes que hace tiempo no piden (bandera roja para dar crédito) ====== */
+  // El teléfono solo guarda las últimas semanas; el servidor dice cuándo fue el último pedido de cada cliente.
+  const actKey = () => 'pv_act:' + (S.session && S.session.sellerId);
+  const readAct = () => { try { return JSON.parse(localStorage.getItem(actKey()) || 'null'); } catch (e) { return null; } };
+  async function loadActividad() {
+    const c = readAct();
+    if (c && Date.now() - c.at < 6 * 3600 * 1000) return;
+    if (S.ui.actBusy || !navigator.onLine || !S.session || !S.session.sellerId) return;
+    S.ui.actBusy = true;
+    try {
+      const r = await Sync.actividad(S.session.sellerId);
+      if (r && r.ok && r.data && r.data.byClient) {
+        try { localStorage.setItem(actKey(), JSON.stringify({ at: Date.now(), map: r.data.byClient })); } catch (e) { /* noop */ }
+        if (location.hash === '#/ruta' && !document.querySelector('.overlay')) renderProductList();
+      }
+    } finally { S.ui.actBusy = false; }
+  }
+  /** Aviso (no bloquea) si el cliente del pedido lleva 30 días o más sin pedir. Sin historial no se dice nada. */
+  function inactivityHint(o) {
+    const c = readAct(), e = c && c.map && o.clientId ? c.map[o.clientId] : null;
+    if (!e || !e.last) return '';
+    const days = Math.round((Date.parse(today()) - Date.parse(e.last)) / 86400000);
+    if (days < 30) return '';
+    const when = esc(fmtDate(e.last));
+    return days >= 60
+      ? `<div class="hint warn">🚩 <b>Bandera roja:</b> ${esc(o.clientName)} no hace pedidos hace <b>${days} días</b> (el último fue el ${when}). Si pide a crédito: mejor de contado o un crédito muy bajito.</div>`
+      : `<div class="hint warn">🚩 ${esc(o.clientName)} no hace pedidos hace <b>${days} días</b> (el último fue el ${when}). Ten cuidado con el crédito.</div>`;
   }
 
   /** Alerta (no bloquea): el mismo cliente tiene otro pedido ese día (mismo u otro vendedor). */
@@ -1183,7 +1246,7 @@
         <button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
       ${o.dupWith && o.dupWith.length ? dupHint(o) : ''}
       ${o.officeEdited ? '<div class="hint warn">La oficina ajustó cantidades de este pedido.</div>' : ''}
-      ${(o.officeMsgs || []).length ? msgThreadHTML(o) : ''}
+      ${(o.officeMsgs || []).length || (o.sellerMsgs || []).length ? threadBlock(o) : ''}
       ${orderLinesHTML(o)}
       ${vacAskHTML(o, locked)}
       <div class="row wrap modo-box" style="gap:8px;align-items:center;margin-top:14px"><span><b>Entrega:</b></span>
@@ -1200,6 +1263,7 @@
         <button class="btn btn-danger" id="delOrder" ${canDelete(o) ? '' : 'disabled'}>Eliminar</button>
       </div>`, { cls: 'sheet-order' });
     if ((o.officeMsgs || []).length) markSeen(o);
+    bindReply(sh, o.id);
     const notes = $('#notes', sh.el);
     notes.onchange = async () => { o.notes = notes.value.slice(0, 300); await saveOrder(o); };
     $('#fixClient', sh.el).onclick = () => { sh.close(); clientFixSheet(orderById(o.id) || o, { onDone: () => renderSeller() }); };
@@ -1716,8 +1780,9 @@
       <div class="row" style="justify-content:space-between;margin-top:10px;font-size:18px"><b>Total · ${t.cajas} cj + ${t.unidades} un</b><b>${usd(t.monto)}</b></div>
       ${vacBlock}
       <div class="section-title" style="margin:14px 0 6px">💬 Notas y mensajes</div>
-      ${msgThreadHTML(o)}`, { cls: 'sheet-order' });
+      ${(o.officeMsgs || []).length || (o.sellerMsgs || []).length ? threadBlock(o) : msgThreadHTML(o)}`, { cls: 'sheet-order' });
     if ((o.officeMsgs || []).length) markSeen(o);
+    bindReply(shM, o.id);
     const me = $('#mosEdit', shM.el);
     if (me) me.onclick = () => { shM.close(); quickEditSheet(o.id, () => { if (location.hash.startsWith('#/ruta/pedidos')) renderSellerOrders(); }); };
   }

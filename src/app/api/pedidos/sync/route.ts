@@ -130,6 +130,14 @@ const FV_SKIP = new Set(['id', 'updatedAt', 'fv', 'dirty', 'dupWith', 'partial']
 const FV_KINDS: readonly string[] = ['orders', 'loads'];
 type Fv = Record<string, string>;
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+// Hilo de mensajes del vendedor: solo los últimos 30, con textos cortos (lo que sube un teléfono nunca se confía tal cual)
+function cleanMsgs(v: unknown) {
+  if (!Array.isArray(v)) return [];
+  return v.slice(-30).map((m) => {
+    const x = (m && typeof m === 'object' ? m : {}) as Record<string, unknown>;
+    return { id: String(x.id || '').slice(0, 60), at: String(x.at || '').slice(0, 40), text: String(x.text || '').trim().slice(0, 300), by: String(x.by || '').slice(0, 80) };
+  }).filter((m) => m.text);
+}
 const keysOf = (a: Doc, b: Doc) => new Set([...Object.keys(a), ...Object.keys(b)]);
 // Documento sin fv (de un equipo con la versión anterior): todos sus campos valen con su updatedAt
 function fvFull(d: Doc): Fv {
@@ -274,6 +282,12 @@ function orderNotice(cur: Record<string, unknown> | null, doc: Record<string, un
     if (isSent(doc) && !isSent(cur)) return office('🧾 Nuevo pedido', `${who}: ${client}`, 'new');
     if (isSent(cur) && doc.deleted && !cur!.deleted) return office('🗑 Pedido eliminado', `${who} eliminó el pedido de ${client}`, 'del');
     if (isSent(cur) && doc.sellerEdited && doc.sellerEdited !== cur!.sellerEdited) return office('✏️ Pedido modificado', `${who} modificó el pedido de ${client}`, 'mod');
+    // El vendedor respondió o escribió un mensaje sobre este pedido
+    const sm = Array.isArray(doc.sellerMsgs) ? doc.sellerMsgs : [], pm = cur && Array.isArray(cur.sellerMsgs) ? cur.sellerMsgs : [];
+    if (sm.length > pm.length) {
+      const last = sm[sm.length - 1] as { text?: unknown } | undefined;
+      return office('💬 Mensaje del vendedor', `${who} · ${client}: ${String((last && last.text) || '').slice(0, 200)}`, 'smsg');
+    }
     return null;
   }
   // La oficina cargó un pedido a nombre del vendedor
@@ -475,6 +489,7 @@ export async function POST(req: NextRequest) {
             }
           }
 
+          if (kind === 'orders' && !isAdmin && 'sellerMsgs' in doc) (doc as Record<string, unknown>).sellerMsgs = cleanMsgs((doc as Record<string, unknown>).sellerMsgs);
           if (kind === 'orders' && !isAdmin && isSent(doc as Record<string, unknown>) && !isSent(cur as Record<string, unknown> | null) && (await suspended())) {
             // Se queda «sin enviar» en el teléfono (no se pierde) y vuelve corregido
             const d = doc as Record<string, unknown>;
@@ -488,8 +503,16 @@ export async function POST(req: NextRequest) {
           }
           if (existing && cur) {
             if (kind === 'orders' && !isAdmin && (cur.locked === true || existing.status === 'despachado')) {
-              rejected.push({ kind, id: doc.id, reason: 'locked', doc: cur });
-              continue;
+              // Pedido ya aprobado o despachado: el vendedor no lo cambia, pero SÍ puede escribirle a la oficina.
+              // Se acepta solo su hilo de mensajes (nada más de lo que traiga el teléfono).
+              const nm = Array.isArray(doc.sellerMsgs) ? (doc.sellerMsgs as unknown[]) : [], cm = Array.isArray(cur.sellerMsgs) ? (cur.sellerMsgs as unknown[]) : [];
+              if (nm.length > cm.length) {
+                const stamp = serverTime.toISOString();
+                doc = { ...cur, sellerMsgs: nm, fv: { ...fvFull(cur), sellerMsgs: stamp }, updatedAt: later(existing.updatedAt, doc.updatedAt, stamp) } as typeof doc;
+              } else {
+                rejected.push({ kind, id: doc.id, reason: 'locked', doc: cur });
+                continue;
+              }
             }
             if (FV_KINDS.includes(kind)) {
               // Otro equipo cambió otros campos del mismo pedido u hoja: se conservan ambos
