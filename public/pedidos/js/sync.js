@@ -447,6 +447,23 @@
     return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/envases'), headers, { action: 'mine', sellerId });
   }
 
+  /** «Mi quincena» del vendedor: sus ventas liquidadas por categoría y producto (clave de sincronización). */
+  async function myVentas(sellerId, from, to) {
+    if (!navigator.onLine) return { ok: false, offline: true };
+    const cfg = await settings();
+    const headers = { 'Content-Type': 'application/json' };
+    if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
+    return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/mis-ventas'), headers, { sellerId, from, to });
+  }
+  /** Metas del vendedor para una quincena: { action: 'get' | 'set', sellerId, period, goals? }. */
+  async function metas(body) {
+    if (!navigator.onLine) return { ok: false, offline: true };
+    const cfg = await settings();
+    const headers = { 'Content-Type': 'application/json' };
+    if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
+    return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/metas'), headers, body);
+  }
+
   /** Reporte de ventas del servidor para un rango de fechas (sin límite de historial local). */
   const report = (from, to) => readerCall('report', { from, to });
 
@@ -539,5 +556,5 @@
     return n;
   }
 
-  global.Sync = { KINDS, isLocked, syncNow, pendingCount, diagnose, forceUpload, redownload, hasCursor, reserveNumbers, adminCall, readerCall, report, pushCall, keysCall, myVacios, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
+  global.Sync = { KINDS, isLocked, syncNow, pendingCount, diagnose, forceUpload, redownload, hasCursor, reserveNumbers, adminCall, readerCall, report, pushCall, keysCall, myVacios, myVentas, metas, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
 })(window);

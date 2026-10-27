@@ -105,6 +105,16 @@
     tot.monto = Math.round((tot.monto + Number.EPSILON) * 100) / 100;
     return { rows: list, tot };
   }
+  /** Lo mismo por producto: de la persona elegida (o de todos), los productos de las categorías marcadas. */
+  function prodSelect(d, who, id, cats) {
+    const arr = (who === 'seller' ? d.byProductSeller : d.byProductDispatcher) || [], set = new Set(cats || []), m = new Map();
+    arr.forEach((x) => {
+      if ((id && x.id !== id) || !set.has(x.category)) return;
+      const r = m.get(x.pid) || { pid: x.pid, code: x.code, name: x.pname, presentation: x.presentation, category: x.category, cajas: 0, unidades: 0, monto: 0 };
+      r.cajas += x.cajas; r.unidades += x.unidades; r.monto += x.monto; m.set(x.pid, r);
+    });
+    return [...m.values()].sort((a, b) => a.category.localeCompare(b.category, 'es') || a.name.localeCompare(b.name, 'es') || a.code.localeCompare(b.code, 'es', { numeric: true }));
+  }
   function catPeople(d, who) {
     const arr = who === 'seller' ? d.byCategorySeller : d.byCategoryDispatcher, m = new Map();
     arr.forEach((x) => m.set(x.id, x.name));
@@ -114,13 +124,14 @@
   function renderCatSel(box, d, st, f2) {
     if (!box) return;
     const { esc, nf0, usd, S } = global.PV;
-    const cs = st.cs || (st.cs = { who: 'seller', id: '', cats: null });
+    const cs = st.cs || (st.cs = Object.assign({ who: 'seller', id: '', cats: null }, (() => { try { return JSON.parse(localStorage.getItem('pv_cs') || 'null') || {}; } catch (e) { return {}; } })()));
     const cats = d.byCategory.map((c) => c.category);
     if (!cs.cats) cs.cats = cats.slice();
     cs.cats = cs.cats.filter((c) => cats.includes(c));
     const people = catPeople(d, cs.who);
     if (cs.id && !people.some((p) => p.id === cs.id)) cs.id = '';
-    const res = catSelect(d, cs.who, cs.id, cs.cats), who = people.find((p) => p.id === cs.id);
+    try { localStorage.setItem('pv_cs', JSON.stringify({ who: cs.who, id: cs.id, cats: cs.cats })); } catch (e) { /* noop */ }
+    const res = catSelect(d, cs.who, cs.id, cs.cats), prods = prodSelect(d, cs.who, cs.id, cs.cats), who = people.find((p) => p.id === cs.id);
     const whoLbl = cs.who === 'seller' ? 'vendedor' : 'despachador';
     box.innerHTML = `<h3 style="margin:0 0 8px">Total liquidado por ${whoLbl} y categorías</h3>
       <div class="row" style="gap:8px;flex-wrap:wrap;align-items:center">
@@ -131,6 +142,7 @@
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0">${cats.map((c) => `<label class="chip"><input type="checkbox" data-c="${esc(c)}"${cs.cats.includes(c) ? ' checked' : ''}> ${esc(c)}</label>`).join('')}</div>
       <table class="inv"><thead><tr><th>Categoría</th><th class="n">Cajas</th><th class="n">Unidades</th><th class="n">Total liquidado</th></tr></thead><tbody>${res.rows.map((r) => `<tr><td><b>${esc(r.category)}</b></td><td class="n">${nf0.format(r.cajas)}</td><td class="n">${nf0.format(r.unidades)}</td><td class="n">${usd(r.monto)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">Sin ventas en las categorías elegidas</td></tr>'}</tbody>
         <tfoot><tr><td>TOTAL ${esc(who ? who.name : 'TODOS')}</td><td class="n">${nf0.format(res.tot.cajas)}</td><td class="n">${nf0.format(res.tot.unidades)}</td><td class="n">${usd(res.tot.monto)}</td></tr></tfoot></table>
+      ${prods.length ? `<details style="margin-top:8px"><summary style="cursor:pointer"><b>Ver por producto</b> <span class="muted">(${prods.length})</span></summary><div style="overflow:auto"><table class="inv"><thead><tr><th>Código</th><th>Producto</th><th>Categoría</th><th class="n">Cajas</th><th class="n">Unidades</th><th class="n">Total liquidado</th></tr></thead><tbody>${prods.map((p) => `<tr><td class="mono">${esc(p.code)}</td><td>${esc(p.name)} <b>${esc(p.presentation)}</b></td><td>${esc(p.category)}</td><td class="n">${nf0.format(p.cajas)}</td><td class="n">${p.unidades ? nf0.format(p.unidades) : ''}</td><td class="n">${usd(Math.round(p.monto * 100) / 100)}</td></tr>`).join('')}</tbody></table></div></details>` : ''}
       <div class="toolbar"><button class="btn" id="csPrint">🖨 Imprimir esta selección</button></div>
       <p class="muted">Incluye solo lo liquidado (sin devoluciones ni anuladas) y las ventas retiradas por oficina a nombre del despachador de retiros. La categoría es la que tiene hoy el producto en el catálogo.</p>`;
     const again = () => renderCatSel(box, d, st, f2);
@@ -139,7 +151,7 @@
     box.querySelector('#csAll').onclick = () => { cs.cats = cats.slice(); again(); };
     box.querySelector('#csNone').onclick = () => { cs.cats = []; again(); };
     box.querySelectorAll('input[data-c]').forEach((i) => { i.onchange = () => { const c = i.dataset.c; cs.cats = i.checked ? [...new Set([...cs.cats, c])] : cs.cats.filter((x) => x !== c); again(); }; });
-    box.querySelector('#csPrint').onclick = () => global.Print.printCatSel(d, { config: S.config, title: titleOf(f2), who: whoLbl, name: who ? who.name : 'TODOS', res });
+    box.querySelector('#csPrint').onclick = () => global.Print.printCatSel(d, { config: S.config, title: titleOf(f2), who: whoLbl, name: who ? who.name : 'TODOS', res, prods });
   }
 
   /* ---------- E7 · Comparar con el libro Excel (quincena en paralelo) ---------- */
@@ -447,5 +459,5 @@
         rows: L.flatMap((d) => d.hojas.flatMap((h) => h.rows.map((r) => [d.name, global.Loads.labelOf(h.load), h.load.date || '', ledgerName(r.key), r.traia, r.queda, r.carga, r.anterior || 0, r.entregado, r.almacen, r.sigue, r.sigue ? (r.destLoad ? loadName(r.destLoad) : 'la próxima') : '', +r.dif || 0, r.motivo || '']))) })]);
   }
 
-  global.Reportes = { lastDay, quincena, quincenaOf, prevQuincena, render, titleOf, summaryRows, crossGrid, catGrid, catSelect, catPeople };
+  global.Reportes = { lastDay, quincena, quincenaOf, prevQuincena, render, titleOf, summaryRows, crossGrid, catGrid, catSelect, prodSelect, catPeople };
 })(window);

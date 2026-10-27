@@ -104,6 +104,9 @@ export async function POST(req: NextRequest) {
     // Venta liquidada por categoría de producto, para cada vendedor y cada despachador (cada categoría se paga distinto)
     type CatPerson = { id: string; name: string; category: string; cajas: number; unidades: number; monto: number };
     const catSeller = new Map<string, CatPerson>(), catDisp = new Map<string, CatPerson>();
+    // Lo mismo por producto (para ver, de cada vendedor o despachador, qué productos de las categorías elegidas vendió)
+    type ProdPerson = { id: string; name: string; pid: string; code: string; pname: string; presentation: string; category: string; cajas: number; unidades: number; monto: number };
+    const prodSeller = new Map<string, ProdPerson>(), prodDisp = new Map<string, ProdPerson>();
     const novedades: unknown[] = [];
     const detail: unknown[] = [];
     const loadSum = new Map<string, { monto: number; clients: number }>(); // lo que SÍ llegó al servidor de cada hoja
@@ -138,6 +141,10 @@ export async function POST(req: NextRequest) {
         for (const [map, id, name] of [[catSeller, sidC, o.sellerName || sidC], [catDisp, didC, load.dispatcherName || 'Sin despachador']] as [Map<string, CatPerson>, string, string][]) {
           const cp = bump(map, id + '\u0001' + catName, () => ({ id, name, category: catName, cajas: 0, unidades: 0, monto: 0 }));
           cp.cajas += c; cp.unidades += u; cp.monto += m;
+        }
+        for (const [map, id, name] of [[prodSeller, sidC, o.sellerName || sidC], [prodDisp, didC, load.dispatcherName || 'Sin despachador']] as [Map<string, ProdPerson>, string, string][]) {
+          const pp = bump(map, id + '\u0001' + pid, () => ({ id, name, pid, code: l.code || pid, pname: l.name || '', presentation: l.presentation || '', category: catName, cajas: 0, unidades: 0, monto: 0 }));
+          pp.cajas += c; pp.unidades += u; pp.monto += m;
         }
         const p = bump(byProduct, pid, () => ({ pid, code: l.code || pid, name: l.name || '', presentation: l.presentation || '', category: catName, cajas: 0, unidades: 0, monto: 0 }));
         p.cajas += c; p.unidades += u; p.monto += m;
@@ -313,7 +320,7 @@ export async function POST(req: NextRequest) {
       bySeller: money([...bySeller.values()]).map((x) => ({ ...x, pedido: r2(x.pedido), devuelto: r2(x.devuelto) })).sort((a, b) => b.monto - a.monto),
       byDispatcher: money([...byDispatcher.values()]).map((x) => ({ ...x, pedido: r2(x.pedido), devuelto: r2(x.devuelto) })).sort((a, b) => b.monto - a.monto),
       compare, cuadre, enProceso, novedades,
-      byCategorySeller: money([...catSeller.values()]), byCategoryDispatcher: money([...catDisp.values()]), diferencias, siguiente, sinFoto,
+      byCategorySeller: money([...catSeller.values()]), byCategoryDispatcher: money([...catDisp.values()]), byProductSeller: money([...prodSeller.values()]), byProductDispatcher: money([...prodDisp.values()]), diferencias, siguiente, sinFoto,
       vacios: { byCode: byType([...vacByCode.values()]), byDispatcher: byType([...vacByDispatcher.values()]), bySeller: byType([...vacBySeller.values()]), devoluciones },
       detail: detail.sort((a, b) => String((a as { date: string }).date).localeCompare(String((b as { date: string }).date))),
     });
