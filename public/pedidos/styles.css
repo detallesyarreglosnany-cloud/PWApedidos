@@ -551,3 +551,44 @@ table.inv td.al-c .qin, table.grid td.al-c .cell-in { text-align: center; }
 table.grid tr.sem-row th { font-size: 14px; letter-spacing: 0; }
 table.grid tr.sem-row th small { font: 700 10px var(--display); color: #ffb4b4; margin-left: 2px; }
 button.status.cob-chip { border: 0; cursor: pointer; font-size: 12px; }
+
+/* ---------- Panel de secciones (D1) ---------- */
+.side-toggle { display: none; background: transparent; border: 1px solid rgba(255,255,255,.3); color: #fff; border-radius: 10px; width: 40px; height: 40px; font-size: 20px; cursor: pointer; flex: 0 0 auto; }
+body.has-side .side-toggle { display: inline-flex; align-items: center; justify-content: center; }
+body.has-side .tabs, body.has-side #quickNav { display: none !important; }
+.side { position: fixed; top: 0; bottom: 0; left: 0; width: 272px; max-width: 86vw; z-index: 55; background: linear-gradient(180deg, #160507, var(--bg-2) 38%); border-right: 1px solid var(--line);
+  overflow-y: auto; padding: max(10px, env(safe-area-inset-top)) 10px 18px; transform: translateX(-102%); transition: transform .22s ease; box-shadow: 8px 0 30px rgba(0,0,0,.5); }
+body.side-open .side { transform: none; }
+.side-scrim { display: none; }
+body.side-open .side-scrim { display: block; position: fixed; inset: 0; z-index: 54; background: rgba(0,0,0,.55); }
+.side-head { display: flex; align-items: center; gap: 8px; padding: 6px 6px 12px; border-bottom: 1px solid var(--line); margin-bottom: 8px; font: 700 15px var(--display); text-transform: uppercase; letter-spacing: .04em; }
+.side-head b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-mini-btn { display: none; background: transparent; border: 1px solid var(--line); color: var(--ink-2); border-radius: 8px; width: 30px; height: 30px; cursor: pointer; }
+.side-sec { margin-bottom: 4px; }
+.side-sec-btn, .side-item { display: flex; align-items: center; gap: 10px; width: 100%; border: 0; background: transparent; color: var(--ink); text-align: left; cursor: pointer; border-radius: 12px; }
+.side-sec-btn { min-height: 46px; padding: 8px 10px; font: 700 14px var(--display); text-transform: uppercase; letter-spacing: .05em; color: var(--ink-2); }
+.side-sec-btn:hover, .side-item:hover { background: rgba(255,255,255,.05); }
+.side-sec.has-active > .side-sec-btn { color: #fff; }
+.side-ico { width: 24px; text-align: center; flex: 0 0 24px; font-size: 17px; }
+.side-lbl { flex: 1; min-width: 0; }
+.side-car { color: var(--muted); font-size: 12px; }
+.side-items { display: none; padding: 2px 0 6px 12px; border-left: 1px solid var(--line); margin-left: 21px; }
+.side-sec.open .side-items { display: block; }
+.side-item { min-height: 42px; padding: 8px 10px; font-size: 15px; color: var(--ink-2); }
+.side-item.active { background: var(--brand-soft); color: #fff; box-shadow: inset 3px 0 0 var(--brand-2); }
+.side-count { background: var(--brand-2); color: #fff; border-radius: 999px; min-width: 22px; height: 22px; padding: 0 6px; font: 700 12px/22px var(--font); text-align: center; }
+@media (min-width: 1100px) {
+  body.has-side .side { transform: none; box-shadow: none; z-index: 35; }
+  body.has-side .side-scrim { display: none !important; }
+  body.has-side .side-toggle { display: none; }
+  body.has-side .side-mini-btn { display: inline-block; }
+  body.has-side #app, body.has-side .cart-bar { margin-left: 272px; }
+  body.has-side .cart-bar { left: 0; }
+  body.has-side.side-mini .side { width: 64px; padding-left: 6px; padding-right: 6px; }
+  body.has-side.side-mini #app, body.has-side.side-mini .cart-bar { margin-left: 64px; }
+  body.has-side.side-mini .side-lbl, body.has-side.side-mini .side-car, body.has-side.side-mini .side-head b, body.has-side.side-mini .side-items .side-count { display: none; }
+  body.has-side.side-mini .side-items { margin-left: 0; padding-left: 0; border-left: 0; }
+  body.has-side.side-mini .side-sec-btn, body.has-side.side-mini .side-item { justify-content: center; padding: 8px 0; }
+}
+@media print { .side, .side-scrim, .side-toggle { display: none !important; } body.has-side #app { margin-left: 0 !important; } }
+@media (max-width: 520px) { body.has-side .topbar .brand-mark { display: none; } body.has-side .topbar { gap: 6px; padding-left: 10px; padding-right: 10px; } }

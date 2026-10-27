@@ -597,6 +597,7 @@
   /* =============================== Router =============================== */
   function render() {
     const h = location.hash || '#/';
+    if (window.Nav) setTimeout(() => Nav.render(), 0); // panel de secciones (y sus contadores)
     if (h.startsWith('#/oficina')) return PV.renderOffice(h.split('/')[2] || 'cargas');
     if (h.startsWith('#/supervisor')) return PV.renderSupervisor(h.split('/')[2] || 'resumen');
     if (h === '#/ruta/pedidos' && S.session && sellerById(S.session.sellerId)) return renderSellerOrders();
@@ -675,6 +676,7 @@
 
   function brandHeader(title, sub, right) {
     return `<header class="topbar">
+      <button class="side-toggle" type="button" data-side aria-label="Secciones" title="Secciones">☰</button>
       <img class="brand-mark" src="./icons/mark-white.png" alt="Puerto Venado" width="40" height="40">
       <div class="grow"><h1>${esc(title)}<small>${esc(sub)}</small></h1></div><button class="bell" type="button" data-search aria-label="Buscar cliente, nota o fecha" title="Buscar cliente, nota Valery o fecha">🔍</button>${right}</header>`;
   }
@@ -939,7 +941,7 @@
     const clients = myClients();
     app.innerHTML = `
       ${brandHeader(seller.name, 'Ruta ' + (S.session.route || '—') + ' · ' + fmtDate(today()),
-        `<button id="bell" class="bell" type="button" aria-label="Notificaciones">🔔</button><button id="syncPill" class="pill" type="button"></button><button class="icon-btn ghost" id="menuBtn" aria-label="Menú">☰</button>`)}
+        `<button id="bell" class="bell" type="button" aria-label="Notificaciones">🔔</button><button id="syncPill" class="pill" type="button"></button><button class="icon-btn ghost" id="menuBtn" aria-label="Opciones (sincronizar, PIN, conexión)" title="Opciones: sincronizar, PIN, conexión">⚙</button>`)}
       <nav class="quick-nav" id="quickNav" aria-label="Accesos">
         <button type="button" data-go="pedidos">🧾 Mis pedidos</button><button type="button" data-go="hojas">🚚 Mis hojas</button>
         <button type="button" data-go="clientes">👥 Mis clientes</button><button type="button" data-go="vacios">♻ Vacíos</button><button type="button" data-go="resumen">📊 Mi quincena</button><button type="button" data-go="pagos">💵 Pagos</button><button type="button" data-go="cobrar">📅 Cobrar</button></nav>

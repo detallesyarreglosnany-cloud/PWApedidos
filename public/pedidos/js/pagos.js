@@ -847,5 +847,5 @@
     box.onclick = (e) => { const rm = e.target.closest('[data-crm]'); if (!rm) return; e.stopPropagation(); const r = read(); r.rules.splice(+rm.dataset.crm, 1); renderRules(box, r); };
   }
 
-  global.Pagos = { calc, METHODS, ADJUSTS, BANKS, normRef, renderSeller, renderOffice, renderAccounts, payForm, cuentaSheet, anteriorForm, importSheet, fillStatus, flush };
+  global.Pagos = { calc, METHODS, ADJUSTS, BANKS, normRef, renderSeller, renderOffice, renderAccounts, payForm, cuentaSheet, anteriorForm, importSheet, integridadSheet, fillStatus, flush, pend };
 })(window);
