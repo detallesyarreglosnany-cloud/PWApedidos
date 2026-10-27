@@ -385,7 +385,7 @@
     const espera = st.r === 'espera';
     app.innerHTML = `${P.brandHeader(seller.name, 'Pagos de mis clientes', `<button id="bell" class="bell" type="button" aria-label="Notificaciones">🔔</button><button id="syncPill" class="pill" type="button"></button><a class="btn btn-sm" href="#/ruta">← Pedir</a>`)}
       <div class="container">
-        <div class="row wrap" style="gap:8px;align-items:center"><button class="btn btn-primary" id="pgNew">＋ Registrar pago</button><button class="btn" id="pgCta">📒 Estado de cuenta</button><button class="btn" id="pgAnt">🗂 Pago anterior (FileMaker)</button></div>
+        <div class="row wrap" style="gap:8px;align-items:center"><button class="btn btn-primary" id="pgNew">＋ Registrar pago</button><button class="btn" id="pgCta">📒 Estado de cuenta</button><button class="btn" id="pgAnt">🗂 Pago anterior (FileMaker)</button><a class="btn" href="#/ruta/cobrar">📅 Cuentas por cobrar</a></div>
         <div class="chips" id="pgR">${[['hoy', 'Hoy'], ['7d', 'Últimos 7 días'], ['mes', 'Este mes'], ['espera', '⏳ En espera (todos)']].map(([k, l]) => `<button class="chip ${st.r === k ? 'active' : ''}" data-r="${k}">${l}</button>`).join('')}</div>
         ${espera ? '' : `<div class="chips" id="pgBy"><span class="muted" style="align-self:center">Ver por:</span>${[['subido', 'Fecha en que se subió'], ['pago', 'Fecha del pago']].map(([k, l]) => `<button class="chip ${st.by === k ? 'active' : ''}" data-by="${k}">${l}</button>`).join('')}</div>`}
         <div id="pgBody"><p class="muted">Cargando…</p></div>
@@ -456,7 +456,7 @@
         <label class="field"><span>Vendedor</span><select id="pfSel" class="select"><option value="">Todos</option>${S.sellers.filter((s) => s.active !== false).map((s) => `<option value="${esc(s.id)}" ${s.id === st.seller ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></label>
         <label class="field"><span>Estado</span><select id="pfSt" class="select">${[['', 'Todos'], ['espera', 'En espera de cobranza'], ['aprobado', 'Aprobados'], ['rechazado', 'Rechazados'], ['anulado', 'Anulados']].map(([k, l]) => `<option value="${k}" ${k === st.status ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         <button class="btn btn-primary" id="pfGo">Consultar</button></div>
-        <div class="row wrap" style="gap:8px;margin-top:10px"><button class="btn" id="pfAnt">🗂 Pago anterior (FileMaker)</button><button class="btn" id="pfImp">⇩ Importar pagos de FileMaker (Excel/CSV)</button></div></div>
+        <div class="row wrap" style="gap:8px;margin-top:10px"><button class="btn" id="pfAnt">🗂 Pago anterior (FileMaker)</button><button class="btn" id="pfImp">⇩ Importar pagos de FileMaker (Excel/CSV)</button><button class="btn" id="pfCart">📅 Cuentas por cobrar</button></div></div>
       <div id="pfOut" style="margin-top:12px"><p class="muted">Cargando…</p></div>`;
     const q = (id) => root.querySelector(id);
     const load = async () => {
@@ -494,6 +494,7 @@
     q('#pfGo').onclick = load;
     q('#pfAnt').onclick = () => anteriorForm({ sellerId: '', office: true, onSaved: load });
     q('#pfImp').onclick = () => importSheet(load);
+    q('#pfCart').onclick = () => { if (global.Cobranza) global.Cobranza.officeSheet(); };
     load();
   }
 
@@ -740,7 +741,9 @@
         <label class="field"><span>Cuenta / teléfono</span><input class="input" data-k="number" value="${esc(a.number || '')}"></label>
         <label class="field"><span>RIF / C.I.</span><input class="input" data-k="rif" value="${esc(a.rif || '')}"></label>
         <button class="btn btn-sm btn-danger" data-rm="${i}">✕</button></div>`).join('')}
-      <div class="row" style="gap:8px;margin-top:10px"><button class="btn btn-sm" id="acAdd">＋ Agregar cuenta</button><button class="btn btn-sm btn-primary" id="acSave">Guardar cuentas</button></div>`;
+      <div class="row" style="gap:8px;margin-top:10px"><button class="btn btn-sm" id="acAdd">＋ Agregar cuenta</button><button class="btn btn-sm btn-primary" id="acSave">Guardar cuentas</button></div>
+      <div id="crBox" style="margin-top:18px"></div>`;
+    renderRules(box.querySelector('#crBox'));
     const read = () => [...box.querySelectorAll('[data-ac]')].map((row) => { const g = (k) => { const el = row.querySelector(`[data-k="${k}"]`); return el ? el.value.trim() : ''; }; return { bank: g('bank'), kind: g('kind'), holder: g('holder'), number: g('number'), rif: g('rif') }; });
     const save = async (accs) => {
       const cop = decRate(box.querySelector('#acCop').value);
@@ -750,6 +753,37 @@
     box.querySelector('#acAdd').onclick = () => { const a = read(); a.push({ bank: '', kind: 'ambos', holder: '', number: '', rif: '' }); renderAccounts(box, a); };
     box.querySelector('#acSave').onclick = () => save(read());
     box.onclick = (e) => { const rm = e.target.closest('[data-rm]'); if (rm) { const a = read(); a.splice(+rm.dataset.rm, 1); save(a); } };
+  }
+
+  /* ======================= Plazos de crédito (cuentas por cobrar) ======================= */
+  const DEF_RULES = { def: 15, rules: [{ category: 'REFRESCOS', days: 8 }], desde: '2026-10-15' };
+  function renderRules(box, draft) {
+    const P = PV(), { S, esc, toast } = P;
+    const cur = draft || (S.config.creditRules && typeof S.config.creditRules === 'object' ? S.config.creditRules : DEF_RULES);
+    const cats = (P.rubros ? P.rubros() : []).map((c) => (typeof c === 'string' ? c : c && (c.name || c.id))).filter(Boolean);
+    box.innerHTML = `<h3>📅 Plazos de pago (cuentas por cobrar)</h3>
+      <p class="muted">Días que tiene el cliente para pagar, contados desde que la carga quedó <b>DESPACHADA</b>. Si una nota lleva productos de varias categorías, cada parte vence en su plazo.</p>
+      <div class="row wrap" style="gap:8px"><label class="field"><span>Plazo general (días)</span><input id="crDef" class="input" inputmode="numeric" value="${esc(cur.def)}" style="max-width:120px"></label>
+        <label class="field"><span>Cuentas desde (despachadas desde)</span><input id="crDesde" type="date" class="input" value="${esc(cur.desde || DEF_RULES.desde)}"></label></div>
+      <p class="muted" style="font-size:13px">Las notas despachadas antes de «Cuentas desde» no aparecen como deuda (se cobraron en FileMaker antes de la app).</p>
+      <datalist id="crCats">${cats.map((c) => `<option value="${esc(c)}">`).join('')}</datalist>
+      ${(cur.rules || []).map((r, i) => `<div class="row wrap" style="gap:8px;align-items:flex-end;margin-top:8px" data-cr="${i}">
+        <label class="field"><span>Categoría</span><input class="input" list="crCats" data-k="category" value="${esc(r.category)}"></label>
+        <label class="field"><span>Días</span><input class="input" inputmode="numeric" data-k="days" value="${esc(r.days)}" style="max-width:100px"></label>
+        <button class="btn btn-sm btn-danger" data-crm="${i}">✕</button></div>`).join('')}
+      <div class="row" style="gap:8px;margin-top:10px"><button class="btn btn-sm" id="crAdd">＋ Plazo por categoría</button><button class="btn btn-sm btn-primary" id="crSave">Guardar plazos</button></div>`;
+    const read = () => ({ def: Math.round(Number(box.querySelector('#crDef').value)) || 0, desde: box.querySelector('#crDesde').value || DEF_RULES.desde, rules: [...box.querySelectorAll('[data-cr]')].map((row) => ({ category: row.querySelector('[data-k="category"]').value.trim(), days: Math.round(Number(row.querySelector('[data-k="days"]').value)) || 0 })) });
+    box.querySelector('#crAdd').onclick = (e) => { e.stopPropagation(); const r = read(); r.rules.push({ category: '', days: 8 }); renderRules(box, r); };
+    box.querySelector('#crSave').onclick = async (e) => {
+      e.stopPropagation();
+      const r = read();
+      if (!(r.def > 0 && r.def <= 120)) { toast('El plazo general debe ser de 1 a 120 días', 'err'); return; }
+      const bad = r.rules.find((x) => x.category && !(x.days > 0 && x.days <= 120)); if (bad) { toast(`Plazo inválido para ${bad.category}`, 'err'); return; }
+      await P.saveDocs('config', { ...S.config, creditRules: { def: r.def, desde: r.desde, rules: r.rules.filter((x) => x.category) } });
+      try { Object.keys(localStorage).filter((k) => k.startsWith('pv_cart:')).forEach((k) => localStorage.removeItem(k)); } catch (err) { /* noop */ }
+      toast('Plazos guardados', 'ok'); P.runSync(false); renderRules(box);
+    };
+    box.onclick = (e) => { const rm = e.target.closest('[data-crm]'); if (!rm) return; e.stopPropagation(); const r = read(); r.rules.splice(+rm.dataset.crm, 1); renderRules(box, r); };
   }
 
   global.Pagos = { calc, METHODS, ADJUSTS, BANKS, normRef, renderSeller, renderOffice, renderAccounts, payForm, cuentaSheet, anteriorForm, importSheet, fillStatus, flush };

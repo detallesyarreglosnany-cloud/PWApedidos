@@ -3,6 +3,8 @@ import { Prisma } from '@prisma/client';
 import { db } from '@/lib/db';
 import { isAdminReq, isSupervisorReq, requireAdmin, syncOk } from '@/lib/keys';
 import { sellerAccessOk } from '@/lib/pin';
+import { SEGUIMIENTO, diffDays, rulesOf, tramos, vzDay } from '@/lib/cobranza';
+import { sendPush } from '@/lib/push';
 import { createHash } from 'crypto';
 import { METHODS, allocate, cleanPago, normRef, noteKey, notaNum, noteStatus, r2, type Pago } from '@/lib/pagos';
 
@@ -15,6 +17,8 @@ import { METHODS, allocate, cleanPago, normRef, noteKey, notaNum, noteStatus, r2
 //     { action: 'anular', id, sellerId }          → { pago }   solo si cobranza aún no lo verificó; libera las referencias
 //     { action: 'cuenta', clientId, sellerId }    → { notas, deuda, enEspera }  estado de cuenta: cada nota del cliente con su estado de pago
 //     { action: 'estado', notas: [{ nota, orderId, monto }] } → { byKey: { 'n:85643': { estado, texto, resta, ... } } }
+//     { action: 'cartera', sellerId? }            → { notas, alDia, hoy }  cuentas por cobrar con vencimientos (sin sellerId: todos, solo oficina)
+//     { action: 'seguir', sellerId, clientId, key, nota, estado, comentario } → { ok }  seguimiento de cobro (le llega a la oficina)
 //   Oficina / supervisor (lectura):
 //     { action: 'list', from, to, sellerId?, status? } → { pagos }
 //   Oficina (cobranza):
@@ -172,6 +176,62 @@ export async function POST(req: NextRequest) {
       const byKey: Record<string, unknown> = {};
       for (const w of want) { const k = noteKey(w); const a = ab.get(k); byKey[k] = { pagado: a ? a.pagado : 0, aprobado: a ? a.aprobado : 0, ...noteStatus(w.monto, a) }; }
       return NextResponse.json({ byKey }, { headers: NO_STORE });
+    }
+
+    if (action === 'cartera') {
+      const sellerId = str(body.sellerId, 120);
+      if (!sellerId && !isReader) return NextResponse.json({ error: 'Falta el vendedor' }, { status: 400 });
+      if (sellerId && !isReader && !(await sellerAccessOk(req, sellerId))) return NextResponse.json({ error: 'PIN', pin: true }, { status: 401 });
+      const hoy = vzDay(new Date().toISOString()), since = new Date(Date.now() - 200 * 86400000).toISOString().slice(0, 10);
+      const cfgRow = await db.distDoc.findUnique({ where: { kind_id: { kind: 'config', id: 'main' } }, select: { data: true } });
+      const R = rulesOf(cfgRow ? JSON.parse(cfgRow.data) : null);
+      const prodRows = await db.distDoc.findMany({ where: { kind: 'products', deleted: false }, select: { data: true } });
+      const catOf = new Map(prodRows.map((r) => { const x = JSON.parse(r.data) as { id: string; category?: string }; return [x.id, String(x.category || '')]; }));
+      type Line = { category?: string; cajas?: number; unidades?: number; boxPrice?: number; unitPrice?: number };
+      type Ord = { id: string; deleted?: boolean; status?: string; clientId?: string; clientName?: string; sellerId?: string; sellerName?: string; routeDate?: string; valeryNote?: string; dispatchedAt?: string; loadId?: string | null;
+        lines?: Record<string, Line>; delivery?: { at?: string; result?: string; monto?: number; newValery?: string; lines?: Record<string, Line>; dispatcherName?: string } | null };
+      const orows = await db.distDoc.findMany({ where: { kind: 'orders', deleted: false, status: 'despachado', routeDate: { gte: since }, ...(sellerId ? { sellerId } : {}) }, select: { data: true } });
+      const money = (l: Line) => r2((Number(l.cajas) || 0) * (Number(l.boxPrice) || 0) + (Number(l.unidades) || 0) * (Number(l.unitPrice) || 0));
+      const orders = orows.map((r) => JSON.parse(r.data) as Ord).filter((o) => !o.deleted && o.clientId && !(o.delivery && o.delivery.at && o.delivery.result === 'anulada'));
+      const clientIds = [...new Set(orders.map((o) => String(o.clientId)))];
+      const prows = clientIds.length ? await db.distPago.findMany({ where: { clientId: { in: clientIds }, status: { in: ['espera', 'aprobado'] } } }) : [];
+      const ab = allocate(prows.map(parse));
+      const segRows = await db.$queryRaw<{ name: string; value: string }[]>`SELECT "name", "value" FROM "DistSetting" WHERE "name" LIKE 'seg:%'`;
+      const seg = new Map(segRows.map((r) => [r.name.slice(4), JSON.parse(r.value)]));
+      const notas: unknown[] = []; const conDeuda = new Set<string>(), pagaron = new Set<string>();
+      for (const o of orders) {
+        const d = o.delivery && o.delivery.at ? o.delivery : null;
+        const src = (d ? d.lines : o.lines) || {};
+        const lines = Object.entries(src).map(([pid, l]) => ({ category: catOf.get(pid) || String(l.category || ''), monto: money(l) })).filter((l) => l.monto > 0);
+        const monto = d ? r2(Number(d.monto) || 0) : r2(lines.reduce((a, l) => a + l.monto, 0));
+        if (!(monto > 0)) continue;
+        // Si lo entregado no cuadra con las líneas (redondeos), manda el monto de la nota
+        const sum = r2(lines.reduce((a, l) => a + l.monto, 0)); if (sum > 0 && Math.abs(sum - monto) > 0.01) lines.forEach((l) => { l.monto = r2((l.monto * monto) / sum); });
+        const nota = notaNum((d && d.newValery) || o.valeryNote), key = noteKey({ nota, orderId: o.id }), a = ab.get(key);
+        const start = vzDay(o.dispatchedAt || (d && d.at) || '') || String(o.routeDate || '');
+        if (start < R.desde) continue;
+        const tr = tramos(lines, start, R, a ? a.pagado : 0), resta = r2(tr.reduce((x, t) => x + t.resta, 0));
+        if (resta <= 0.01) { pagaron.add(String(o.clientId)); continue; }
+        conDeuda.add(String(o.clientId));
+        const next = tr.find((t) => t.resta > 0.01)!;
+        notas.push({ ...noteStatus(monto, a), clientId: o.clientId, clientName: o.clientName, sellerId: o.sellerId, sellerName: o.sellerName, orderId: o.id, nota, key, monto, resta, pagado: a ? a.pagado : 0, espera: a ? a.espera : 0,
+          despacho: start, vence: next.vence, dias: diffDays(hoy, next.vence), tramos: tr, liquidado: !!d, seg: seg.get(`${o.clientId}:${key}`) || null });
+      }
+      notas.sort((x, y) => (x as { dias: number }).dias - (y as { dias: number }).dias);
+      return NextResponse.json({ notas, alDia: [...pagaron].filter((c) => !conDeuda.has(c)), hoy, reglas: R }, { headers: NO_STORE });
+    }
+
+    if (action === 'seguir') {
+      const sellerId = str(body.sellerId, 120), clientId = str(body.clientId, 120), key = str(body.key, 140), estado = str(body.estado, 30);
+      if (!clientId || !key || !SEGUIMIENTO[estado]) return NextResponse.json({ error: 'Datos inválidos' }, { status: 400 });
+      if (!isAdmin && !(await sellerAccessOk(req, sellerId))) return NextResponse.json({ error: 'PIN', pin: true }, { status: 401 });
+      const v = { estado, texto: SEGUIMIENTO[estado], comentario: str(body.comentario, 300), at: new Date().toISOString(), by: str(body.by, 80), nota: notaNum(body.nota), clientName: str(body.clientName, 120) };
+      const name = `seg:${clientId}:${key}`, value = JSON.stringify(v);
+      await db.$executeRaw`INSERT INTO "DistSetting" ("name", "value") VALUES (${name}, ${value}) ON CONFLICT ("name") DO UPDATE SET "value" = EXCLUDED."value"`;
+      if (!isAdmin) {
+        try { await sendPush('office', null, [{ title: '📋 Seguimiento de cobro', body: `${v.by || 'Vendedor'} · ${v.clientName}${v.nota ? ' · nota ' + v.nota : ''}: ${v.texto}${v.comentario ? ' — ' + v.comentario : ''}`.slice(0, 300), tag: `seg-${clientId}-${key}` }]); } catch (e) { console.warn('[push seguimiento]', e); }
+      }
+      return NextResponse.json({ ok: true, seg: v });
     }
 
     if (action === 'anular') {
