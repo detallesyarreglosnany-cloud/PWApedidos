@@ -284,9 +284,9 @@
       ${groups.map(({ st, list }) => `
         <div class="section-title">${st.locked ? '🔒 ' : ''}${esc(st.name)} · ${list.length}</div>
         ${list.length ? `<div class="load-grid">${list.map(card).join('')}</div>` : '<p class="muted">Ninguna.</p>'}`).join('')}
-      <h3 style="margin:18px 0 0">🏢 Retiro por oficina <span class="muted" style="font-weight:400;font-size:13px">(despachador ${esc((Loads.retiroDispatcher(S.config) || {}).name || 'sin asignar — elígelo en Ajustes')} · una hoja para todos los vendedores)</span></h3>
+      <h3 id="navRetiro" style="margin:18px 0 0">🏢 Retiro por oficina <span class="muted" style="font-weight:400;font-size:13px">(despachador ${esc((Loads.retiroDispatcher(S.config) || {}).name || 'sin asignar — elígelo en Ajustes')} · una hoja para todos los vendedores)</span></h3>
       ${retiros.length ? `<div class="load-grid">${retiros.map(card).join('')}</div>` : '<p class="muted">Ninguna. Los pedidos marcados «🏢 Retira por oficina» se arman aquí solos.</p>'}
-      <div class="section-title">⏸ Clientes en espera (no se pierde el pedido)</div>
+      <div class="section-title" id="navEspera">⏸ Clientes en espera (no se pierde el pedido)</div>
       ${held.length ? `<div class="card"><table class="inv">${((dupIdx0) => held.map((o) => {
         const t = Matrix.orderTotals(o);
         return `<tr><td><b>${esc(o.clientName)}</b>${dupBadge(o, dupIdx0)}<div class="muted">${esc(o.sellerName)} · ${esc(o.route || '')} · ${esc(fmtDate(o.routeDate))}</div>${dupLines(o, dupIdx0)}</td>
