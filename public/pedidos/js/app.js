@@ -566,6 +566,7 @@
     if (h === '#/ruta/clientes' && S.session && sellerById(S.session.sellerId)) return renderMyClients();
     if (h === '#/ruta/resumen' && S.session && sellerById(S.session.sellerId)) return window.Resumen.render();
     if (h === '#/ruta/pagos' && S.session && sellerById(S.session.sellerId)) return window.Pagos.renderSeller();
+    if (h === '#/ruta/cobrar' && S.session && sellerById(S.session.sellerId) && window.Cobranza) return window.Cobranza.renderSeller();
     if (h === '#/ruta' && S.session && sellerById(S.session.sellerId)) return renderSeller();
     return renderLogin();
   }
@@ -904,7 +905,7 @@
         `<button id="bell" class="bell" type="button" aria-label="Notificaciones">🔔</button><button id="syncPill" class="pill" type="button"></button><button class="icon-btn ghost" id="menuBtn" aria-label="Menú">☰</button>`)}
       <nav class="quick-nav" id="quickNav" aria-label="Accesos">
         <button type="button" data-go="pedidos">🧾 Mis pedidos</button><button type="button" data-go="hojas">🚚 Mis hojas</button>
-        <button type="button" data-go="clientes">👥 Mis clientes</button><button type="button" data-go="vacios">♻ Vacíos</button><button type="button" data-go="resumen">📊 Mi quincena</button><button type="button" data-go="pagos">💵 Pagos</button></nav>
+        <button type="button" data-go="clientes">👥 Mis clientes</button><button type="button" data-go="vacios">♻ Vacíos</button><button type="button" data-go="resumen">📊 Mi quincena</button><button type="button" data-go="pagos">💵 Pagos</button><button type="button" data-go="cobrar">📅 Cobrar</button></nav>
       ${suspension() ? suspensionHTML(suspension()) : ''}
       <section class="client-bar" ${suspension() ? 'hidden' : ''}>
         <div class="row wrap client-row">
@@ -942,6 +943,7 @@
     renderBottomBar();
     updateSyncPill();
     loadActividad();
+    if (window.Cobranza) Cobranza.refresh(S.session.sellerId, () => { if (location.hash === '#/ruta' && !document.querySelector('.overlay')) renderProductList(); });
     if (window.PinGate) PinGate.check();
 
     const rs = $('#routeSel');
@@ -953,6 +955,7 @@
       if (b.dataset.go === 'clientes') { location.hash = '#/ruta/clientes'; return; }
       if (b.dataset.go === 'resumen') { location.hash = '#/ruta/resumen'; return; }
       if (b.dataset.go === 'pagos') { location.hash = '#/ruta/pagos'; return; }
+      if (b.dataset.go === 'cobrar') { location.hash = '#/ruta/cobrar'; return; }
       S.ui.myo = { ...(S.ui.myo || { g: 'todos', r: '15' }), tab: b.dataset.go };
       location.hash = '#/ruta/pedidos';
     };
@@ -1028,6 +1031,7 @@
     else if (!editable(o)) hint = `<div class="hint warn">🔒 Este pedido está <b>${esc(Loads.orderLabel(o))}</b>: la carga ya fue aprobada y no se puede modificar.</div>`;
     if (o && o.dupWith && o.dupWith.length) hint += dupHint(o);
     if (o && editable(o)) hint += inactivityHint(o);
+    if (o && editable(o) && window.Cobranza) hint += Cobranza.hintFor(o.clientId);
     if (o && o.loadId && editable(o)) hint += `<div class="hint">✏️ Este pedido ya está en una hoja de carga (<b>${esc(Loads.orderLabel(o))}</b>). Aún puedes modificarlo; la oficina verá los cambios.</div>`;
     if (!S.products.length) {
       list.innerHTML = `<div class="empty"><strong>Catálogo vacío</strong>Toca ⟳ para sincronizar con la oficina.</div>`;
