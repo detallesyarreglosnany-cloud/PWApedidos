@@ -27,9 +27,13 @@ type Nota = ReturnType<typeof noteStatus> & { clientId: string; clientName: stri
 const money = (l: Line) => r2((Number(l.cajas) || 0) * (Number(l.boxPrice) || 0) + (Number(l.unidades) || 0) * (Number(l.unitPrice) || 0));
 /** Cuentas por cobrar con vencimientos y el crédito de cada cliente (de un vendedor o de todos). */
 export async function cartera(sellerId: string) {
-  const hoy = vzDay(new Date().toISOString()), since = new Date(Date.now() - 200 * 86400000).toISOString().slice(0, 10);
+  const hoy = vzDay(new Date().toISOString());
   const cfgRow = await db.distDoc.findUnique({ where: { kind_id: { kind: 'config', id: 'main' } }, select: { data: true } });
   const R = rulesOf(cfgRow ? JSON.parse(cfgRow.data) : null);
+  // Solo hace falta lo despachado desde «Cuentas desde» (notas y récord) o desde «nuevos desde» (compras de clientes nuevos),
+  // y nunca más de 200 días: así la consulta no crece con la historia
+  const tope = new Date(Date.now() - 200 * 86400000).toISOString().slice(0, 10), base = R.desde < R.nuevosDesde ? R.desde : R.nuevosDesde;
+  const since = base > tope ? base : tope;
   const prodRows = await db.distDoc.findMany({ where: { kind: 'products', deleted: false }, select: { data: true } });
   const catOf = new Map(prodRows.map((r) => { const x = JSON.parse(r.data) as { id: string; category?: string }; return [x.id, String(x.category || '')]; }));
   const crows = await db.distDoc.findMany({ where: { kind: 'clients', deleted: false, ...(sellerId ? { sellerId } : {}) }, select: { data: true } });

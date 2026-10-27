@@ -49,9 +49,10 @@
    *   Solo entra si es más nuevo que el local, y un pedido que llega de un
    *   teléfono nunca deshace lo que decidió la oficina (hoja, bloqueo, número).
    */
-  async function mergeRemote(store, remoteDocs, isAdmin, markDirty, fromFile) {
+  async function mergeRemote(store, remoteDocs, isAdmin, markDirty, fromFile, onIds) {
     if (!remoteDocs || !remoteDocs.length) return 0;
-    const locals = await DB.getAll(store);
+    // Solo los que llegaron (no todo el store: con un año de pedidos, releerlo en cada página era lo lento)
+    const locals = await DB.getMany(store, [...new Set(remoteDocs.filter((r) => r && typeof r.id === 'string').map((r) => r.id))]);
     const byId = new Map(locals.map((d) => [d.id, d]));
     const toPut = [];
     remoteDocs.forEach((r0) => {
@@ -97,6 +98,7 @@
       toPut.push({ ...r, dirty: !!markDirty });
     });
     await DB.putMany(store, toPut);
+    if (onIds && toPut.length) onIds(toPut.map((d) => d.id));
     return toPut.length;
   }
 
@@ -115,12 +117,15 @@
    * que está usando la app: si antes lo usó otro vendedor, lo de ese vendedor
    * queda guardado hasta que él vuelva a entrar (nunca se mezcla).
    */
+  // Una vez por sesión (y cada 30 min) se revisa todo el store como red de seguridad; el resto usa la lista de pendientes
+  let fullCheckAt = 0;
   async function collectDirty(isAdmin, sellerId) {
     const strip = (d) => { const c = { ...d }; delete c.dirty; delete c.dupWith; return c; };
     const mine = (k, d) => isAdmin || (k !== 'orders' && k !== 'clients' && k !== 'events') || (sellerId && d.sellerId === sellerId);
+    const full = Date.now() - fullCheckAt > 30 * 60000; if (full) fullCheckAt = Date.now();
     const out = {};
     for (const k of KINDS) {
-      out[k] = (!isAdmin && ADMIN_KINDS.includes(k)) ? [] : (await DB.getAll(k)).filter((d) => d.dirty && mine(k, d)).map(strip);
+      out[k] = (!isAdmin && ADMIN_KINDS.includes(k)) ? [] : (await DB.getDirty(k, full)).filter((d) => d.dirty && mine(k, d)).map(strip);
     }
     return out;
   }
@@ -233,6 +238,9 @@
     const rejected = [];
     let first = null;
     let changed = 0;
+    // Qué documentos cambiaron en este equipo: la app actualiza solo esos en memoria (no recarga todo)
+    const touched = {};
+    const mark = (k) => (ids) => { const t = touched[k] || (touched[k] = new Set()); ids.forEach((id) => t.add(id)); };
     let dups = null;
     let page = null;
     for (let i = 0; ; i++) {
@@ -253,7 +261,7 @@
       // 2) Bajar cambios remotos (una página)
       first = first || r.data;
       for (const k of ['config', 'products', 'sellers', 'clients', 'loads', 'orders', 'events']) {
-        changed += await mergeRemote(k, (r.data.pull && r.data.pull[k]) || [], fullRead);
+        changed += await mergeRemote(k, (r.data.pull && r.data.pull[k]) || [], fullRead, false, false, mark(k));
       }
       if (!r.data.more) { dups = r.data.dups; break; }
       page = r.data.page;
@@ -263,6 +271,7 @@
     //    el servidor tiene una edición más reciente)
     const back = rejected.filter((r) => r.doc && KINDS.includes(r.kind));
     for (const r of back) {
+      mark(r.kind)([r.id]);
       // Otro equipo escribió justo antes: lo mío que siga siendo más nuevo se vuelve a subir
       const l = r.reason === 'stale' && (r.kind === 'orders' || r.kind === 'loads') ? await DB.get(r.kind, r.id) : null;
       const frozen = r.kind === 'orders' && isLocked(r.doc) && !isAdmin;
@@ -275,7 +284,7 @@
     const rejectedOrders = back.filter((r) => r.kind === 'orders');
 
     // 4) Alertas de cliente duplicado: solo en este equipo, sin tocar la versión del pedido
-    if (dups && dups.map) changed += await applyDups(dups, sellerId);
+    if (dups && dups.map) changed += await applyDups(dups, sellerId, mark('orders'));
 
     // El cursor es la hora de la PRIMERA página: nada escrito durante la bajada se pierde
     await DB.setMeta(cursorKey, first.serverTime);
@@ -286,6 +295,7 @@
       pulled: changed,
       rejected: rejectedOrders.length,
       reverted: back.length,
+      touched: Object.fromEntries(Object.entries(touched).map(([k, v]) => [k, [...v]])),
     };
   }
 
@@ -296,8 +306,8 @@
   const cursorKeyOf = (scope) => 'syncCursor2:' + (scope && scope.sellerId ? scope.sellerId : 'all');
   async function hasCursor(scope) { return !!(await DB.getMeta(cursorKeyOf(scope), null)); }
 
-  async function applyDups(dups, sellerId) {
-    const orders = await DB.getAll('orders');
+  async function applyDups(dups, sellerId, onIds) {
+    const orders = dups.from ? await DB.getFrom('orders', 'routeDate', String(dups.from)) : await DB.getAll('orders');
     const toPut = [];
     orders.forEach((o) => {
       if (!o.routeDate || o.routeDate < dups.from || (sellerId && o.sellerId !== sellerId)) return;
@@ -305,7 +315,24 @@
       if (JSON.stringify(next) !== JSON.stringify(o.dupWith || [])) toPut.push({ ...o, dupWith: next });
     });
     await DB.putMany('orders', toPut);
+    if (onIds && toPut.length) onIds(toPut.map((o) => o.id));
     return toPut.length;
+  }
+
+  /**
+   * Retención local (una vez al día): el equipo no acumula pedidos para siempre. En el servidor no se borra nada.
+   *  · Vendedor: pedidos despachados o eliminados con fecha de ruta de hace más de 120 días, e historial de más de 120.
+   *  · Oficina: pedidos despachados de hace más de 400 días (más que lo que baja una PC nueva) e historial de más de 400;
+   *    los eliminados se quedan (Papelera). Nunca se borra algo con cambios sin subir.
+   */
+  async function pruneLocal(isOffice) {
+    const today = new Date().toISOString().slice(0, 10);
+    if ((await DB.getMeta('pruneDay', '')) === today) return 0;
+    const days = isOffice ? 400 : 120, cut = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+    let n = await DB.pruneBefore('orders', 'routeDate', cut, (o) => (isOffice ? !o.deleted && o.status === 'despachado' : o.deleted || o.status === 'despachado'));
+    n += await DB.pruneBefore('events', 'day', cut, () => true);
+    await DB.setMeta('pruneDay', today);
+    return n;
   }
 
   async function pendingCount(scope, all) {
@@ -606,5 +633,5 @@
     return n;
   }
 
-  global.Sync = { KINDS, isLocked, syncNow, pendingCount, diagnose, forceUpload, redownload, hasCursor, reserveNumbers, adminCall, readerCall, report, pushCall, keysCall, myVacios, myVentas, metas, actividad, pinCall, sellerToken, pagosCall, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
+  global.Sync = { KINDS, isLocked, syncNow, pruneLocal, pendingCount, diagnose, forceUpload, redownload, hasCursor, reserveNumbers, adminCall, readerCall, report, pushCall, keysCall, myVacios, myVentas, metas, actividad, pinCall, sellerToken, pagosCall, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
 })(window);
