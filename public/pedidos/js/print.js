@@ -21,7 +21,7 @@
 
   const BASE_CSS = `
     *{box-sizing:border-box} body{margin:0;font:11px/1.3 Arial,Helvetica,sans-serif;color:#111}
-    h1,h2,h3{margin:0} .muted{color:#555} .num{text-align:right;font-variant-numeric:tabular-nums}
+    h1,h2,h3{margin:0} .muted{color:#555} .num{text-align:right;font-variant-numeric:tabular-nums} th.al-c,td.al-c{text-align:center !important}
     .head{display:flex;gap:14px;align-items:center;border-bottom:3px solid #730101;padding-bottom:6px;margin-bottom:8px}
     .head img{height:62px} .head .co{flex:1} .head .co h1{font-size:15px;color:#730101;letter-spacing:.02em}
     .doc{border:2px solid #730101;border-radius:6px;padding:6px 10px;text-align:center;min-width:150px}
@@ -43,6 +43,37 @@
       <div class="doc"><b>${esc(title)}</b><span>${esc(code)}</span></div></div>`;
   }
 
+  /**
+   * Columnas de números: el número queda centrado justo debajo de su encabezado (y el encabezado también),
+   * para que no se confunda a qué columna pertenece. Solo marca clases (al-c); no cambia ningún dato.
+   * Una columna es de números si la mayoría de sus celdas tienen la clase n o num. La primera columna
+   * (nombres) y los encabezados girados (clientes de la hoja) no se tocan.
+   */
+  function alignCols(root) {
+    (root || document).querySelectorAll('table').forEach((t) => {
+      const head = t.tHead && t.tHead.rows.length ? t.tHead.rows[t.tHead.rows.length - 1] : null;
+      const bodyRows = [].concat(...[...t.tBodies].map((b) => [...b.rows]));
+      if (!bodyRows.length) return;
+      const isLines = t.classList.contains('lines');
+      const colsOf = (r) => { const out = []; let c = 0; [...r.cells].forEach((cell) => { const span = cell.colSpan || 1; out.push({ cell, c, span }); c += span; }); return out; };
+      const stat = new Map();
+      bodyRows.slice(0, 30).forEach((r) => {
+        const cs = colsOf(r), last = cs.length - 1;
+        cs.forEach(({ cell, c, span }, i) => {
+          if (span !== 1) return;
+          const a = stat.get(c) || [0, 0];
+          if (cell.textContent.trim() || cell.querySelector('input')) { a[1]++; if (cell.classList.contains('n') || cell.classList.contains('num') || (isLines && i === last)) a[0]++; }
+          stat.set(c, a);
+        });
+      });
+      const numeric = (c) => { const a = stat.get(c); return c > 0 && a && a[1] && a[0] / a[1] >= 0.6; };
+      const mark = (r) => colsOf(r).forEach(({ cell, c, span }) => { if (span === 1 && numeric(c)) cell.classList.add('al-c'); });
+      if (head) colsOf(head).forEach(({ cell, c, span }) => { if (span === 1 && numeric(c) && !cell.classList.contains('cl') && !cell.classList.contains('client')) cell.classList.add('al-c'); });
+      bodyRows.forEach(mark);
+      if (t.tFoot) [...t.tFoot.rows].forEach(mark);
+    });
+  }
+
   function printHTML(title, css, body, fit) {
     const old = document.getElementById('printFrame');
     if (old) old.remove();
@@ -55,6 +86,7 @@
     d.open();
     d.write(`<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${esc(title)}</title><style>${BASE_CSS}${css}</style></head><body>${body}</body></html>`);
     d.close();
+    try { alignCols(d); } catch (e) { /* solo es presentación */ }
     const go = () => { if (fit) fitPages(d, fit); f.contentWindow.focus(); f.contentWindow.print(); };
     const imgs = [...d.images];
     Promise.all(imgs.map((i) => i.complete ? 0 : new Promise((r) => { i.onload = i.onerror = r; }))).then(() => setTimeout(go, 60));
@@ -439,5 +471,6 @@
     printHTML('Cuadre de despachos ' + ctx.from + ' a ' + ctx.to, LOAD_CSS + ' table.load.wide{width:100%} h3{font-size:12px;margin:10px 0 3px} @page{size:letter landscape;margin:8mm}', body);
   }
 
+  global.AlignCols = alignCols;
   global.Print = { printTruckLedger, printLoadSheet, printNotes, printLiquidation, printKardex, printQuincena, printCatSel, printTickets, printTestTicket };
 })(window);

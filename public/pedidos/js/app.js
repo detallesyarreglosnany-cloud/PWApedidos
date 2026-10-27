@@ -1414,7 +1414,7 @@
     const scope = () => S.orders.filter((o) => !o.deleted && (office || o.sellerId === sid));
     const sh = openSheet(`
       <div class="row"><h2 class="grow">🔍 Buscar</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
-      <div class="row wrap" style="gap:8px"><input id="sQ" class="input grow" type="search" placeholder="Cliente, N° de nota Valery o RIF…" autocomplete="off">
+      <div class="row wrap" style="gap:8px"><input id="sQ" class="input grow" type="search" placeholder="Cliente, nota Valery, RIF, hoja, ruta o despachador…" autocomplete="off">
         <input id="sD" class="input" type="date" style="max-width:180px" aria-label="Fecha"></div>
       <p class="muted" style="margin:6px 0 0">${office ? 'Todos los pedidos de este equipo.' : 'Tus pedidos.'} Puedes buscar una nota anulada: te dice qué llevaba y la nota que la reemplaza.</p>
       <div id="sRes" style="margin-top:10px"></div>`, { wide: true });
@@ -1428,9 +1428,23 @@
         if (date) { const l = loadOf(o); if (![o.routeDate, l && l.date, o.delivery && o.delivery.date].includes(date)) return false; }
         if (isNum) return notesOf(o).some((n) => String(n).replace(/\D/g, '').includes(digits)) || String(o.clientRif || '').replace(/\D/g, '').includes(digits);
         if (!tokens.length) return true;
-        const h = norm([o.clientName, o.clientRif, o.sellerName, o.route].join(' '));
+        const l = loadOf(o);
+        const h = norm([o.clientName, o.clientRif, o.sellerName, o.route, l ? Loads.labelOf(l) : '', l && l.number ? Loads.loadCode(l) : '', l ? l.dispatcherName : '', o.delivery ? o.delivery.dispatcherName : ''].join(' '));
         return tokens.every((t) => h.includes(t));
-      }).sort((a, b) => String(b.routeDate).localeCompare(String(a.routeDate)) || String(b.sentAt || b.createdAt).localeCompare(String(a.sentAt || a.createdAt))).slice(0, 40);
+      });
+      // Coincidencia exacta primero (la nota completa), luego las parecidas; dentro, lo más reciente
+      const exact = (o) => isNum && notesOf(o).some((n) => String(n).replace(/\D/g, '').replace(/^0+(?=\d)/, '') === digits.replace(/^0+(?=\d)/, ''));
+      res.sort((a, b) => (exact(b) - exact(a)) || String(b.routeDate).localeCompare(String(a.routeDate)) || String(b.sentAt || b.createdAt).localeCompare(String(a.sentAt || a.createdAt)));
+      res.splice(40);
+      // Hojas que coinciden (oficina): por nombre o código de hoja, ruta, despachador, vendedor o fecha
+      const loadsHit = !office || isSupervisor() ? [] : S.loads.filter((l) => {
+        if (l.deleted) return false;
+        if (date && String(l.date || l.closedAt || '').slice(0, 10) !== date) return false;
+        if (isNum) return l.number && String(l.number).includes(digits.replace(/^0+(?=\d)/, ''));
+        if (!tokens.length) return !!date;
+        const h = norm([Loads.labelOf(l), l.number ? Loads.loadCode(l) : '', l.route, l.dispatcherName, l.sellerName].join(' '));
+        return tokens.every((t) => h.includes(t));
+      }).sort((a, b) => String(b.date || b.closedAt || '').localeCompare(String(a.date || a.closedAt || ''))).slice(0, 12);
       const qty = (l) => (l ? [l.cajas ? l.cajas + ' cj' : '', l.unidades ? l.unidades + ' un' : ''].filter(Boolean).join(' + ') : '') || '—';
       const card = (o) => {
         const l = loadOf(o), d = o.delivery && o.delivery.at ? o.delivery : null, t = Matrix.orderTotals(o);
@@ -1444,12 +1458,34 @@
           <div style="margin-top:3px">${noteStatusHTML(o, isNum ? digits : '')}</div>
           <div class="muted" style="font-size:13px">${l ? `Hoja ${esc(Loads.labelOf(l))}${l.number ? ' ' + esc(Loads.loadCode(l)) : ''} · ${esc(Loads.statusOf(l, S.config).name)}` : 'Sin hoja'}${o.route ? ' · Ruta ' + esc(o.route) : ''}${o.pendingFrom ? ' · reprogramado de otro pedido' : ''}${o.createdBy === 'oficina' ? ' · 🏢 oficina' : ''}</div></summary>
           <table class="lines" style="margin-top:8px"><thead><tr><th style="text-align:left">Producto</th><th class="num">Llevaba</th>${dl ? '<th class="num">Entregado</th><th class="num">Devuelto</th>' : ''}</tr></thead><tbody>${rows}</tbody></table>
-          ${o.notes ? `<p class="muted">📝 ${esc(o.notes)}</p>` : ''}</details>`;
+          ${o.notes ? `<p class="muted">📝 ${esc(o.notes)}</p>` : ''}
+          <div class="row wrap" style="gap:8px;margin-top:8px">${goButtons(o, l)}</div></details>`;
       };
-      $('#sRes', sh.el).innerHTML = res.length ? `<p class="muted">${res.length === 40 ? 'Primeros 40 resultados' : res.length + ' resultado' + (res.length > 1 ? 's' : '')}</p>${res.map(card).join('')}`
-        : '<div class="empty"><strong>Sin resultados</strong>Prueba con parte del nombre o del número.</div>';
+      const loadCard = (l) => `<div class="card card-pad" style="margin-bottom:8px"><div class="row wrap" style="gap:8px;align-items:center"><span class="grow"><b>${esc(Loads.labelOf(l))}</b>${l.number ? ' <span class="mono">' + esc(Loads.loadCode(l)) + '</span>' : ''}
+          <span class="muted">· ${esc(fmtDate(String(l.date || l.closedAt || '').slice(0, 10)))} · ${esc(l.dispatcherName || 'sin despachador')} · ${esc(Loads.statusOf(l, S.config).name)}</span></span>${loadButtons(l)}</div></div>`;
+      $('#sRes', sh.el).innerHTML = (loadsHit.length ? `<p class="muted">Hojas (${loadsHit.length})</p>${loadsHit.map(loadCard).join('')}` : '')
+        + (res.length ? `<p class="muted">${res.length === 40 ? 'Primeros 40 pedidos' : res.length + ' pedido' + (res.length > 1 ? 's' : '')}</p>${res.map(card).join('')}`
+        : loadsHit.length ? '' : '<div class="empty"><strong>Sin resultados</strong>Prueba con parte del nombre o del número.</div>');
       if (res.length === 1) { const dt = $('#sRes details', sh.el); if (dt) dt.open = true; }
     };
+    // Botones para ir a lo encontrado: la hoja de carga, su liquidación, o (vendedor) su pedido
+    function loadButtons(l) {
+      if (!office || isSupervisor() || !PV.openLoad) return '';
+      const closed = Loads.isClosed(l), liq = !!l.liq;
+      return `${closed ? '' : `<button type="button" class="btn btn-sm" data-go-load="${esc(l.id)}">🚚 Abrir hoja de carga</button>`}
+        ${liq || closed ? `<button type="button" class="btn btn-sm btn-primary" data-go-liq="${esc(l.id)}">🧮 Abrir liquidación</button>` : ''}
+        ${closed ? `<button type="button" class="btn btn-sm" data-go-load="${esc(l.id)}">🗄 Ver hoja en el archivo</button>` : ''}`;
+    }
+    function goButtons(o, l) {
+      if (office) return l ? loadButtons(l) : '<span class="muted">Este pedido aún no está en una hoja.</span>';
+      return `<button type="button" class="btn btn-sm btn-primary" data-go-order="${esc(o.id)}">Ver mi pedido</button>`;
+    }
+    sh.el.addEventListener('click', (e) => {
+      const gl = e.target.closest('[data-go-load]'), gq = e.target.closest('[data-go-liq]'), go = e.target.closest('[data-go-order]');
+      if (gl) { sh.close(); PV.openLoad(gl.dataset.goLoad, false); }
+      else if (gq) { sh.close(); PV.openLoad(gq.dataset.goLiq, true); }
+      else if (go) { const x = orderById(go.dataset.goOrder); sh.close(); if (x) myOrderSheet(x); }
+    });
     let tm;
     $('#sQ', sh.el).oninput = () => { clearTimeout(tm); tm = setTimeout(draw, 120); };
     $('#sD', sh.el).onchange = draw;
@@ -1880,6 +1916,13 @@
       return;
     }
     if (window.Aviso) Aviso.start(); // cinta de suscripción (todas las pantallas)
+    // Números centrados justo debajo de su encabezado en todas las tablas (también las que se dibujan después)
+    if (window.AlignCols && 'MutationObserver' in window) {
+      let pend = false;
+      const run = () => { pend = false; try { AlignCols(document); } catch (e) { /* solo presentación */ } };
+      new MutationObserver(() => { if (!pend) { pend = true; requestAnimationFrame(run); } }).observe(document.body, { childList: true, subtree: true });
+      run();
+    }
     // Equipo que ya trabajaba con la app (cookie) y amanece sin datos: el navegador los borró
     const prevDev = DB.getCookie('pv_dev');
     if (prevDev && !(await DB.getMeta('deviceId', null)) && !S.wipeNotice) {
