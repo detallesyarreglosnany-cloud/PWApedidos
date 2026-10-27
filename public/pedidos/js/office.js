@@ -65,7 +65,8 @@
     autoPack();
     applyReturnableTemplate();
     upperClients();
-    if (window.Cobranza && S.settings && S.settings.adminKey) Cobranza.warmOffice();
+    // Crédito y semáforo de los clientes para las hojas de carga; al llegar, se redibuja si nadie está escribiendo
+    if (window.Cobranza && S.settings && S.settings.adminKey) Cobranza.warmOffice().then((ch) => { const a = document.activeElement; if (ch && location.hash.startsWith('#/oficina/cargas') && !document.querySelector('.overlay') && !(a && /INPUT|TEXTAREA|SELECT/.test(a.tagName))) PV.render(); }).catch(() => {});
     const app = document.getElementById('app');
     const waiting = S.loads.filter((l) => !l.deleted && !Loads.isClosed(l)).length;
     const toVerify = S.clients.filter((c) => !c.deleted && !Clientes.isVerified(c)).length;
@@ -415,6 +416,9 @@
     const totalUSD = os.reduce((a, o) => a + Matrix.orderTotals(o).monto, 0);
     const dups = dupIndex();
     const initialsRow = `<tr class="ini-row"><th class="sticky-col">Vendedor →</th>${m.cols.map((c) => `<th>${esc(Loads.initials(c.order.sellerName))}</th>`).join('')}<th class="tot"></th></tr>`;
+    // Semáforo de crédito de cada cliente (lo calcula cobranza): 🟢 al día · 🟡 atraso · 🔴 atraso grave · 🆕 nuevo
+    const semOf = (o) => (window.Cobranza ? Cobranza.semOf(o.clientId) : ''), conOf = (o) => (window.Cobranza ? Cobranza.contadoOf(o.clientId) : '');
+    const semRow = m.cols.some((c) => semOf(c.order) || conOf(c.order)) ? `<tr class="ini-row sem-row"><th class="sticky-col" title="Semáforo de crédito: 🟢 al día · 🟡 con atraso · 🔴 atraso grave · 🆕 nuevo · C = contado">Crédito →</th>${m.cols.map((c) => { const s = semOf(c.order), k = conOf(c.order); return `<th title="${esc(c.client)}: ${esc((Cobranza.SEM[s] || 'sin datos') + (k === 'contado' ? ' · CONTADO' : ''))}">${Cobranza.DOT[s] || ''}${k === 'contado' ? '<small>C</small>' : ''}</th>`; }).join('')}<th class="tot"></th></tr>` : '';
 
     root.innerHTML = `
       <div class="toolbar no-print">
@@ -449,7 +453,7 @@
         ${editableLoad && !os.length ? '<button class="btn btn-danger" id="dDel">Eliminar hoja vacía</button>' : ''}
       </div>
       ${os.length ? `<div class="table-wrap"><table class="grid sheet-grid">
-        <thead>${initialsRow}<tr><th class="sticky-col">Producto</th>
+        <thead>${initialsRow}${semRow}<tr><th class="sticky-col">Producto</th>
           ${m.cols.map((c, i) => `<th class="client" title="${esc(c.client)}"><div>${i + 1}. ${esc(c.client)}</div></th>`).join('')}<th class="tot">TOTAL</th></tr></thead>
         <tbody>${body}</tbody><tfoot>${foot}</tfoot></table></div>` : '<div class="empty card"><strong>Hoja vacía</strong>Mueve clientes aquí con ⇄ desde otra hoja o desde "Clientes en espera".</div>'}
       <div class="section-title">Clientes de la hoja (el orden es el de las columnas) · total ${usd(totalUSD)}</div>
@@ -460,7 +464,7 @@
           <td style="white-space:nowrap">${editableLoad ? `<button class="btn btn-sm" data-left="${i}" ${i ? '' : 'disabled'} aria-label="Mover a la izquierda">←</button><button class="btn btn-sm" data-right="${i}" ${i < os.length - 1 ? '' : 'disabled'} aria-label="Mover a la derecha">→</button>` : ''}</td>
           <td><b>${esc(o.clientName)}</b> <span class="muted">${esc(fmtDate(o.routeDate))}</span>${dupBadge(o, dups)}${dupLines(o, dups)}
             ${o.officeEdited ? ' <span class="status abierto">editado oficina</span>' : ''}${o.sellerEdited ? ' <span class="status en_espera">modificado por vendedor</span>' : ''}
-            ${o.factura ? ' <span class="status en_carga">🧾 FACTURA</span>' : ''}
+            ${o.factura ? ' <span class="status en_carga">🧾 FACTURA</span>' : ''}${window.Cobranza ? Cobranza.officeChip(o) : ''}
             ${o.notes ? `<div class="muted">📝 ${esc(o.notes)}</div>` : ''}${(o.officeMsgs || []).length ? `<div class="muted">💬 ${o.officeMsgs.length} mensaje${o.officeMsgs.length > 1 ? 's' : ''} de oficina</div>` : ''}${(o.sellerMsgs || []).length ? `<div class="muted">↩ ${o.sellerMsgs.length} respuesta${o.sellerMsgs.length > 1 ? 's' : ''} del vendedor</div>` : ''}</td>
           <td><span class="tag">${esc(Loads.initials(o.sellerName))}</span></td>
           <td class="n" data-l="Bultos">${t.bultos}</td><td class="n" data-l="Unid.">${t.totalUnidades}</td><td class="n" data-l="Monto">${usd(t.monto)}</td>
@@ -922,7 +926,7 @@
           ${r.cells.map((v) => `<td class="n ${v ? '' : 'zero'}">${v ? (money ? nf2.format(v) : nf0.format(v)) : '·'}</td>`).join('')}<td class="n tot">${money ? nf2.format(r.total) : nf0.format(r.total)}</td></tr>`).join('')}</tbody>
         <tfoot>${m.footer.map((f, i, all) => `<tr class="${f.key === (all.some((x) => x.key === 'TOTAL_BULTOS') ? 'TOTAL_BULTOS' : all[0].key) ? 'stick' : ''}"><td class="sticky-col">${esc(f.label)}</td><td></td>${f.cells.map((v) => `<td class="n">${f.money ? nf2.format(v) : nf0.format(v)}</td>`).join('')}<td class="n tot">${f.money ? nf2.format(f.total) : nf0.format(f.total)}</td></tr>`).join('')}</tfoot></table></div>
         <div class="section-title">Detalle por cliente</div>
-        <div class="card"><table class="inv">${source.map((o) => `<tr><td><b>${esc(o.clientName)}</b>${dupBadge(o, dupIdx)}${o.createdBy === 'oficina' ? ' <span class="tag" title="Cargado por la oficina">🏢 oficina</span>' : ''}<div class="muted">${esc(o.sellerName)} · ${esc(o.route || '')}</div>${dupLines(o, dupIdx)}</td>
+        <div class="card"><table class="inv">${source.map((o) => `<tr><td><b>${esc(o.clientName)}</b>${dupBadge(o, dupIdx)}${window.Cobranza ? Cobranza.officeChip(o) : ''}${o.createdBy === 'oficina' ? ' <span class="tag" title="Cargado por la oficina">🏢 oficina</span>' : ''}<div class="muted">${esc(o.sellerName)} · ${esc(o.route || '')}</div>${dupLines(o, dupIdx)}</td>
           <td><span class="status ${o.status}">${esc(Loads.orderLabel(o))}</span></td><td class="n">${usd(Matrix.orderTotals(o).monto)}</td>
           <td><button class="btn btn-sm" data-edit="${esc(o.id)}">Ver / editar</button></td></tr>`).join('')}</table></div>`
       : `<div class="empty card"><strong>Sin pedidos</strong>No hay pedidos para ${esc(fmtDate(date))}.</div>`}`;

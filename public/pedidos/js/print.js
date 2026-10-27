@@ -154,13 +154,15 @@
       </div>
       <table class="load ${m.cols.length > 14 ? 'many' : ''}"><thead>
         <tr class="ini"><th style="text-align:right">VENDEDOR →</th>${m.cols.map((c) => `<th>${esc(Loads.initials(c.order.sellerName))}</th>`).join('')}<th></th>${extra.map(() => '<th></th>').join('')}</tr>
+        ${(() => { const so = (c) => (global.Cobranza ? global.Cobranza.semOf(c.order.clientId) : ''), L = { verde: 'V', amarillo: 'A', rojo: 'R', nuevo: 'N' };
+          return m.cols.some(so) ? `<tr class="ini fac sem"><th style="text-align:right">CRÉDITO →</th>${m.cols.map((c) => `<th class="${so(c) ? 's-' + so(c) : ''}">${L[so(c)] || ''}</th>`).join('')}<th></th>${extra.map(() => '<th></th>').join('')}</tr>` : ''; })()}
         ${(() => { const co = (c) => (global.Cobranza ? global.Cobranza.contadoOf(c.order.clientId) : ''); return m.cols.some(co) ? `<tr class="ini fac"><th style="text-align:right">CONTADO →</th>${m.cols.map((c) => `<th>${co(c) ? 'SÍ' : ''}</th>`).join('')}<th></th>${extra.map(() => '<th></th>').join('')}</tr>` : ''; })()}
         ${m.cols.some((c) => c.order.factura) ? `<tr class="ini fac"><th style="text-align:right">FACTURA →</th>${m.cols.map((c) => `<th>${c.order.factura ? 'SÍ' : ''}</th>`).join('')}<th></th>${extra.map(() => '<th></th>').join('')}</tr>` : ''}
         <tr><th style="text-align:left">PRODUCTO</th>
         ${m.cols.map((c, i) => `<th class="cl"><div>${i + 1}. ${esc(c.client)}</div></th>`).join('')}<th class="cl tcol"><div>TOTAL</div></th>
         ${extra.map((x) => `<th class="cl"><div>${esc(x)}</div></th>`).join('')}</tr></thead>
         <tbody>${rows}</tbody><tfoot>${foot}</tfoot></table>
-      <p class="muted foot">CJ = cajas · UN = unidades sueltas. Clientes: ${m.cols.map((c, i) => `${i + 1}. ${esc(c.client)} (${esc(Loads.initials(c.order.sellerName))})`).join(' · ')}</p>
+      <p class="muted foot">${m.cols.some((c) => global.Cobranza && global.Cobranza.semOf(c.order.clientId)) ? 'CRÉDITO: V = verde, al día · A = amarillo, con atraso · R = rojo, atraso grave · N = cliente nuevo (contado). ' : ''}CJ = cajas · UN = unidades sueltas. Clientes: ${m.cols.map((c, i) => `${i + 1}. ${esc(c.client)} (${esc(Loads.initials(c.order.sellerName))})`).join(' · ')}</p>
       <div class="sign">${Loads.isRetiro(load) ? '<div>Entregó (oficina)</div><div>Almacén</div><div>Vendedor</div><div>Control / Oficina</div>' : '<div>Despachador</div><div>Almacén</div><div>Vendedor</div><div>Control / Oficina</div>'}</div>
       ${(() => { const cto = (o) => (global.Cobranza ? global.Cobranza.contadoOf(o.clientId) : ''); const obs = m.cols.map((c, i) => ({ i: i + 1, o: c.order })).filter((x) => x.o.factura || x.o.notes || cto(x.o));
         return obs.length ? `<div class="obs"><b>OBSERVACIONES POR CLIENTE</b>${obs.map((x) => `<div><b>${x.i}. ${esc(x.o.clientName)}</b> (${esc(Loads.initials(x.o.sellerName))})${cto(x.o) ? ` · <b class="facm">COBRAR DE CONTADO${cto(x.o) === 'nuevo' ? ' (CLIENTE NUEVO)' : ''}</b>` : ''}${x.o.factura ? ' · <b class="facm">EMITIR FACTURA</b>' : ''}${x.o.notes ? ' · ' + esc(x.o.notes) : ''}</div>`).join('')}</div>` : ''; })()}
@@ -184,7 +186,11 @@
     .um{font-size:9px;line-height:1;font-weight:bold;border:1px solid #000;border-radius:3px;padding:0 2px;margin-left:3px}
     table.load td.num{padding:1px 2px}
     tr.ini th{font-size:10px}
-    tr.fac th{font-size:11px;font-weight:900} .obs{margin-top:6px;border-top:1px solid #000;padding-top:3px;font-size:10px;line-height:1.25;page-break-inside:avoid}
+    tr.fac th{font-size:11px;font-weight:900}
+    .sheet tr.sem th.s-verde{background:#7cc47f !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    .sheet tr.sem th.s-amarillo{background:#ffd54f !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    .sheet tr.sem th.s-rojo{background:#ef7f7f !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    .sheet tr.sem th.s-nuevo{background:#90caf9 !important;-webkit-print-color-adjust:exact;print-color-adjust:exact} .obs{margin-top:6px;border-top:1px solid #000;padding-top:3px;font-size:10px;line-height:1.25;page-break-inside:avoid}
     tr.grp td{border-top:2px solid #000}
     td.has{font-weight:bold}
     table.load td.tot,table.load th.tcol{font-size:14px;font-weight:900;border-left:2px solid #000;border-right:2px solid #000}
