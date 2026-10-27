@@ -1457,7 +1457,7 @@
           return `<tr><td>${esc(x.code)} ${esc(x.name)} ${esc(x.presentation || '')}</td><td class="num">${qty(x)}</td>${dl ? `<td class="num">${qty(got)}</td><td class="num">${ret.cajas || ret.unidades ? qty(ret) : ''}</td>` : ''}</tr>`;
         });
         return `<details class="card card-pad sr" style="margin-bottom:8px"><summary><b>${esc(o.clientName)}</b> · ${esc(fmtDate(o.routeDate))}${office ? ' · ' + esc(o.sellerName) : ''} · ${usd(d ? d.monto : t.monto)}
-          <div style="margin-top:3px">${noteStatusHTML(o, isNum ? digits : '')}</div>
+          <div style="margin-top:3px">${noteStatusHTML(o, isNum ? digits : '')}</div>${payStatusHTML(o)}
           <div class="muted" style="font-size:13px">${l ? `Hoja ${esc(Loads.labelOf(l))}${l.number ? ' ' + esc(Loads.loadCode(l)) : ''} · ${esc(Loads.statusOf(l, S.config).name)}` : 'Sin hoja'}${o.route ? ' · Ruta ' + esc(o.route) : ''}${o.pendingFrom ? ' · reprogramado de otro pedido' : ''}${o.createdBy === 'oficina' ? ' · 🏢 oficina' : ''}</div></summary>
           <table class="lines" style="margin-top:8px"><thead><tr><th style="text-align:left">Producto</th><th class="num">Llevaba</th>${dl ? '<th class="num">Entregado</th><th class="num">Devuelto</th>' : ''}</tr></thead><tbody>${rows}</tbody></table>
           ${o.notes ? `<p class="muted">📝 ${esc(o.notes)}</p>` : ''}
@@ -1469,6 +1469,7 @@
         + (res.length ? `<p class="muted">${res.length === 40 ? 'Primeros 40 pedidos' : res.length + ' pedido' + (res.length > 1 ? 's' : '')}</p>${res.map(card).join('')}`
         : loadsHit.length ? '' : '<div class="empty"><strong>Sin resultados</strong>Prueba con parte del nombre o del número.</div>');
       if (res.length === 1) { const dt = $('#sRes details', sh.el); if (dt) dt.open = true; }
+      if (window.Pagos) Pagos.fillStatus($('#sRes', sh.el));
     };
     // Botones para ir a lo encontrado: la hoja de carga, su liquidación, o (vendedor) su pedido
     function loadButtons(l) {
@@ -1775,6 +1776,14 @@
   }
 
   /** Detalle de un pedido para el vendedor: lo que pidió contra lo que queda/salió, hoja, despachador y nota. */
+  /** Estado de pago de la nota (lo llena pagos.js con el servidor): pagada, parcial, esperando a cobranza… */
+  function payStatusHTML(o) {
+    const d = o.delivery && o.delivery.at ? o.delivery : null;
+    if (o.deleted || (!d && o.status !== 'despachado') || (d && d.result === 'anulada')) return '';
+    const monto = d ? +d.monto || 0 : Matrix.orderTotals(o).monto; if (!(monto > 0)) return '';
+    const nota = String((d && d.newValery) || o.valeryNote || '').replace(/\D/g, '');
+    return `<div class="pay-st muted" data-paynota="${esc(nota)}" data-payoid="${esc(o.id)}" data-paymonto="${monto}">💵 ${nota ? 'Nota ' + esc(nota) + ' · ' : ''}${navigator.onLine ? 'consultando el pago…' : 'estado del pago: sin internet'}</div>`;
+  }
   function myOrderSheet(o) {
     if (!o) return;
     const l = loadOf(o), g = groupOf(o), t = Matrix.orderTotals(o);
@@ -1818,11 +1827,13 @@
       <table class="lines"><thead><tr><th style="text-align:left">Producto</th>${sentL ? '<th class="num">Pediste</th>' : ''}<th class="num">${g === 'despachados' ? 'Despachado' : 'Queda'}</th>${liqd ? '<th class="num">Entregado</th>' : ''}</tr></thead>
         <tbody>${rows || '<tr><td class="muted">Sin productos</td></tr>'}</tbody></table>
       <div class="row" style="justify-content:space-between;margin-top:10px;font-size:18px"><b>Total · ${t.cajas} cj + ${t.unidades} un</b><b>${usd(t.monto)}</b></div>
+      ${payStatusHTML(o)}
       ${vacBlock}
       <div class="section-title" style="margin:14px 0 6px">💬 Notas y mensajes</div>
       ${(o.officeMsgs || []).length || (o.sellerMsgs || []).length ? threadBlock(o) : msgThreadHTML(o)}`, { cls: 'sheet-order' });
     if ((o.officeMsgs || []).length) markSeen(o);
     bindReply(shM, o.id);
+    if (window.Pagos) Pagos.fillStatus(shM.el);
     const me = $('#mosEdit', shM.el);
     if (me) me.onclick = () => { shM.close(); quickEditSheet(o.id, () => { if (location.hash.startsWith('#/ruta/pedidos')) renderSellerOrders(); }); };
   }

@@ -84,3 +84,40 @@ export function cleanPago(raw: Record<string, unknown>): Pago | string {
     status: 'espera', by: str(raw.by, 80), createdAt: new Date().toISOString(), review: null,
   };
 }
+
+/* ---------------- Estado de pago de cada nota ---------------- */
+// Una nota se reconoce por su número (sin ceros a la izquierda); si aún no tiene número, por el pedido.
+export const notaNum = (v: unknown) => String(v ?? '').replace(/\D/g, '').replace(/^0+(?=\d)/, '');
+export const noteKey = (n: { nota?: string; orderId?: string }) => (notaNum(n.nota) ? 'n:' + notaNum(n.nota) : 'o:' + String(n.orderId || ''));
+
+export type Abono = { pagado: number; aprobado: number; espera: number; pagos: string[] };
+/** Reparte lo pagado de cada pago entre sus notas, en el orden en que se marcaron (la última se lleva lo que sobre). */
+export function allocate(pagos: Pago[]) {
+  const out = new Map<string, Abono>();
+  for (const p of pagos) {
+    if (p.status !== 'espera' && p.status !== 'aprobado') continue;
+    let left = r2(p.pagado + p.ajustes);
+    p.notas.forEach((n, i) => {
+      const take = r2(i === p.notas.length - 1 ? left : Math.min(left, n.monto));
+      left = r2(left - take);
+      const k = noteKey(n), a = out.get(k) || { pagado: 0, aprobado: 0, espera: 0, pagos: [] };
+      a.pagado = r2(a.pagado + take);
+      if (p.status === 'aprobado') a.aprobado = r2(a.aprobado + take); else a.espera = r2(a.espera + take);
+      if (!a.pagos.includes(p.id)) a.pagos.push(p.id);
+      out.set(k, a);
+    });
+  }
+  return out;
+}
+/** Estado de una nota según su monto y lo abonado. */
+export function noteStatus(monto: number, a?: Abono | null) {
+  const pagado = a ? a.pagado : 0, aprobado = a ? a.aprobado : 0, espera = a ? a.espera : 0;
+  const resta = r2(Math.max(0, monto - pagado));
+  const fmt = (n: number) => '$' + n.toFixed(2).replace('.', ',');
+  if (pagado <= 0.004) return { estado: 'sin_pago', resta, texto: `Sin pagos · debe ${fmt(monto)}` };
+  if (resta <= 0.01) {
+    if (aprobado >= monto - 0.01) return { estado: 'pagada', resta: 0, texto: '✅ Pagada · confirmada por cobranza' };
+    return { estado: 'en_revision', resta: 0, texto: '💵 Pago subido · esperando confirmación de cobranza' };
+  }
+  return { estado: 'parcial', resta, texto: `Pago parcial · resta ${fmt(resta)}${espera > 0.004 ? ' · esperando confirmación de cobranza' : ''}` };
+}

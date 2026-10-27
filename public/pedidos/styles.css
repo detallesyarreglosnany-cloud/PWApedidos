@@ -543,3 +543,8 @@ table.grid.sheet-grid .cell-in { min-height: 30px; }
 @media (min-width: 761px) { table.inv th.al-c, table.inv td.al-c { text-align: center !important; } }
 table.lines th.al-c, table.lines td.al-c, table.grid td.al-c, table.grid th.al-c { text-align: center !important; }
 table.inv td.al-c .qin, table.grid td.al-c .cell-in { text-align: center; }
+
+/* ---------- Pagos: estado de cada nota ---------- */
+.pay-st { font-size: 13px; margin-top: 4px; }
+.pay-ok { color: var(--ok); font-weight: 700; }
+.pay-rev { color: var(--accent); font-weight: 700; }

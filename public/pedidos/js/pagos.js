@@ -86,28 +86,62 @@
   const accounts = () => ((PV().S.config && PV().S.config.payAccounts) || []).filter((a) => a && a.bank);
   const banksFor = () => { const a = [...new Set(accounts().map((x) => x.bank))]; return a.length ? a : BANKS; };
 
+  /* ---------------- Búsqueda de cliente (por nombre, negocio, RIF, dirección o N° de nota) ---------------- */
+  const nkey = (nota, orderId) => { const n = String(nota || '').replace(/\D/g, '').replace(/^0+(?=\d)/, ''); return n ? 'n:' + n : 'o:' + orderId; };
+  function clientsOf(sid) { return PV().S.clients.filter((c) => !c.deleted && c.active !== false && (!sid || c.sellerId === sid)).sort((a, b) => a.name.localeCompare(b.name, 'es')); }
+  function searchHits(q, sid) {
+    const P = PV(), norm = P.norm, t = norm(q), digits = String(q).replace(/\D/g, '');
+    if (t.length < 2 && digits.length < 3) return [];
+    const out = [], seen = new Set();
+    if (digits.length >= 3) P.S.orders.filter((o) => !o.deleted && (!sid || o.sellerId === sid) && o.clientId && [o.valeryNote, o.delivery && o.delivery.newValery].some((n) => String(n || '').includes(digits)))
+      .slice(0, 5).forEach((o) => { const n = (o.delivery && o.delivery.newValery && String(o.delivery.newValery).includes(digits)) ? o.delivery.newValery : o.valeryNote; out.push({ cid: o.clientId, label: `Nota ${n} · ${o.clientName}`, nota: n, key: nkey(n, o.id) }); });
+    const toks = t.split(' ').filter(Boolean);
+    if (toks.length) clientsOf(sid).filter((c) => toks.every((x) => norm([c.name, c.tradeName, c.rif, c.address, c.phone].join(' ')).includes(x)))
+      .sort((a, b) => (norm(a.name).startsWith(t) ? 0 : 1) - (norm(b.name).startsWith(t) ? 0 : 1)).slice(0, 8)
+      .forEach((c) => { if (!seen.has(c.id)) { seen.add(c.id); out.push({ cid: c.id, label: c.name, sub: [c.tradeName, c.rif, c.address].filter(Boolean).join(' · ') }); } });
+    return out;
+  }
+  const sugHTML = (hits, q) => { const esc = PV().esc; return hits.length ? hits.map((h) => `<button type="button" class="sug-item" data-cid="${esc(h.cid)}" data-key="${esc(h.key || '')}"><b>${esc(h.label)}</b>${h.sub ? `<small>${esc(h.sub)}</small>` : ''}</button>`).join('')
+    : (String(q).trim().length >= 2 ? '<div class="muted" style="padding:8px">No hay coincidencias en tu cartera.</div>' : ''); };
+
+  /** Estado de cuenta del cliente: cada nota despachada o liquidada con lo abonado y su estado (del servidor; sin señal, lo del teléfono). */
+  async function fetchCuenta(clientId, sid) {
+    if (navigator.onLine) {
+      const r = await global.Sync.pagosCall({ action: 'cuenta', clientId, sellerId: sid });
+      if (r.ok) return { notas: r.data.notas, deuda: r.data.deuda, enEspera: r.data.enEspera, live: true };
+      if (r.status === 401 && r.error === 'PIN') { if (global.PinGate) global.PinGate.check({ force: true }); return { notas: localCuenta(clientId), msg: '🔒 Escribe tu PIN para ver el estado de cuenta en este teléfono.' }; }
+    }
+    return { notas: localCuenta(clientId), msg: 'Sin internet: se muestran las notas de este teléfono, sin lo abonado.' };
+  }
+  function localCuenta(clientId) {
+    return notasDe(clientId).map((n) => ({ ...n, key: nkey(n.nota, n.orderId), resta: n.monto, pagado: 0, estado: '', texto: '' }));
+  }
+  const EST = { sin_pago: 'warn-txt', parcial: 'warn-txt', en_revision: 'pay-rev', pagada: 'pay-ok' };
+
   /* ======================= Formulario de pago ======================= */
   function payForm(opts) {
     const P = PV(), { S, esc, usd, bs, toast, openSheet, today, fmtDate } = P;
     const sid = opts.sellerId, seller = P.sellerById(sid) || { name: '' };
     const p = { id: global.DB.uid('pg'), date: today(), sellerId: sid, sellerName: seller.name, clientId: '', clientName: '', notas: [], rate: +S.config.exchangeRate || 0,
       copRate: +S.config.copRate || 0, lines: [{ method: 'transferencia', bank: '', ref: '', amount: '' }], adjusts: [], comment: '', by: opts.by || seller.name };
-    let saldo = {};
-    const clients = S.clients.filter((c) => !c.deleted && c.active !== false && (!sid || c.sellerId === sid)).sort((a, b) => a.name.localeCompare(b.name, 'es'));
+    let cuenta = null, cuentaMsg = '';
     const sh = openSheet(`<div class="row"><h2 class="grow">💵 Registrar pago</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div><div id="pfBody"></div>`, { wide: true });
     const body = sh.el.querySelector('#pfBody');
     const opt = (arr, cur) => arr.map(([v, l]) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`).join('');
     function draw() {
-      const c = calc(p), notas = p.clientId ? notasDe(p.clientId) : [];
-      const sel = new Set(p.notas.map((n) => n.orderId));
+      const c = calc(p), notas = cuenta || [];
+      const sel = new Set(p.notas.map((n) => nkey(n.nota, n.orderId)));
+      const debenN = notas.filter((n) => n.resta > 0.01 && !sel.has(n.key)).length;
       body.innerHTML = `
-        <label class="field"><span>Cliente</span><input id="pfCli" class="input" list="pfCliList" placeholder="Escribe el nombre del cliente" value="${esc(p.clientName)}" autocomplete="off">
-          <datalist id="pfCliList">${clients.map((x) => `<option value="${esc(x.name)}">`).join('')}</datalist></label>
-        ${p.clientId ? `<div class="section-title" style="margin:10px 0 4px">Notas que paga</div>
-          ${notas.length ? `<div class="pick-list">${notas.map((n) => { const ab = saldo[n.orderId] ? saldo[n.orderId].pagado : 0; return `<label class="sug-item" style="display:flex;gap:10px;align-items:center"><input type="checkbox" data-nota="${esc(n.orderId)}" ${sel.has(n.orderId) ? 'checked' : ''} style="width:22px;height:22px">
-            <span class="grow"><b>Nota ${esc(n.nota || '—')}</b> · ${esc(fmtDate(n.date))} · ${usd(n.monto)}${n.liquidado ? '' : ' <span class="muted">(sin liquidar)</span>'}${ab ? ` <span class="warn-txt">· ya abonado ${usd(ab)} · debe ${usd(Math.max(0, n.monto - ab))}</span>` : ''}</span></label>`; }).join('')}</div>`
-            : '<p class="muted">Este teléfono no tiene notas despachadas de este cliente. Agrega la nota a mano.</p>'}
-          ${p.notas.filter((n) => n.orderId.startsWith('manual:')).map((n) => `<div class="row" style="gap:8px;margin-top:6px"><span class="grow">Nota ${esc(n.nota)} · ${usd(n.monto)} <span class="muted">(a mano)</span></span><button class="btn btn-sm" data-rmnota="${esc(n.orderId)}">✕</button></div>`).join('')}
+        <label class="field"><span>Cliente o N° de nota</span><input id="pfCli" class="input" placeholder="Escribe 2 letras del cliente o el número de nota" value="${esc(p.clientName)}" autocomplete="off"></label>
+        <div id="pfSug" class="suggest"></div>
+        ${p.clientId ? `<div class="row" style="align-items:center;gap:8px;margin:10px 0 4px"><div class="section-title grow" style="margin:0">Notas de ${esc(p.clientName)}</div>${debenN ? `<button type="button" class="btn btn-sm" id="pfAll">Marcar todas las que deben (${debenN})</button>` : ''}</div>
+          ${cuentaMsg ? `<p class="muted">${esc(cuentaMsg)}</p>` : ''}
+          ${notas.length ? `<div class="pick-list">${notas.map((n) => { const can = n.resta > 0.01; return `<label class="sug-item" style="display:flex;gap:10px;align-items:center;${can ? '' : 'opacity:.6'}"><input type="checkbox" data-nkey="${esc(n.key)}" ${sel.has(n.key) ? 'checked' : ''} ${can ? '' : 'disabled'} style="width:22px;height:22px">
+            <span class="grow"><b>Nota ${esc(n.nota || '—')}</b> · ${esc(fmtDate(n.date))} · ${usd(n.monto)}${n.manual ? ' <span class="muted">(a mano)</span>' : n.liquidado ? '' : ' <span class="muted">(sin liquidar)</span>'}${n.hoja ? ` <span class="muted">· ${esc(n.hoja)}</span>` : ''}
+              ${n.texto ? `<br><span class="${EST[n.estado] || 'muted'}">${esc(n.texto)}</span>` : ''}</span></label>`; }).join('')}</div>`
+            : (cuenta ? '<p class="muted">No hay notas despachadas o liquidadas de este cliente. Agrega la nota a mano.</p>' : '')}
+          ${p.notas.filter((n) => !notas.some((x) => x.key === nkey(n.nota, n.orderId))).map((n) => `<div class="row" style="gap:8px;margin-top:6px"><span class="grow">Nota ${esc(n.nota)} · ${usd(n.monto)} <span class="muted">(a mano)</span></span><button class="btn btn-sm" data-rmnota="${esc(n.orderId)}">✕</button></div>`).join('')}
           <details style="margin-top:6px"><summary class="muted" style="cursor:pointer">＋ Agregar una nota a mano</summary><div class="row wrap" style="gap:8px;margin-top:6px;align-items:flex-end">
             <label class="field"><span>N° de nota</span><input id="pfMN" class="input" inputmode="numeric" placeholder="Ej: 12345"></label><label class="field"><span>Monto $ de la nota</span><input id="pfMM" class="input" inputmode="decimal" placeholder="0,00"></label>
             <button class="btn btn-sm" id="pfMAdd">Agregar</button></div></details>` : ''}
@@ -122,6 +156,7 @@
           ${m.ref ? `<label class="field"><span>N° de referencia</span><input class="input" data-l="${i}" data-k="ref" value="${esc(l.ref)}" placeholder="Referencia"></label>` : ''}
           <label class="field"><span>Monto (${m.currency === 'VES' ? 'Bs' : m.currency === 'COP' ? 'COP' : '$'})</span><input class="input" inputmode="decimal" data-l="${i}" data-k="amount" value="${esc(l.amount)}" placeholder="0,00"></label>
           <span class="muted" style="padding-bottom:12px" data-usd="${i}">≈ ${usd(cl ? cl.usd : 0)}</span>
+          <button type="button" class="btn btn-sm" data-fill="${i}" title="Poner aquí lo que falta">= lo que falta</button>
           ${p.lines.length > 1 ? `<button class="btn btn-sm" data-rml="${i}" aria-label="Quitar">✕</button>` : ''}</div></div>`; }).join('')}
         <button class="btn btn-sm" id="pfAddL">＋ Otra forma de pago</button>
         <div class="section-title" style="margin:12px 0 4px">Ajustes (si aplica)</div>
@@ -149,19 +184,22 @@
       c.adjusts.forEach((a, i) => { const el = body.querySelector(`[data-ausd="${i}"]`); if (el) el.textContent = usd(a.usd); });
       const sm = body.querySelector('#pfSum'); if (sm) sm.innerHTML = sumHTML(c);
     }
-    async function pickClient(name) {
-      const c = clients.find((x) => x.name === name);
-      p.clientId = c ? c.id : ''; p.clientName = c ? c.name : name; p.notas = [];
-      saldo = {};
+    async function pickClient(cid, preKey) {
+      const c = clientsOf(sid).find((x) => x.id === cid) || P.clientById(cid); if (!c) return;
+      p.clientId = c.id; p.clientName = c.name; p.notas = []; cuenta = null; cuentaMsg = 'Consultando el estado de cuenta…';
       draw();
-      if (c) {
-        const ids = notasDe(c.id).map((n) => n.orderId);
-        if (ids.length && navigator.onLine) { const r = await global.Sync.pagosCall({ action: 'saldo', orderIds: ids, sellerId: sid }); if (r.ok) { saldo = r.data.byOrder || {}; if (sh.el.isConnected) draw(); } }
-      }
+      const r = await fetchCuenta(c.id, sid);
+      if (!sh.el.isConnected || p.clientId !== c.id) return;
+      cuenta = r.notas; cuentaMsg = r.msg || '';
+      const pre = preKey && cuenta.find((n) => n.key === preKey && n.resta > 0.01);
+      if (pre) p.notas.push({ orderId: pre.orderId, nota: pre.nota, monto: r2(pre.resta) });
+      draw();
     }
+    const addNota = (n) => { if (!p.notas.some((x) => nkey(x.nota, x.orderId) === n.key)) p.notas.push({ orderId: n.orderId, nota: n.nota, monto: r2(n.resta) }); };
     body.addEventListener('input', (e) => {
       const t = e.target;
-      if (t.tagName !== 'INPUT' || t.type === 'checkbox' || t.id === 'pfCli' || t.type === 'date') return;
+      if (t.id === 'pfCli') { const sg = body.querySelector('#pfSug'); if (sg) sg.innerHTML = sugHTML(searchHits(t.value, sid), t.value); return; }
+      if (t.tagName !== 'INPUT' || t.type === 'checkbox' || t.type === 'date') return;
       if (t.id === 'pfRate') p.rate = decRate(t.value);
       else if (t.id === 'pfCop') p.copRate = decRate(t.value);
       else if (t.id === 'pfCom') p.comment = t.value;
@@ -173,11 +211,10 @@
     body.addEventListener('change', (e) => {
       const t = e.target;
       if (t.tagName === 'INPUT' && t.type !== 'checkbox' && t.type !== 'date' && t.id !== 'pfCli') return; // ya se tomó al escribir
-      if (t.id === 'pfCli') { pickClient(t.value.trim()); return; }
-      if (t.dataset.nota) {
-        const n = notasDe(p.clientId).find((x) => x.orderId === t.dataset.nota);
-        if (t.checked && n) { const ab = saldo[n.orderId] ? saldo[n.orderId].pagado : 0; p.notas.push({ orderId: n.orderId, nota: n.nota, monto: r2(Math.max(0, n.monto - ab)) }); }
-        else p.notas = p.notas.filter((x) => x.orderId !== t.dataset.nota);
+      if (t.id === 'pfCli') return; // se elige de la lista de coincidencias
+      if (t.dataset.nkey) {
+        const n = (cuenta || []).find((x) => x.key === t.dataset.nkey);
+        if (t.checked && n) addNota(n); else p.notas = p.notas.filter((x) => nkey(x.nota, x.orderId) !== t.dataset.nkey);
         draw(); return;
       }
       if (t.id === 'pfDate') p.date = t.value;
@@ -190,6 +227,19 @@
     });
     body.addEventListener('click', async (e) => {
       const t = e.target;
+      const sg = t.closest('[data-cid]');
+      if (sg && body.querySelector('#pfSug').contains(sg)) { pickClient(sg.dataset.cid, sg.dataset.key || ''); return; }
+      if (t.id === 'pfAll') { (cuenta || []).filter((n) => n.resta > 0.01).forEach(addNota); draw(); return; }
+      if (t.dataset.fill !== undefined) {
+        // Pone en esta forma de pago justo lo que falta (en su moneda)
+        const i = +t.dataset.fill, l = p.lines[i], m = METHODS[l.method]; l.amount = '';
+        const falta = calc(p).diferencia;
+        if (falta <= 0.004) { toast('No falta nada', 'ok'); draw(); return; }
+        if (m.currency === 'VES' && !(p.rate > 0)) { toast('Escribe primero la tasa del día', 'err'); return; }
+        if (m.currency === 'COP' && !(p.copRate > 0)) { toast('Escribe primero la tasa de los pesos', 'err'); return; }
+        const v = m.currency === 'USD' ? falta : m.currency === 'VES' ? falta * p.rate : falta * p.copRate;
+        l.amount = String(r2(v)).replace('.', ','); draw(); return;
+      }
       if (t.id === 'pfAddL') { p.lines.push({ method: 'efectivo_usd', bank: '', ref: '', amount: '' }); draw(); return; }
       if (t.id === 'pfAddA') { p.adjusts.push({ type: 'colaboracion', usd: '', pct: '' }); draw(); return; }
       if (t.dataset.rml) { p.lines.splice(+t.dataset.rml, 1); draw(); return; }
@@ -198,6 +248,9 @@
       if (t.id === 'pfMAdd') {
         const nn = String(body.querySelector('#pfMN').value).replace(/\D/g, ''), mm = r2(dec(body.querySelector('#pfMM').value));
         if (!nn || !(mm > 0)) { toast('Escribe el número de nota y su monto', 'err'); return; }
+        const known = (cuenta || []).find((x) => x.key === nkey(nn, ''));
+        if (known) { if (known.resta > 0.01) { addNota(known); toast(`La nota ${nn} ya está en la cuenta del cliente: quedó marcada`, 'ok'); } else toast(`La nota ${nn} ya está pagada (${known.texto})`, 'err'); draw(); return; }
+        if (p.notas.some((x) => nkey(x.nota, x.orderId) === nkey(nn, ''))) { toast('Esa nota ya está en este pago', 'err'); return; }
         p.notas.push({ orderId: 'manual:' + nn, nota: nn, monto: mm }); draw(); return;
       }
       if (t.id === 'pfSave') {
@@ -231,7 +284,51 @@
       }
     });
     draw();
-    if (opts.clientName) pickClient(opts.clientName);
+    if (opts.clientId) pickClient(opts.clientId, opts.notaKey || '');
+    else setTimeout(() => { const i = body.querySelector('#pfCli'); if (i) i.focus(); }, 60);
+  }
+
+  /* ======================= Estado de cuenta de un cliente ======================= */
+  function cuentaSheet(sid, cid) {
+    const P = PV(), { esc, usd, fmtDate, openSheet } = P;
+    const sh = openSheet(`<div class="row"><h2 class="grow">📒 Estado de cuenta</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <label class="field"><span>Cliente o N° de nota</span><input id="ecCli" class="input" placeholder="Escribe 2 letras del cliente o el número de nota" autocomplete="off"></label>
+      <div id="ecSug" class="suggest"></div><div id="ecOut"></div>`, { wide: true });
+    const out = sh.el.querySelector('#ecOut');
+    const show = async (id) => {
+      const c = P.clientById(id); if (!c) return;
+      sh.el.querySelector('#ecCli').value = c.name; sh.el.querySelector('#ecSug').innerHTML = '';
+      out.innerHTML = '<p class="muted">Consultando…</p>';
+      const r = await fetchCuenta(c.id, sid);
+      const notas = r.notas || [];
+      out.innerHTML = `${r.msg ? `<div class="hint warn">${esc(r.msg)}</div>` : ''}
+        ${r.live ? `<div class="kpi-row" style="margin-top:8px"><div class="kpi"><small>Debe</small><b class="${r.deuda > 0.01 ? 'warn-txt' : ''}">${usd(r.deuda)}</b><small>${notas.filter((n) => n.resta > 0.01).length} nota(s) por cobrar</small></div>
+          <div class="kpi"><small>Esperando a cobranza</small><b>${usd(r.enEspera)}</b></div></div>` : ''}
+        ${notas.length ? notas.map((n) => `<div class="card card-pad" style="margin-bottom:6px"><div class="row wrap" style="gap:8px;align-items:center"><span class="grow"><b>Nota ${esc(n.nota || '—')}</b> · ${esc(fmtDate(n.date))} · ${usd(n.monto)}${n.hoja ? ` <span class="muted">· ${esc(n.hoja)}</span>` : ''}${n.manual ? ' <span class="muted">(a mano)</span>' : ''}
+            ${n.texto ? `<br><span class="${EST[n.estado] || 'muted'}">${esc(n.texto)}</span>` : ''}</span>
+          ${n.resta > 0.01 ? `<button class="btn btn-sm btn-primary" data-pay="${esc(n.key)}">💵 Pagar ${usd(n.resta)}</button>` : ''}</div></div>`).join('')
+          : '<p class="muted">Sin notas despachadas o liquidadas de este cliente.</p>'}
+        <div class="actions"><button class="btn btn-primary" data-pay="">＋ Registrar pago de ${esc(c.name)}</button></div>`;
+      out.onclick = (e) => { const b = e.target.closest('[data-pay]'); if (!b) return; sh.close(); payForm({ sellerId: sid, clientId: c.id, notaKey: b.dataset.pay, onSaved: () => { if (location.hash === '#/ruta/pagos') { PV().S.ui.pagos = null; renderSeller(); } } }); };
+    };
+    sh.el.querySelector('#ecCli').addEventListener('input', (e) => { sh.el.querySelector('#ecSug').innerHTML = sugHTML(searchHits(e.target.value, sid), e.target.value); });
+    sh.el.querySelector('#ecSug').addEventListener('click', (e) => { const b = e.target.closest('[data-cid]'); if (b) show(b.dataset.cid); });
+    if (cid) show(cid); else setTimeout(() => sh.el.querySelector('#ecCli').focus(), 60);
+  }
+
+  /**
+   * Estado de pago junto a cada nota en cualquier pantalla (Mis pedidos, lupa…): los elementos con
+   * data-paynota / data-payoid / data-paymonto se llenan con una sola consulta.
+   */
+  async function fillStatus(root) {
+    const els = [...(root || document).querySelectorAll('[data-paymonto]')].filter((el) => !el.dataset.payDone);
+    if (!els.length || !navigator.onLine) return;
+    els.forEach((el) => { el.dataset.payDone = '1'; });
+    const notas = els.map((el) => ({ nota: el.dataset.paynota || '', orderId: el.dataset.payoid || '', monto: +el.dataset.paymonto || 0 }));
+    const r = await global.Sync.pagosCall({ action: 'estado', notas });
+    if (!r.ok) return;
+    els.forEach((el, i) => { const x = r.data.byKey[nkey(notas[i].nota, notas[i].orderId)]; if (!x || !el.isConnected) return;
+      el.className = 'pay-st ' + (EST[x.estado] || 'muted'); el.textContent = `💵 ${notas[i].nota ? 'Nota ' + notas[i].nota + ' · ' : ''}${x.texto}`; });
   }
 
   /* ======================= Detalle de un pago ======================= */
@@ -279,13 +376,14 @@
     const range = st.r === '7d' ? { from: dm(6), to: today() } : st.r === 'mes' ? { from: today().slice(0, 8) + '01', to: today() } : { from: today(), to: today() };
     app.innerHTML = `${P.brandHeader(seller.name, 'Pagos de mis clientes', `<button id="bell" class="bell" type="button" aria-label="Notificaciones">🔔</button><button id="syncPill" class="pill" type="button"></button><a class="btn btn-sm" href="#/ruta">← Pedir</a>`)}
       <div class="container">
-        <div class="row wrap" style="gap:8px;align-items:center"><button class="btn btn-primary" id="pgNew">＋ Registrar pago</button>
+        <div class="row wrap" style="gap:8px;align-items:center"><button class="btn btn-primary" id="pgNew">＋ Registrar pago</button><button class="btn" id="pgCta">📒 Estado de cuenta</button>
           <div class="chips" id="pgR">${[['hoy', 'Hoy'], ['7d', 'Últimos 7 días'], ['mes', 'Este mes']].map(([k, l]) => `<button class="chip ${st.r === k ? 'active' : ''}" data-r="${k}">${l}</button>`).join('')}</div></div>
         <div id="pgBody"><p class="muted">Cargando…</p></div>
       </div>${P.creditFooter()}`;
     $('#bell').onclick = P.notifSheet; P.updateBell(); $('#syncPill').onclick = () => P.runSync(true); P.updateSyncPill();
     $('#pgR').onclick = (e) => { const b = e.target.closest('[data-r]'); if (b) { st.r = b.dataset.r; st.list = null; renderSeller(); } };
     $('#pgNew').onclick = () => payForm({ sellerId: sid, onSaved: () => { st.list = null; renderSeller(); } });
+    $('#pgCta').onclick = () => cuentaSheet(sid);
     (async () => {
       await flush();
       const local = (await pend()).filter((p) => p.sellerId === sid).map((p) => ({ ...p, ...calc(p), status: 'local' }));
@@ -382,5 +480,5 @@
     box.onclick = (e) => { const rm = e.target.closest('[data-rm]'); if (rm) { const a = read(); a.splice(+rm.dataset.rm, 1); save(a); } };
   }
 
-  global.Pagos = { calc, METHODS, ADJUSTS, BANKS, normRef, renderSeller, renderOffice, renderAccounts, payForm, flush };
+  global.Pagos = { calc, METHODS, ADJUSTS, BANKS, normRef, renderSeller, renderOffice, renderAccounts, payForm, cuentaSheet, fillStatus, flush };
 })(window);
