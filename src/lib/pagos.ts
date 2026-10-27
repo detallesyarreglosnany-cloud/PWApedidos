@@ -98,8 +98,10 @@ export const notaNum = (v: unknown) => String(v ?? '').replace(/\D/g, '').replac
 export const noteKey = (n: { nota?: string; orderId?: string }) => (notaNum(n.nota) ? 'n:' + notaNum(n.nota) : 'o:' + String(n.orderId || ''));
 
 export type Abono = { pagado: number; aprobado: number; espera: number; pagos: string[] };
+/** Llave de lo abonado: el cliente + su nota. Un pago nunca abona la nota de otro cliente aunque el número coincida. */
+export const abonoKey = (clientId: string, n: { nota?: string; orderId?: string }) => `${clientId}|${noteKey(n)}`;
 /** Reparte lo pagado de cada pago entre sus notas, en el orden en que se marcaron (la última se lleva lo que sobre). */
-export function allocate(pagos: Pago[]) {
+export function allocate(pagos: Pago[], canon: (id: string) => string = (id) => id) {
   const out = new Map<string, Abono>();
   for (const p of pagos) {
     if (p.status !== 'espera' && p.status !== 'aprobado') continue;
@@ -107,7 +109,7 @@ export function allocate(pagos: Pago[]) {
     p.notas.forEach((n, i) => {
       const take = r2(i === p.notas.length - 1 ? left : Math.min(left, n.monto));
       left = r2(left - take);
-      const k = noteKey(n), a = out.get(k) || { pagado: 0, aprobado: 0, espera: 0, pagos: [] };
+      const k = abonoKey(canon(p.clientId), n), a = out.get(k) || { pagado: 0, aprobado: 0, espera: 0, pagos: [] };
       a.pagado = r2(a.pagado + take);
       if (p.status === 'aprobado') a.aprobado = r2(a.aprobado + take); else a.espera = r2(a.espera + take);
       if (!a.pagos.includes(p.id)) a.pagos.push(p.id);
