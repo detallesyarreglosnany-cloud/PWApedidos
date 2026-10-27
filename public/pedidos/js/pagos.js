@@ -40,6 +40,7 @@
     const n = Number(s.includes(',') ? s.replace(/\./g, '').replace(',', '.') : /^\d{1,3}(\.\d{3})+$/.test(s) ? s.replace(/\./g, '') : s); return Number.isFinite(n) ? n : 0; };
   // Tasas: «40,25» o «40.25» (nunca separador de miles)
   const decRate = (v) => { const n = Number(String(v == null ? '' : v).trim().replace(',', '.')); return Number.isFinite(n) ? n : 0; };
+  const REF_MIN = 6; // referencia completa (igual que el servidor)
   const normRef = (v) => String(v == null ? '' : v).toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^0+(?=[0-9])/, '');
   const PV = () => global.PV;
 
@@ -62,16 +63,20 @@
   const setPend = (arr) => global.DB.setMeta('pagosPend', arr);
   let flushing = null;
   function flush() { flushing = flushing || flushNow().finally(() => { flushing = null; }); return flushing; } // uno a la vez
+  // Un pago con un error que el vendedor debe corregir (referencia repetida, nota de otro cliente…) no se reintenta solo
+  const needsFix = (p) => !!p.error && [400, 409, 422].includes(+p.errStatus || 409);
   async function flushNow() {
     const list = await pend(); if (!list.length || !navigator.onLine) return { sent: 0, left: list.length };
-    const left = []; let sent = 0;
+    const left = []; let sent = 0, nuevos = 0;
     for (const p of list) {
-      const r = await global.Sync.pagosCall({ action: 'create', pago: { ...p, error: undefined } });
+      if (needsFix(p)) { left.push(p); continue; }
+      const r = await global.Sync.pagosCall({ action: 'create', pago: { ...p, error: undefined, errStatus: undefined } });
       if (r.ok) sent++;
-      else if (r.offline || !r.status || r.status >= 500) left.push(p);
-      else left.push({ ...p, error: r.error || 'No se pudo subir' }); // p. ej. referencia repetida: el vendedor lo corrige o lo borra
+      else if (r.offline || !r.status || r.status >= 500 || r.status === 401) left.push({ ...p, error: r.status === 401 ? 'Falta tu PIN para subirlo' : undefined, errStatus: r.status === 401 ? 401 : undefined });
+      else { left.push({ ...p, error: r.error || 'No se pudo subir', errStatus: r.status }); nuevos++; } // p. ej. referencia repetida: el vendedor lo corrige o lo borra
     }
     await setPend(left);
+    if (nuevos) { const P = PV(); if (P && P.localNotif) P.localNotif({ kind: 'pago', icon: '⚠', warn: true, msg: `${nuevos} pago${nuevos === 1 ? '' : 's'} guardado${nuevos === 1 ? '' : 's'} sin señal no se pudo subir: corrígelo en «Pagos» (✏️ Corregir).` }); if (P && P.toast) P.toast('⚠ Un pago sin señal necesita corrección: revisa «Pagos»', 'err'); }
     return { sent, left: left.length };
   }
   if (typeof window !== 'undefined') window.addEventListener('online', () => { flush(); });
@@ -127,10 +132,12 @@
   function payForm(opts) {
     const P = PV(), { S, esc, usd, bs, toast, openSheet, today, fmtDate } = P;
     const sid = opts.sellerId, seller = P.sellerById(sid) || { name: '' };
-    const p = { id: global.DB.uid('pg'), date: today(), sellerId: sid, sellerName: seller.name, clientId: '', clientName: '', notas: [], rate: +S.config.exchangeRate || 0,
-      copRate: +S.config.copRate || 0, lines: [{ method: 'transferencia', bank: '', ref: '', amount: '' }], adjusts: [], comment: '', by: opts.by || seller.name };
+    const ed = opts.edit || null; // corregir un pago guardado sin señal que el servidor rechazó (mismo id: nunca se duplica)
+    const p = ed ? { ...ed, notas: ed.notas.map((n) => ({ ...n })), lines: ed.lines.map((l) => ({ method: l.method, bank: l.bank || '', ref: l.ref || '', amount: l.amount })), adjusts: (ed.adjusts || []).map((a) => ({ ...a })), error: undefined, errStatus: undefined }
+      : { id: global.DB.uid('pg'), date: today(), sellerId: sid, sellerName: seller.name, clientId: '', clientName: '', notas: [], rate: +S.config.exchangeRate || 0,
+        copRate: +S.config.copRate || 0, lines: [{ method: 'transferencia', bank: '', ref: '', amount: '' }], adjusts: [], comment: '', by: opts.by || seller.name };
     let cuenta = null, cuentaMsg = '';
-    const sh = openSheet(`<div class="row"><h2 class="grow">💵 Registrar pago</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div><div id="pfBody"></div>`, { wide: true });
+    const sh = openSheet(`<div class="row"><h2 class="grow">💵 ${ed ? 'Corregir pago sin subir' : 'Registrar pago'}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div><div id="pfBody"></div>`, { wide: true });
     const body = sh.el.querySelector('#pfBody');
     const opt = (arr, cur) => arr.map(([v, l]) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`).join('');
     function draw() {
@@ -158,7 +165,7 @@
         ${p.lines.map((l, i) => { const m = METHODS[l.method]; const cl = c.lines[i]; return `<div class="card card-pad pay-line" style="margin-bottom:6px"><div class="row wrap" style="gap:8px;align-items:flex-end">
           <label class="field"><span>Forma</span><select class="select" data-l="${i}" data-k="method">${opt(Object.entries(METHODS).filter(([, x]) => !x.hidden).map(([k, x]) => [k, x.label]), l.method)}</select></label>
           ${m.bank ? `<label class="field"><span>Banco</span><select class="select" data-l="${i}" data-k="bank"><option value="">— Banco —</option>${opt(banksFor().map((b) => [b, b]), l.bank)}</select></label>` : ''}
-          ${m.ref ? `<label class="field"><span>N° de referencia</span><input class="input" data-l="${i}" data-k="ref" value="${esc(l.ref)}" placeholder="Referencia"></label>` : ''}
+          ${m.ref ? `<label class="field"><span>N° de referencia (completa)</span><input class="input" data-l="${i}" data-k="ref" value="${esc(l.ref)}" placeholder="Mínimo ${REF_MIN} dígitos" autocomplete="off"><small class="warn-txt" data-refmsg="${i}">${esc(l._dup || '')}</small></label>` : ''}
           <label class="field"><span>Monto (${m.currency === 'VES' ? 'Bs' : m.currency === 'COP' ? 'COP' : '$'})</span><input class="input" inputmode="decimal" data-l="${i}" data-k="amount" value="${esc(l.amount)}" placeholder="0,00"></label>
           <span class="muted" style="padding-bottom:12px" data-usd="${i}">≈ ${usd(cl ? cl.usd : 0)}</span>
           <button type="button" class="btn btn-sm" data-fill="${i}" title="Poner aquí lo que falta">= lo que falta</button>
@@ -201,6 +208,26 @@
       draw();
     }
     const addNota = (n) => { if (!p.notas.some((x) => nkey(x.nota, x.orderId) === n.key)) p.notas.push({ orderId: n.orderId, nota: n.nota, monto: r2(n.resta) }); };
+    /** Al escribir la referencia: avisa al instante si ya está en otro pago (servidor o este teléfono) y no deja guardar. */
+    const refTimers = {};
+    function setRefMsg(i, msg) { const l = p.lines[i]; if (!l) return; l._dup = msg; const el = body.querySelector(`[data-refmsg="${i}"]`); if (el) el.textContent = msg; }
+    function checkRef(i) {
+      clearTimeout(refTimers[i]);
+      const l = p.lines[i], ref = normRef(l && l.ref);
+      if (!l || ref.length < REF_MIN) { setRefMsg(i, ref && ref.length < REF_MIN ? `Escribe la referencia completa (mínimo ${REF_MIN} dígitos)` : ''); return; }
+      const twice = p.lines.some((x, j) => j !== i && METHODS[x.method] && METHODS[x.method].ref && normRef(x.ref) === ref);
+      if (twice) { setRefMsg(i, '⚠ Esta referencia ya está en otra forma de pago de este mismo pago'); return; }
+      setRefMsg(i, '');
+      refTimers[i] = setTimeout(async () => {
+        const local = (await pend()).find((x) => x.id !== p.id && (x.lines || []).some((y) => normRef(y.ref) === ref));
+        if (local) { setRefMsg(i, `⚠ Ya la usaste en un pago de ${local.clientName} guardado sin señal`); return; }
+        if (!navigator.onLine) return; // sin señal: el servidor la revisa al subir
+        const r = await global.Sync.pagosCall({ action: 'ref', refs: [ref], pagoId: p.id });
+        if (!sh.el.isConnected || normRef(p.lines[i] && p.lines[i].ref) !== ref) return;
+        const u = r.ok && r.data.usadas[ref];
+        setRefMsg(i, u ? `⚠ Referencia ya registrada: pago de ${u.clientName} (${u.sellerName || 'oficina'}, ${fmtDate(u.date)}). Una referencia no se repite: revisa el comprobante.` : '');
+      }, 450);
+    }
     body.addEventListener('input', (e) => {
       const t = e.target;
       if (t.id === 'pfCli') { const sg = body.querySelector('#pfSug'); if (sg) sg.innerHTML = sugHTML(searchHits(t.value, sid), t.value); return; }
@@ -208,7 +235,7 @@
       if (t.id === 'pfRate') p.rate = decRate(t.value);
       else if (t.id === 'pfCop') p.copRate = decRate(t.value);
       else if (t.id === 'pfCom') p.comment = t.value;
-      else if (t.dataset.l !== undefined) p.lines[+t.dataset.l][t.dataset.k] = t.value;
+      else if (t.dataset.l !== undefined) { p.lines[+t.dataset.l][t.dataset.k] = t.value; if (t.dataset.k === 'ref') checkRef(+t.dataset.l); }
       else if (t.dataset.a !== undefined) p.adjusts[+t.dataset.a][t.dataset.k] = t.value;
       else return;
       refresh();
@@ -262,23 +289,26 @@
         const err = body.querySelector('#pfErr');
         const out = { ...p, notas: p.notas.map((n) => ({ ...n })), lines: p.lines.map((l) => ({ ...l, amount: dec(l.amount), ref: METHODS[l.method].ref ? normRef(l.ref) : '' })),
           adjusts: p.adjusts.map((a) => ({ type: a.type, pct: dec(a.pct), usd: dec(a.usd) })) };
+        const dupL = p.lines.find((l) => l._dup && /^⚠/.test(l._dup)); if (dupL) { err.textContent = dupL._dup + ' Corrígela para poder guardar.'; return; }
         if (!out.clientId) { err.textContent = 'Elige el cliente de tu cartera'; return; }
         if (!out.notas.length) { err.textContent = 'Marca la nota (o notas) que paga'; return; }
         for (const l of out.lines) {
           const m = METHODS[l.method];
           if (!(l.amount > 0)) { err.textContent = `Escribe el monto de ${m.label}`; return; }
           if (m.bank && !l.bank) { err.textContent = `${m.label}: elige el banco`; return; }
-          if (m.ref && l.ref.length < 4) { err.textContent = `${m.label}: escribe el número de referencia`; return; }
+          if (m.ref && l.ref.length < REF_MIN) { err.textContent = `${m.label}: escribe la referencia completa (mínimo ${REF_MIN} dígitos)`; return; }
           if (m.currency === 'VES' && !(out.rate > 0)) { err.textContent = 'Escribe la tasa del día (Bs por $)'; return; }
           if (m.currency === 'COP' && !(out.copRate > 0)) { err.textContent = 'Escribe la tasa de los pesos (COP por $)'; return; }
         }
         const refs = out.lines.filter((l) => l.ref).map((l) => l.ref);
         if (new Set(refs).size !== refs.length) { err.textContent = 'La misma referencia está dos veces'; return; }
+        out.lines.forEach((l) => { delete l._dup; });
         const c = calc(out);
         if (c.diferencia > 0.01 && !confirm(`Falta ${usd(c.diferencia)} para cubrir lo que debe. ¿Guardar como abono?`)) return;
         t.disabled = true;
         const r = await global.Sync.pagosCall({ action: 'create', pago: out });
         t.disabled = false;
+        if (ed && (r.ok || r.offline || !r.status || r.status >= 500)) await setPend((await pend()).filter((x) => x.id !== p.id));
         if (r.ok) { sh.close(); toast('Pago guardado: queda en espera de cobranza', 'ok'); P.logEvent('pago', `Registró pago de ${out.clientName} · ${usd(c.pagado + c.ajustes)}`, { clientName: out.clientName }); if (opts.onSaved) opts.onSaved(); return; }
         if (r.offline || !r.status || r.status >= 500) {
           await setPend((await pend()).concat(out)); sh.close();
@@ -289,7 +319,8 @@
       }
     });
     draw();
-    if (opts.clientId) pickClient(opts.clientId, opts.notaKey || '');
+    if (ed) { fetchCuenta(p.clientId, sid).then((r) => { if (!sh.el.isConnected) return; cuenta = r.notas; cuentaMsg = r.msg || ''; draw(); p.lines.forEach((l, i) => { if (l.ref) checkRef(i); }); }); }
+    else if (opts.clientId) pickClient(opts.clientId, opts.notaKey || '');
     else setTimeout(() => { const i = body.querySelector('#pfCli'); if (i) i.focus(); }, 60);
   }
 
@@ -412,10 +443,11 @@
         <div class="row wrap" style="gap:8px;margin:10px 0"><button class="btn" id="pgPrint">🖨 Imprimir para cobranzas</button><button class="btn" id="pgXls">⇩ Excel</button></div>
         ${list.length ? list.map((p, i) => `<div class="card card-pad" style="margin-bottom:8px" data-i="${i}"><div class="row wrap" style="gap:8px;align-items:center"><b class="grow">${esc(p.clientName)} · ${usd(p.pagado + p.ajustes)}</b>${pill(p.status)}</div>
           ${payHTML(p)}${p.error ? `<div class="hint warn">⚠ ${esc(p.error)}</div>` : ''}
-          ${p.status === 'espera' ? `<div class="actions"><button class="btn btn-sm" data-anular="${esc(p.id)}">Anular (me equivoqué)</button></div>` : p.status === 'local' ? `<div class="actions"><button class="btn btn-sm" data-borrar="${esc(p.id)}">Borrar del teléfono</button></div>` : ''}</div>`).join('')
+          ${p.status === 'espera' ? `<div class="actions"><button class="btn btn-sm" data-anular="${esc(p.id)}">Anular (me equivoqué)</button></div>` : p.status === 'local' ? `<div class="actions">${p.error ? `<button class="btn btn-sm btn-primary" data-corregir="${esc(p.id)}">✏️ Corregir</button>` : ''}<button class="btn btn-sm" data-borrar="${esc(p.id)}">Borrar del teléfono</button></div>` : ''}</div>`).join('')
           : '<div class="empty card"><strong>Sin pagos en este período</strong>Toca «＋ Registrar pago».</div>'}`;
       box.onclick = async (e) => {
-        const an = e.target.closest('[data-anular]'), bo = e.target.closest('[data-borrar]');
+        const an = e.target.closest('[data-anular]'), bo = e.target.closest('[data-borrar]'), co = e.target.closest('[data-corregir]');
+        if (co) { const x = (await pend()).find((q) => q.id === co.dataset.corregir); if (x) payForm({ sellerId: sid, edit: x, onSaved: () => { st.list = null; renderSeller(); } }); return; }
         if (an) { if (!confirm('¿Anular este pago? Se libera su referencia para registrarlo bien.')) return; const r2x = await global.Sync.pagosCall({ action: 'anular', id: an.dataset.anular, sellerId: sid }); toast(r2x.ok ? 'Pago anulado' : r2x.error || 'No se pudo', r2x.ok ? 'ok' : 'err'); st.list = null; renderSeller(); }
         if (bo) { if (!confirm('¿Borrar este pago que no se ha subido?')) return; await setPend((await pend()).filter((p) => p.id !== bo.dataset.borrar)); renderSeller(); }
       };

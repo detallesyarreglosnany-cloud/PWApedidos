@@ -7,7 +7,7 @@ import { SEGUIMIENTO, type CredSetting } from '@/lib/cobranza';
 import { cartera, clientAliases } from '@/lib/cartera';
 import { sendPush } from '@/lib/push';
 import { createHash } from 'crypto';
-import { METHODS, abonoKey, allocate, cleanPago, normRef, noteKey, notaNum, noteStatus, r2, type Pago } from '@/lib/pagos';
+import { METHODS, REF_MIN, abonoKey, allocate, cleanPago, normRef, noteKey, notaNum, noteStatus, r2, type Pago } from '@/lib/pagos';
 
 // Pagos de clientes (Fase 4 · cobranza).
 // POST /api/pedidos/pagos
@@ -21,6 +21,7 @@ import { METHODS, abonoKey, allocate, cleanPago, normRef, noteKey, notaNum, note
 //     { action: 'cartera', sellerId? }            → { notas, alDia, hoy }  cuentas por cobrar con vencimientos (sin sellerId: todos, solo oficina)
 //     { action: 'creditos', sellerId? }           → { clientes }  récord y crédito de cada cliente (oficina o supervisor)
 //     { action: 'credito', clientId, modo, limite, nota } → { ok }  cobranza fija contado/crédito y límite (solo oficina)
+//     { action: 'ref', refs, pagoId? }            → { usadas: { ref: { clientName, sellerName, date, status } } }  aviso al escribir
 //     { action: 'integridad' }                    → { cruzados, ajenos, refs, sobre }  revisión de solo lectura (oficina o supervisor)
 //     { action: 'importCobro', rows }             → { added }  restaurar crédito y seguimientos de un respaldo
 //     { action: 'seguir', sellerId, clientId, key, nota, estado, comentario } → { ok }  seguimiento de cobro (le llega a la oficina)
@@ -244,6 +245,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ byKey, byIdx }, { headers: NO_STORE });
     }
 
+    if (action === 'ref') {
+      // Consulta al escribir: ¿esta referencia ya está en otro pago? (solo lectura)
+      const refs = [...new Set((Array.isArray(body.refs) ? body.refs : []).slice(0, 12).map(normRef).filter((r) => r.length >= REF_MIN))];
+      const usadas: Record<string, unknown> = {};
+      for (const ref of refs) { const c = await conflictOf(ref); if ('pagoId' in c && c.pagoId !== str(body.pagoId, 80)) usadas[ref] = c; }
+      return NextResponse.json({ usadas }, { headers: NO_STORE });
+    }
+
     if (action === 'integridad') {
       // Revisión de solo lectura: pagos vivos (en espera o aprobados) que abonan notas de otro cliente, de clientes de otro
       // vendedor, referencias sin reservar o usadas por dos pagos, y notas con más abonado que su monto.
@@ -396,7 +405,7 @@ export async function POST(req: NextRequest) {
           if (await db.distPago.findUnique({ where: { id } })) { res.repetidos++; continue; }
           // La nota tiene que ser de ese cliente (si existe en la plataforma)
           if (nota) { const ajeno = (owners.get(nota) || []).find((o) => canon(String(o.clientId)) !== canon(clientId)); if (ajeno) { res.errores.push(`Fila ${fila}: ${otherMsg(nota, ajeno, clientName)}`); continue; } }
-          if (ref && ref.length >= 4) {
+          if (ref && ref.length >= REF_MIN) {
             const used = await db.distPagoRef.findUnique({ where: { ref } });
             if (used) {
               const other = await db.distPago.findUnique({ where: { id: used.pagoId } });
@@ -420,7 +429,7 @@ export async function POST(req: NextRequest) {
           const amount = r2(Number(x.amount) || usd), currency = METHODS[method].currency;
           const p: Pago = {
             id, date, sellerId, sellerName: str(x.sellerName, 80), clientId, clientName, notas: [{ orderId: str(x.orderId, 120) || (nota ? 'manual:' + nota : 'fm:' + id), nota, monto: montoNota > 0 ? montoNota : usd }],
-            rate: r2(Number(x.rate) || 0), copRate: 0, lines: [{ method, bank: str(x.bank, 80), ref: ref.length >= 4 ? ref : '', currency, amount: currency === 'USD' ? usd : amount, usd }], adjusts: [],
+            rate: r2(Number(x.rate) || 0), copRate: 0, lines: [{ method, bank: str(x.bank, 80), ref: ref.length >= REF_MIN ? ref : '', currency, amount: currency === 'USD' ? usd : amount, usd }], adjusts: [],
             debe: montoNota > 0 ? montoNota : usd, pagado: usd, ajustes: 0, diferencia: r2((montoNota > 0 ? montoNota : usd) - usd), comment: str(x.comment, 300), origen: 'filemaker', info: str(x.info, 200),
             status: 'aprobado', by: 'FileMaker', createdAt: new Date().toISOString(), review: { by: 'FileMaker', at: new Date().toISOString(), motivo: 'Importado de FileMaker' },
           };
