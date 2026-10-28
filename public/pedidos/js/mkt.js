@@ -50,14 +50,20 @@
   };
 
   /* ---------------- Datos ---------------- */
+  /**
+   * Lanzamiento: hasta que la Oficina o Gerencia lancen la vitrina, los vendedores no la ven.
+   * Gerencia sí la ve al tomar pedidos (para probarla en la tablet antes del lanzamiento oficial).
+   */
+  const lanzada = () => { const m = PV().S.mkt; return !!(m && m.lanzamiento && m.lanzamiento.lanzada); };
+  const enabled = () => lanzada() || !!(PV().gerMode && PV().gerMode());
   function data() {
     const m = PV().S.mkt;
     return { vitrinas: m && Array.isArray(m.vitrinas) ? m.vitrinas : DEF_VITRINAS, mezclas: m && Array.isArray(m.mezclas) ? m.mezclas : DEF_MEZCLAS,
-      combos: m && Array.isArray(m.combos) ? m.combos : [], campana: (m && m.campana) || null, saved: !!m };
+      combos: m && Array.isArray(m.combos) ? m.combos : [], campana: (m && m.campana) || null, lanzamiento: (m && m.lanzamiento) || null, saved: !!m };
   }
   async function save(patch, what) {
     const P = PV(), d = data();
-    await P.saveDocs('config', { ...(P.S.mkt || {}), id: 'mkt', vitrinas: d.vitrinas, mezclas: d.mezclas, combos: d.combos, campana: d.campana, ...patch });
+    await P.saveDocs('config', { ...(P.S.mkt || {}), id: 'mkt', vitrinas: d.vitrinas, mezclas: d.mezclas, combos: d.combos, campana: d.campana, lanzamiento: d.lanzamiento, ...patch });
     if (what) P.logEvent('marketing', what);
     P.runSync(false);
   }
@@ -536,7 +542,12 @@
     const P = PV(), { esc, toast } = P, d = data(), c = d.campana || { activa: false, tema: 'navidad', titulo: '', frase: '', meta: '', metaLbl: '' };
     const has = (arr, id) => arr.some((x) => x.id === id);
     const faltan = NAV.vitrinas.filter((v) => !has(d.vitrinas, v.id)).length + NAV.mezclas.filter((x) => !has(d.mezclas, x.id)).length + NAV.combos.filter((x) => !has(d.combos, x.id)).length;
-    body.innerHTML = `<div class="card card-pad mk-camp-pre">${campanaHTML() || '<p class="muted">La campaña no está visible hoy (apagada o fuera de fechas).</p>'}</div>
+    const lz = d.lanzamiento;
+    body.innerHTML = `<div class="card card-pad mk-launch ${lz && lz.lanzada ? 'on' : ''}"><div class="row wrap" style="gap:10px;align-items:center"><div class="grow">
+        ${lz && lz.lanzada ? `<h3 style="margin:0">🚀 Vitrina lanzada</h3><p class="muted" style="margin:4px 0 0">Los vendedores la ven desde el ${esc(P.fmtDate(String(lz.at).slice(0, 10)))}${lz.by ? ' (lanzó ' + esc(lz.by) + ')' : ''}.</p>`
+          : '<h3 style="margin:0">🔒 Vitrina en preparación</h3><p class="muted" style="margin:4px 0 0">Los vendedores todavía <b>no la ven</b>. Gerencia puede probarla en «Tomar pedido». Cuando esté lista, lánzala.</p>'}</div>
+        <button class="btn" id="cmPrev">👁 Vista previa</button>${lz && lz.lanzada ? '<button class="btn btn-danger" id="cmOff">Ocultar de nuevo</button>' : '<button class="btn btn-primary" id="cmLaunch">🚀 Lanzar la vitrina</button>'}</div></div>
+      <div class="card card-pad mk-camp-pre">${campanaHTML() || '<p class="muted">La campaña no está visible hoy (apagada o fuera de fechas).</p>'}</div>
       ${faltan ? `<div class="hint">🎄 <b>Campaña navideña lista para cargar</b>: ${NAV.vitrinas.length} vitrinas por etapa (Feria de la Chinita → Hallaquiada → Patinatas → Nochebuena → Año Nuevo), ${NAV.mezclas.length} mezclas y ${NAV.combos.length} combos en borrador para que les pongas precio y Gerencia los autorice. Cada vitrina aparece sola en sus fechas.
         <div style="margin-top:8px"><button class="btn btn-primary" id="cmLoad">✨ Cargar la campaña navideña</button></div></div>` : '<div class="hint">✅ La campaña navideña ya está cargada: revisa las vitrinas y ponles precio a los combos.</div>'}
       <div class="card card-pad"><h3 style="margin-top:0">Encabezado de la campaña</h3>
@@ -548,6 +559,12 @@
           <label class="field"><span>Se muestra desde</span><input id="cmD" type="date" class="input" value="${esc(c.desde || '')}"></label><label class="field"><span>hasta</span><input id="cmH" type="date" class="input" value="${esc(c.hasta || '')}"></label></div>
         <div class="actions"><button class="btn btn-primary" id="cmOk">Guardar encabezado</button></div></div>`;
     const q = (x) => body.querySelector(x);
+    const who = (P.S.settings && P.S.settings.userName) || (P.S.config && P.S.config.adminName) || 'Oficina';
+    const lb = q('#cmLaunch');
+    if (lb) lb.onclick = async () => { if (!confirm('¿Lanzar la vitrina? Desde ahora todos los vendedores la ven en «Tomar pedido».')) return; await save({ lanzamiento: { lanzada: true, at: new Date().toISOString(), by: who } }, '🚀 Lanzó la vitrina'); toast('🚀 Vitrina lanzada: ya la ven los vendedores', 'ok'); done(); };
+    const lo = q('#cmOff');
+    if (lo) lo.onclick = async () => { if (!confirm('¿Ocultar la vitrina a los vendedores?')) return; await save({ lanzamiento: { lanzada: false, at: new Date().toISOString(), by: who } }, 'Ocultó la vitrina a los vendedores'); done(); };
+    q('#cmPrev').onclick = () => preview();
     const ld = q('#cmLoad');
     if (ld) ld.onclick = async () => {
       const v = d.vitrinas.concat(NAV.vitrinas.filter((x) => !has(d.vitrinas, x.id)));
@@ -671,5 +688,13 @@
     if (del) del.onclick = async () => { if (!confirm(`¿Eliminar la mezcla «${x.nombre}»?`)) return; await save({ mezclas: data().mezclas.filter((y) => y.id !== x.id) }, `Eliminó la mezcla «${x.nombre}»`); sh.close(); done(); };
   }
 
-  global.Mkt = { data, comboV, comboOk, comboAlloc, comboLive, applyCmb, addCombo, NAV, productsOf, sizeOf, itemProduct, renderSeller, afterRender, onSellerClick, siempreOf, combinaCon, ficha, visible, render, DEF_VITRINAS, DEF_MEZCLAS };
+  /** Vista previa de la vitrina tal como la verá el vendedor (sin cliente: solo para mirar). */
+  function preview() {
+    const P = PV(), sh = P.openSheet(`<div class="row"><h2 class="grow">👁 Vista previa de la vitrina</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <p class="muted">Así la verá el vendedor en la tablet. Para probar agregar productos, Gerencia puede usarla en «Tomar pedido».</p><div class="plist vt-mode vt-preview">${renderSeller(null)}</div>`, { wide: true });
+    afterRender(sh.el);
+    sh.el.addEventListener('click', (e) => { const go = e.target.closest('[data-vgo]'); if (go) { const t = sh.el.querySelector('#vt-' + CSS.escape(go.dataset.vgo)); if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' }); } });
+  }
+
+  global.Mkt = { enabled, lanzada, preview, data, comboV, comboOk, comboAlloc, comboLive, applyCmb, addCombo, NAV, productsOf, sizeOf, itemProduct, renderSeller, afterRender, onSellerClick, siempreOf, combinaCon, ficha, visible, render, DEF_VITRINAS, DEF_MEZCLAS };
 })(window);

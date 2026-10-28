@@ -1038,7 +1038,7 @@
       <section class="catalog-tools">
         <div class="search"><input id="q" class="input" type="search" placeholder="Buscar producto, sabor, gramaje o código…" value="${esc(S.ui.q)}" aria-label="Buscar producto"></div>
         <div class="chips" id="catChips">
-          ${window.Mkt ? `<button class="chip vt-chip ${S.ui.vitrina ? 'active' : ''}" data-vt="1" title="Vitrina para mostrarle al cliente (lo que agregues va a su pedido)">🛍 Vitrina</button>` : ''}
+          ${window.Mkt && Mkt.enabled() ? `<button class="chip vt-chip ${S.ui.vitrina ? 'active' : ''}" data-vt="1" title="Vitrina para mostrarle al cliente (lo que agregues va a su pedido)">🛍 Vitrina</button>` : ''}
           <button class="chip ${!S.ui.vitrina && !S.ui.cat && !S.ui.onlyInOrder ? 'active' : ''}" data-cat="">Todos</button>
           <button class="chip ${S.ui.onlyInOrder ? 'active' : ''}" data-only="1">🧾 En pedido</button>
           ${cats.map((c) => `<button class="chip ${S.ui.cat === c ? 'active' : ''}" data-cat="${esc(c)}">${rubroIcon(c)} ${esc(c)}</button>`).join('')}
@@ -1150,7 +1150,7 @@
       return;
     }
     // Modo vitrina (tablet): las vitrinas de Promoción y marketing; al buscar, vuelve a la lista
-    if (S.ui.vitrina && !S.ui.q && !S.ui.onlyInOrder && window.Mkt) { list.innerHTML = hint + Mkt.renderSeller(o); list.classList.add('vt-mode'); Mkt.afterRender(list); return; }
+    if (S.ui.vitrina && !S.ui.q && !S.ui.onlyInOrder && window.Mkt && Mkt.enabled()) { list.innerHTML = hint + Mkt.renderSeller(o); list.classList.add('vt-mode'); Mkt.afterRender(list); return; }
     list.classList.remove('vt-mode');
     // Encabezados de rubro / subgrupo (ej. REFRESCOS · 2 L)
     let last = '';
@@ -2124,7 +2124,7 @@
     syncInfo: () => ({ idle: isIdle(), every: syncEvery(), last: lastSyncResult }), _idleSince: (ms) => { lastInput = Date.now() - ms; },
     loadAll, saveDocs, saveOrder, saveSettings, setSession, msgThreadHTML, rememberOffice, forgetOffice, PERSIST_HINT, runSync, updateSyncPill, render, refreshAfterRemote, updateBell, beep, logEvent, isSupervisor,
     notifSheet, refreshPush,
-    productById, sellerById, orderById, clientById, rubros, orderLinesHTML, groupLines, groupedRows, productHTML, setQty, applyQty, activeOrder, popularity, gainOf, isNewProduct,
+    gerMode, productById, sellerById, orderById, clientById, rubros, orderLinesHTML, groupLines, groupedRows, productHTML, setQty, applyQty, activeOrder, popularity, gainOf, isNewProduct,
     boot, localNotif,
   };
 })();
