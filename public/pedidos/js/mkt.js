@@ -18,7 +18,6 @@
     { id: 'v_salsas', nombre: 'Kiero, la sazón del hogar', frase: 'Comida casera en minutos, para cuando no hay tiempo: napolitana, rabiata, boloñesa, guiso… en todos los tamaños', icono: '🍝', hue: 14, buscar: ['salsa', 'kiero'], orden: 'peso', sello: '👩‍🍳 La que más se lleva', activa: true },
     { id: 'v_maltas', nombre: 'Nuestra morena, el sabor de aquí', frase: 'Refrescante y bien nuestra: nada que envidiarle a nadie', icono: '🟤', hue: 28, buscar: ['malta'], orden: 'ventas', sello: '🇻🇪 La preferida', activa: true },
     { id: 'v_finde', nombre: 'Para tus fines de semana', frase: 'Cervezas, sangrías y licores bien fríos para compartir', icono: '🍻', hue: 205, buscar: ['cerveza', 'toxica', 'sangria', 'ron', 'anis', 'whisky', 'licor', 'vino'], orden: 'ventas', sello: '🔥 Se va rápido', adultos: true, activa: true },
-    { id: 'v_navidad', nombre: 'Navidad y fin de año: brinda con los tuyos', frase: 'Lo que no puede faltar en la mesa, el brindis y las visitas de diciembre', icono: '🎄', hue: 150, buscar: ['ron', 'anis', 'whisky', 'vino', 'sangria', 'toxica', 'galleta', 'coca', 'chinotto'], orden: 'ventas', sello: '🎁 Infaltable en diciembre', activa: true, desde: '2026-11-15', hasta: '2027-01-06' },
     { id: 'v_evento', nombre: 'Todo para tu evento o celebración', frase: 'Cotillón, piñata y mesa de dulces: chowy, surtidos y galletas para todos', icono: '🎉', hue: 300, buscar: ['chowy', 'surtido', 'galleta', 'wabi', 'cotufi', 'charmy', 'mini maria', 'punto rojo'], orden: 'ventas', sello: '🎈 Infaltable en la fiesta', activa: true },
   ];
   const DEF_MEZCLAS = [
@@ -27,14 +26,38 @@
     { id: 'x_anis', nombre: 'Anís refrescante', frase: 'Suave y fresco para la tarde', icono: '🍸', vitrina: 'v_finde', items: [{ q: 'anis', cajas: 1, unidades: 0 }, { q: 'chinotto', cajas: 1, unidades: 0 }], pasos: 'Una medida de anís, completa con Chinotto frío y hielo. Decora con hojas de menta o limón.' },
   ];
 
+  /* ---------------- Campaña navideña (se carga desde «🎄 Campaña»; cada vitrina sale sola en sus fechas) ---------------- */
+  const NAV = {
+    campana: { activa: true, tema: 'navidad', titulo: 'Esta Navidad, el sabor se hace en familia', frase: 'De la Chinita al Año Nuevo: gaitas, hallacas y brindis con los tuyos', meta: '2026-12-24', metaLbl: 'Nochebuena', desde: '2026-11-10', hasta: '2027-01-06' },
+    vitrinas: [
+      { id: 'n_gaita', nombre: '¡Arrancó la gaita!', frase: 'Feria de la Chinita: las gaitas suenan más sabrosas con todo bien frío', icono: '🥁', hue: 42, buscar: ['refresco', 'coca', 'zulia', 'malta', 'cerveza', 'toxica'], orden: 'ventas', sello: '🎶 El de la feria', activa: true, desde: '2026-11-10', hasta: '2026-11-24' },
+      { id: 'n_hallaca', nombre: 'La hallaquiada se hace en familia', frase: 'Mientras se amasa, se amarra y se echa el cuento: Coca-Cola, Zulia y Tóxica para toda la familia', icono: '🫔', hue: 150, buscar: ['coca', 'zulia', 'refresco', 'toxica', 'malta', 'cerveza', 'guiso'], orden: 'ventas', sello: '🎄 No falta en la hallaquiada', activa: true, desde: '2026-11-20', hasta: '2026-12-23' },
+      { id: 'n_patinata', nombre: 'Patinatas y aguinaldos', frase: 'Para los niños en la madrugada de diciembre: néctares, galletas y chucherías', icono: '🛼', hue: 200, buscar: ['nectar', 'jugo', 'galleta', 'chowy', 'surtido', 'cotufi', 'wabi'], orden: 'ventas', sello: '⭐ Favorito de los niños', activa: true, desde: '2026-12-10', hasta: '2026-12-24' },
+      { id: 'n_nochebuena', nombre: 'Nochebuena: la mesa y el brindis', frase: 'Pan de jamón, hallacas y un buen brindis: que no falte nada el 24', icono: '🍷', hue: 356, buscar: ['ron', 'anis', 'whisky', 'vino', 'sangria', 'toxica', 'coca', 'refresco', 'cerveza'], orden: 'ventas', sello: '🎁 Infaltable el 24', adultos: true, activa: true, desde: '2026-12-15', hasta: '2026-12-25' },
+      { id: 'n_anonuevo', nombre: '¡Feliz Año! El brindis de las 12', frase: 'Las 12 uvas, el abrazo y el brindis: celebra el año nuevo con los tuyos', icono: '🥂', hue: 45, buscar: ['sangria', 'toxica', 'anis', 'ron', 'whisky', 'vino', 'cerveza', 'refresco', 'coca'], orden: 'ventas', sello: '✨ Para el brindis', adultos: true, activa: true, desde: '2026-12-26', hasta: '2027-01-06' },
+    ],
+    mezclas: [
+      { id: 'nx_sangria', nombre: 'Sangría navideña', frase: 'Roja como la Navidad', icono: '🍷', vitrina: 'n_nochebuena', items: [{ q: 'toxica tinta', cajas: 1, unidades: 0 }, { q: 'chinotto', cajas: 1, unidades: 0 }], pasos: 'Tóxica tinta y Chinotto bien frío, con trozos de manzana, naranja y canela. Se sirve con hielo.' },
+      { id: 'nx_cuba', nombre: 'Cuba libre del brindis', frase: 'El clásico de las 12', icono: '🥃', vitrina: 'n_anonuevo', items: [{ q: 'ron', cajas: 1, unidades: 0 }, { q: 'coca cola', cajas: 1, unidades: 0 }], pasos: 'Una medida de ron, Coca-Cola bien fría, hielo y una rodaja de limón.' },
+    ],
+    combos: [
+      { id: 'c_hallaca', nombre: 'Combo Hallaquiada en familia', frase: 'Todo lo de tomar para la jornada de hallacas', icono: '🫔', vitrina: 'n_hallaca', items: [{ q: 'coca cola', cajas: 2, unidades: 0 }, { q: 'zulia', cajas: 1, unidades: 0 }, { q: 'toxica', cajas: 1, unidades: 0 }], incluye: '', desde: '2026-11-20', hasta: '2026-12-23' },
+      { id: 'c_gaitero', nombre: 'Combo Gaitero', frase: 'Para la feria y las parrandas', icono: '🥁', vitrina: 'n_gaita', items: [{ q: 'cerveza', cajas: 2, unidades: 0 }, { q: 'malta', cajas: 1, unidades: 0 }], incluye: '', desde: '2026-11-10', hasta: '2026-11-24' },
+      { id: 'c_patinata', nombre: 'Combo Patinata', frase: 'Para que los niños salgan a patinar con todo', icono: '🛼', vitrina: 'n_patinata', items: [{ q: 'nectar', cajas: 2, unidades: 0 }, { q: 'galleta', cajas: 1, unidades: 0 }, { q: 'chowy', cajas: 1, unidades: 0 }], incluye: '', desde: '2026-12-10', hasta: '2026-12-24' },
+      { id: 'c_nochebuena', nombre: 'Combo Nochebuena', frase: 'La mesa y el brindis del 24', icono: '🍷', vitrina: 'n_nochebuena', items: [{ q: 'toxica', cajas: 1, unidades: 0 }, { q: 'coca cola', cajas: 1, unidades: 0 }, { q: 'anis', cajas: 1, unidades: 0 }], incluye: '', desde: '2026-12-15', hasta: '2026-12-25' },
+      { id: 'c_anonuevo', nombre: 'Combo Brindis de Año Nuevo', frase: 'Para recibir el año como se debe', icono: '🥂', vitrina: 'n_anonuevo', items: [{ q: 'sangria', cajas: 2, unidades: 0 }, { q: 'refresco', cajas: 1, unidades: 0 }], incluye: '', desde: '2026-12-26', hasta: '2027-01-06' },
+    ],
+  };
+
   /* ---------------- Datos ---------------- */
   function data() {
     const m = PV().S.mkt;
-    return { vitrinas: m && Array.isArray(m.vitrinas) ? m.vitrinas : DEF_VITRINAS, mezclas: m && Array.isArray(m.mezclas) ? m.mezclas : DEF_MEZCLAS, saved: !!m };
+    return { vitrinas: m && Array.isArray(m.vitrinas) ? m.vitrinas : DEF_VITRINAS, mezclas: m && Array.isArray(m.mezclas) ? m.mezclas : DEF_MEZCLAS,
+      combos: m && Array.isArray(m.combos) ? m.combos : [], campana: (m && m.campana) || null, saved: !!m };
   }
   async function save(patch, what) {
     const P = PV(), d = data();
-    await P.saveDocs('config', { ...(P.S.mkt || {}), id: 'mkt', vitrinas: d.vitrinas, mezclas: d.mezclas, ...patch });
+    await P.saveDocs('config', { ...(P.S.mkt || {}), id: 'mkt', vitrinas: d.vitrinas, mezclas: d.mezclas, combos: d.combos, campana: d.campana, ...patch });
     if (what) P.logEvent('marketing', what);
     P.runSync(false);
   }
@@ -78,6 +101,88 @@
     return active().find((p) => t.every((w) => hayOf(p).includes(w))) || null;
   }
 
+  /* ---------------- Combos (espejo de src/lib/money.ts: el servidor recalcula y verifica lo mismo) ---------------- */
+  const r2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+  /** Huella de lo que Gerencia autoriza: si cambian productos, cantidades, regalos o precio, vuelve a autorización. */
+  function comboV(c) {
+    const str = JSON.stringify({ items: (c.items || []).map((it) => ({ pid: String(it.pid || ''), cajas: +it.cajas || 0, unidades: +it.unidades || 0, regalo: !!it.regalo })), precio: r2(+c.precio || 0) });
+    let h = 5381; for (let i = 0; i < str.length; i++) h = ((h * 33) ^ str.charCodeAt(i)) >>> 0;
+    return h.toString(36);
+  }
+  const comboOk = (c) => !!(c && c.aprobado && c.aprobado.v === comboV(c));
+  /** Valor normal del combo (S), su descuento (D) y el descuento de cada producto (prices: precios de la línea o del catálogo). */
+  function comboAlloc(c, prices) {
+    const parts = [];
+    for (const it of c.items || []) {
+      const p = prices(String(it.pid || '')); if (!p) return null;
+      if ((+it.cajas || 0) > 0) parts.push({ pid: String(it.pid), um: 'cj', q: +it.cajas, v: r2(+it.cajas * (+p.boxPrice || 0)) });
+      if ((+it.unidades || 0) > 0) parts.push({ pid: String(it.pid), um: 'un', q: +it.unidades, v: r2(+it.unidades * (+p.unitPrice || 0)) });
+    }
+    const S = r2(parts.reduce((a, x) => a + x.v, 0)), D = r2(S - (+c.precio || 0));
+    if (!parts.length || S <= 0 || D < 0) return null;
+    const out = {}; let used = 0;
+    parts.forEach((x, i) => {
+      const d = i === parts.length - 1 ? r2(D - used) : r2((D * x.v) / S); used = r2(used + d);
+      const o = (out[x.pid] = out[x.pid] || { cj: 0, un: 0, dcj: 0, dun: 0 });
+      if (x.um === 'cj') { o.cj += x.q; o.dcj += d; } else { o.un += x.q; o.dun += d; }
+    });
+    return { S, D, out };
+  }
+  const catPrices = (pid) => PV().productById(pid);
+  /** Combo que el vendedor puede ofrecer hoy: autorizado por Gerencia, dentro de sus fechas y con todos sus productos. */
+  const comboLive = (c) => comboOk(c) && enFecha(c) && (c.items || []).every((it) => { const p = PV().productById(it.pid); return p && p.active !== false && !p.deleted; });
+  /** Reparte el descuento de los combos del pedido en sus líneas (line.cmb) con los precios de cada línea. */
+  function applyCmb(o) {
+    Object.values(o.lines || {}).forEach((l) => { delete l.cmb; });
+    const all = data().combos, tot = {};
+    Object.entries(o.combos || {}).forEach(([id, x]) => {
+      const c = all.find((y) => y.id === id), n = +x.n || 0;
+      const al = c && n > 0 ? comboAlloc(c, (pid) => (o.lines || {})[pid] || null) : null; if (!al) return;
+      Object.entries(al.out).forEach(([pid, a]) => { const t = (tot[pid] = tot[pid] || { cj: 0, un: 0, dcj: 0, dun: 0 }); t.cj += a.cj * n; t.un += a.un * n; t.dcj += a.dcj * n; t.dun += a.dun * n; });
+      x.ahorro = r2(al.D * n);
+    });
+    Object.entries(tot).forEach(([pid, t]) => { const l = (o.lines || {})[pid]; if (l) l.cmb = { cj: t.cj, un: t.un, dcj: t.cj ? t.dcj / t.cj : 0, dun: t.un ? t.dun / t.un : 0 }; });
+  }
+  /** Agrega (delta +1) o quita (−1) un combo del pedido activo: sus productos, regalos y descuento, en un solo guardado. */
+  async function addCombo(id, delta) {
+    const P = PV(), o = P.activeOrder(), c = data().combos.find((y) => y.id === id);
+    if (!o) { await P.setQty('', 'cajas', 0); return; } // pide elegir el cliente
+    if (!c || (delta > 0 && !comboLive(c))) { P.toast('Este combo ya no está disponible', 'err'); return; }
+    const cur = (o.combos || {})[id], n = Math.max(0, (cur ? +cur.n || 0 : 0) + delta); if (delta < 0 && !cur) return;
+    for (const it of c.items || []) {
+      const l = o.lines[it.pid] || {};
+      if (+it.cajas) { if (!P.applyQty(o, it.pid, 'cajas', Math.max(0, (+l.cajas || 0) + delta * +it.cajas))) return; }
+      const l2 = o.lines[it.pid] || {};
+      if (+it.unidades) { if (!P.applyQty(o, it.pid, 'unidades', Math.max(0, (+l2.unidades || 0) + delta * +it.unidades))) return; }
+    }
+    o.combos = { ...(o.combos || {}) };
+    if (n) o.combos[id] = { n, nombre: c.nombre, precio: r2(+c.precio || 0), v: comboV(c) }; else delete o.combos[id];
+    if (!Object.keys(o.combos).length) delete o.combos;
+    applyCmb(o);
+    await P.saveOrder(o);
+    P.toast(delta > 0 ? `🎁 ${c.nombre} agregado al pedido` : `${c.nombre}: quitado`, 'ok');
+    if (navigator.vibrate) navigator.vibrate(15);
+    P.render();
+  }
+  function comboCard(c, o) {
+    const P = PV(), { esc, usd } = P, al = comboAlloc(c, catPrices); if (!al) return '';
+    const n = o && o.combos && o.combos[c.id] ? +o.combos[c.id].n || 0 : 0;
+    const its = (c.items || []).map((it) => ({ it, p: P.productById(it.pid) }));
+    return `<article class="vt-combo ${n ? 'on' : ''}"><div class="vt-mix-head"><span class="vt-ico" aria-hidden="true">${esc(c.icono || '🎁')}</span><div><h3>${esc(c.nombre)}</h3>${c.frase ? `<p>${esc(c.frase)}</p>` : ''}</div>${n ? `<em class="vt-cnt">×${n}</em>` : ''}</div>
+      <div class="vt-mix-items">${its.map(({ it, p }) => `<div class="vt-ing">${P.hasPhoto(p) ? `<img src="${esc(P.imgSrc(p))}" alt="" loading="lazy">` : `<span>${P.rubroIcon(p.category)}</span>`}<small>${it.regalo ? '<b class="vt-gift">🎁 REGALO</b><br>' : ''}${esc(p.name)} ${esc(p.presentation || '')}<br><b>${[+it.cajas ? it.cajas + ' cj' : '', +it.unidades ? it.unidades + ' un' : ''].filter(Boolean).join(' + ')}</b></small></div>`).join('<span class="vt-plus">+</span>')}</div>
+      <div class="vt-price">${al.D > 0 ? `<span class="vt-was">Por separado ${usd(al.S)}</span>` : ''}<b>Combo ${usd(+c.precio)}</b>${al.D > 0 ? `<span class="vt-save">Ahorras ${usd(al.D)}</span>` : ''}</div>
+      ${c.incluye ? `<div class="vt-inc">✨ ${esc(c.incluye)}</div>` : ''}${c.hasta ? `<small class="muted">Válido hasta el ${esc(P.fmtDate(c.hasta))}</small>` : ''}
+      <div class="row" style="gap:8px">${n ? `<button type="button" class="btn" data-combo="${esc(c.id)}" data-cd="-1" aria-label="Quitar un combo">−</button>` : ''}<button type="button" class="btn btn-primary grow" data-combo="${esc(c.id)}" data-cd="1">➕ Agregar combo</button></div></article>`;
+  }
+  /** Encabezado de la campaña: título, frase y cuenta regresiva (p. ej. «Faltan 57 días para Nochebuena»). */
+  function campanaHTML() {
+    const P = PV(), { esc } = P, c = data().campana; if (!c || !c.activa || !enFecha(c)) return '';
+    const dias = c.meta ? Math.round((Date.parse(c.meta + 'T12:00:00') - Date.parse(P.today() + 'T12:00:00')) / 86400000) : null;
+    return `<div class="vt-camp vt-tema-${esc(c.tema || 'navidad')}"><div class="vt-lights" aria-hidden="true">${'<i></i>'.repeat(18)}</div>
+      <h2>${esc(c.titulo || '')}</h2>${c.frase ? `<p>${esc(c.frase)}</p>` : ''}
+      ${dias !== null && dias > 0 ? `<div class="vt-count"><b>${dias}</b><span>día${dias === 1 ? '' : 's'} para ${esc(c.metaLbl || '')}</span></div>` : dias === 0 ? `<div class="vt-count"><b>¡Hoy!</b><span>${esc(c.metaLbl || '')}</span></div>` : ''}</div>`;
+  }
+
   /* ---------------- Vendedor: la vitrina ---------------- */
   function banner(v, ps) {
     const P = PV(), { esc } = P, pics = ps.filter((p) => P.hasPhoto(p)).slice(0, 3);
@@ -115,17 +220,19 @@
   function renderSeller(o) {
     const P = PV(), { esc } = P, d = data(), pop = P.popularity().n;
     const vs = d.vitrinas.filter(visible).map((v) => ({ v, ps: productsOf(v) })).filter((x) => x.ps.length);
-    if (!vs.length) return '<div class="empty"><strong>Aún no hay vitrinas</strong>La oficina las arma en «Promoción y marketing».</div>';
+    const combos = d.combos.filter(comboLive), camp = campanaHTML();
+    if (!vs.length && !combos.length) return camp + '<div class="empty"><strong>Aún no hay vitrinas</strong>La oficina las arma en «Promoción y marketing».</div>';
     const card = (v, p, top) => {
       const h = P.productHTML(p, o);
       return top.has(p.id) && v.sello ? h.replace('<div class="pimg">', `<div class="pimg"><em class="vt-sello">${esc(v.sello)}</em>`) : h;
     };
     const sie = siempreOf(o);
     // Historias (burbujas) para saltar a cada vitrina + carrusel destacado que avanza solo
-    return `<div class="vt-stories">${vs.map(({ v, ps }) => { const p = ps.find((x) => P.hasPhoto(x)); return `<button type="button" class="vt-story" data-vgo="${esc(v.id)}" style="--h:${+v.hue || 0}"><span class="vt-ring">${p ? `<img src="${esc(P.imgSrc(p))}" alt="" loading="lazy">` : `<b>${esc(v.icono || '🛍')}</b>`}</span><small>${esc(v.nombre)}</small></button>`; }).join('')}
+    return `${camp}<div class="vt-stories">${vs.map(({ v, ps }) => { const p = ps.find((x) => P.hasPhoto(x)); return `<button type="button" class="vt-story" data-vgo="${esc(v.id)}" style="--h:${+v.hue || 0}"><span class="vt-ring">${p ? `<img src="${esc(P.imgSrc(p))}" alt="" loading="lazy">` : `<b>${esc(v.icono || '🛍')}</b>`}</span><small>${esc(v.nombre)}</small></button>`; }).join('')}
         <button type="button" class="vt-story" data-vfull="1" title="Pantalla completa para mostrar en la tablet"><span class="vt-ring vt-ring-plain"><b>⛶</b></span><small>Pantalla completa</small></button></div>
       <div class="vt-hero" id="vtHero">${vs.map(({ v, ps }) => `<div class="vt-slide" data-vgo="${esc(v.id)}" style="--h:${+v.hue || 0}">${banner(v, ps)}</div>`).join('')}</div>
       ${vs.length > 1 ? `<div class="vt-dots">${vs.map((x, i) => `<i data-dot="${i}" class="${i ? '' : 'on'}"></i>`).join('')}</div>` : ''}
+      ${combos.length ? `<section class="vt" id="vt-combos" style="--h:45"><header class="vt-mini"><div><h3>🎁 Combos de temporada</h3><p>Autorizados por Gerencia · el precio y el ahorro ya van en el pedido</p></div></header><div class="vt-mixes">${combos.map((c) => comboCard(c, o)).join('')}</div></section>` : ''}
       ${sie.length ? `<section class="vt vt-siempre" style="--h:265"><header class="vt-mini"><div><h3>🔁 Lo de siempre de ${esc(o.clientName)}</h3><p>Lo que más compra y hoy aún no lleva</p></div>
         <button type="button" class="btn btn-primary" data-siempre="1">➕ Agregar lo de siempre</button></header><div class="vt-row">${sie.map((x) => P.productHTML(x.p, o)).join('')}</div></section>` : ''}
       ${vs.map(({ v, ps }) => {
@@ -206,6 +313,7 @@
       })();
       return true;
     }
+    const cb = e.target.closest('[data-combo]'); if (cb) { addCombo(cb.dataset.combo, +cb.dataset.cd); return true; }
     const mb = e.target.closest('[data-mix]'); if (!mb) return false;
     const x = data().mezclas.find((m) => m.id === mb.dataset.mix); if (!x) return true;
     (async () => {
@@ -226,19 +334,24 @@
   const PALETTE = [356, 14, 28, 42, 95, 150, 175, 205, 230, 265, 300, 330];
   function render(root) {
     const P = PV(), S = P.S, { esc } = P, ui = (S.ui.mkt = S.ui.mkt || { tab: 'vitrinas' }), d = data();
-    const tab = S.ui.mktTab || ui.tab || 'vitrinas';
-    root.innerHTML = `<div class="toolbar"><div class="seg">${[['vitrinas', '🛍 Vitrinas'], ['mezclas', '🍹 Mezclas'], ['combos', '🎁 Combos']].map(([k, l]) => `<button type="button" class="${tab === k ? 'active' : ''}" data-mt="${k}">${l}</button>`).join('')}</div><span class="grow"></span>
-        ${tab === 'vitrinas' ? '<button class="btn btn-primary" id="mkNew">＋ Nueva vitrina</button>' : tab === 'mezclas' ? '<button class="btn btn-primary" id="mkNewX">＋ Nueva mezcla</button>' : ''}</div>
+    const tab = S.ui.mktTab || ui.tab || 'campana';
+    root.innerHTML = `<div class="toolbar"><div class="seg">${[['campana', '🎄 Campaña'], ['vitrinas', '🛍 Vitrinas'], ['mezclas', '🍹 Mezclas'], ['combos', '🎁 Combos']].map(([k, l]) => `<button type="button" class="${tab === k ? 'active' : ''}" data-mt="${k}">${l}</button>`).join('')}</div><span class="grow"></span>
+        ${tab === 'vitrinas' ? '<button class="btn btn-primary" id="mkNew">＋ Nueva vitrina</button>' : tab === 'mezclas' ? '<button class="btn btn-primary" id="mkNewX">＋ Nueva mezcla</button>' : tab === 'combos' ? '<button class="btn btn-primary" id="mkNewC">＋ Nuevo combo</button>' : ''}</div>
       ${d.saved ? '' : '<div class="hint">✨ Estas son las <b>vitrinas sugeridas</b>. Edítalas a tu gusto: al guardar el primer cambio quedan como las de la empresa y les llegan a todos los vendedores.</div>'}
       <div id="mkBody"></div>`;
     const body = root.querySelector('#mkBody');
     if (tab === 'vitrinas') listVitrinas(body);
     else if (tab === 'mezclas') listMezclas(body);
-    else body.innerHTML = '<div class="empty card"><strong>🎁 Combos promocionales</strong>Próxima ola: combos con su precio, lo que incluyen de regalo y la autorización de Gerencia.</div>';
+    else if (tab === 'combos') listCombos(body);
+    else campanaForm(body, () => render(root));
     root.onclick = (e) => {
       const t = e.target.closest('[data-mt]'); if (t) { S.ui.mktTab = t.dataset.mt; render(root); return; }
       if (e.target.closest('#mkNew')) { editVitrina(null, () => render(root)); return; }
       if (e.target.closest('#mkNewX')) { editMezcla(null, () => render(root)); return; }
+      if (e.target.closest('#mkNewC')) { editCombo(null, () => render(root)); return; }
+      const ec = e.target.closest('[data-ec]'); if (ec) { editCombo(data().combos.find((c) => c.id === ec.dataset.ec), () => render(root)); return; }
+      const ap = e.target.closest('[data-cap]'); if (ap) { decideCombo(ap.dataset.cap, true).then(() => render(root)); return; }
+      const rj = e.target.closest('[data-crj]'); if (rj) { decideCombo(rj.dataset.crj, false).then(() => render(root)); return; }
       const ev = e.target.closest('[data-ev]'); if (ev) { editVitrina(data().vitrinas.find((v) => v.id === ev.dataset.ev), () => render(root)); return; }
       const ex = e.target.closest('[data-ex]'); if (ex) { editMezcla(data().mezclas.find((x) => x.id === ex.dataset.ex), () => render(root)); return; }
       const mv = e.target.closest('[data-mv]');
@@ -270,6 +383,137 @@
         return `<div class="mk-card"><div class="mk-sw">${esc(x.icono || '🍹')}</div><div class="grow"><b>${esc(x.nombre)}</b> <span class="muted">en ${esc(v ? v.nombre : '—')}</span><div class="muted">${(x.items || []).map((it) => { const p = itemProduct(it); return p ? esc(p.name + ' ' + (p.presentation || '')) : `<span class="warn-txt">«${esc(it.q || '?')}» no está en el catálogo</span>`; }).join(' + ')}</div>${miss.length ? '<small class="warn-txt">No se muestra hasta que estén todos los ingredientes</small>' : ''}</div>
           <button class="btn btn-sm btn-primary" data-ex="${esc(x.id)}">✎ Editar</button></div>`; }).join('') || '<p class="muted">Sin mezclas.</p>'}</div>`;
   }
+  /* ---------------- Combos: Oficina los arma, Gerencia los autoriza ---------------- */
+  const esGerencia = () => location.hash.startsWith('#/gerencia') && !!(global.Roles && global.Roles.isRole('gerencia'));
+  function estadoCombo(c) {
+    if (comboOk(c)) return `<span class="status en_carga">✅ Autorizado${c.aprobado.by ? ' por ' + PV().esc(c.aprobado.by) : ''}</span>`;
+    if (c.estado === 'rechazado') return `<span class="status over">❌ Rechazado${c.motivo ? ': ' + PV().esc(c.motivo) : ''}</span>`;
+    return '<span class="status espera">⏳ Espera autorización de Gerencia</span>';
+  }
+  function listCombos(body) {
+    const P = PV(), { esc, usd } = P, d = data(), ger = esGerencia();
+    body.innerHTML = `<p class="muted">El combo se arma con productos reales y su precio. <b>Solo Gerencia lo autoriza</b>; si alguien cambia productos, cantidades, regalos o precio, vuelve a autorización. El vendedor solo ve los autorizados y dentro de sus fechas. El ahorro que se anuncia es real: el sistema lo calcula con los precios.</p>
+      <div class="mk-list">${d.combos.map((c) => { const al = comboAlloc(c, catPrices), miss = (c.items || []).filter((it) => !P.productById(it.pid));
+        return `<div class="mk-card"><div class="mk-sw">${esc(c.icono || '🎁')}</div><div class="grow"><b>${esc(c.nombre)}</b> ${estadoCombo(c)}${c.desde || c.hasta ? ` <span class="status ${enFecha(c) ? 'en_carga' : 'espera'}">📅 ${c.desde ? esc(P.fmtDate(c.desde)) : ''} – ${c.hasta ? esc(P.fmtDate(c.hasta)) : ''}</span>` : ''}
+          <div class="muted">${(c.items || []).map((it) => { const p = P.productById(it.pid); return `${[+it.cajas ? it.cajas + ' cj' : '', +it.unidades ? it.unidades + ' un' : ''].filter(Boolean).join(' + ')} ${p ? esc(p.name + ' ' + (p.presentation || '')) : `<span class="warn-txt">«${esc(it.q || '?')}» sin producto</span>`}${it.regalo ? ' 🎁' : ''}`; }).join(' + ')}</div>
+          <small>${al ? `Por separado ${usd(al.S)} · <b>combo ${usd(+c.precio || 0)}</b>${al.D > 0 ? ` · ahorra ${usd(al.D)} (${Math.round((al.D / al.S) * 100)}%)` : ''}` : '<span class="warn-txt">Falta elegir productos o el precio</span>'}${c.incluye ? ' · ✨ ' + esc(c.incluye) : ''}</small>${miss.length ? '<br><small class="warn-txt">Elige los productos que faltan antes de autorizar</small>' : ''}</div>
+          <div class="row" style="gap:4px">${ger && !comboOk(c) && al && !miss.length ? `<button class="btn btn-sm btn-ok" data-cap="${esc(c.id)}">✅ Autorizar</button><button class="btn btn-sm btn-danger" data-crj="${esc(c.id)}">❌ Rechazar</button>` : ''}${ger && comboOk(c) ? `<button class="btn btn-sm btn-danger" data-crj="${esc(c.id)}">⏸ Retirar</button>` : ''}<button class="btn btn-sm btn-primary" data-ec="${esc(c.id)}">✎ Editar</button></div></div>`; }).join('') || '<p class="muted">Sin combos. Crea uno o carga la campaña navideña en «🎄 Campaña».</p>'}</div>`;
+  }
+  async function decideCombo(id, ok) {
+    const P = PV(), c = data().combos.find((x) => x.id === id); if (!c) return;
+    let motivo = '';
+    if (!ok) { motivo = prompt(`¿Por qué no se autoriza «${c.nombre}»? (lo ve la oficina)`, ''); if (motivo === null) return; }
+    const who = (P.S.settings && P.S.settings.userName) || 'Gerencia';
+    const list = data().combos.map((x) => { if (x.id !== id) return x; const y = { ...x }; delete y.aprobado; if (ok) { y.aprobado = { v: comboV(y), by: who, at: new Date().toISOString() }; y.estado = 'aprobado'; delete y.motivo; } else { y.estado = 'rechazado'; y.motivo = motivo.trim(); } return y; });
+    await save({ combos: list }, `${ok ? 'Autorizó' : 'No autorizó'} el combo «${c.nombre}»${motivo ? ': ' + motivo : ''}`);
+    P.toast(ok ? 'Combo autorizado: ya lo ven los vendedores' : 'Combo no autorizado', ok ? 'ok' : 'err');
+  }
+  function editCombo(c0, done) {
+    const P = PV(), { esc, usd, toast } = P, isNew = !c0, d = data();
+    const c = { ...(c0 || { id: uid(), nombre: '', frase: '', icono: '🎁', vitrina: '', items: [], precio: 0, incluye: '' }) };
+    c.items = (c.items || []).map((it) => { const p = it.pid ? P.productById(it.pid) : itemProduct(it); return { ...it, pid: p ? p.id : it.pid || '' }; });
+    const sh = P.openSheet(`<div class="row"><h2 class="grow">${isNew ? '＋ Nuevo combo' : '✎ ' + esc(c.nombre)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      ${comboOk(c0 || {}) ? '<div class="hint warn">Este combo está autorizado. Si cambias productos, cantidades, regalos o precio, <b>vuelve a autorización de Gerencia</b> y los vendedores dejan de verlo hasta entonces.</div>' : ''}
+      <div class="row wrap" style="gap:8px"><label class="field" style="max-width:90px"><span>Ícono</span><input id="ceI" class="input" maxlength="4" value="${esc(c.icono || '')}"></label>
+        <label class="field grow"><span>Nombre del combo</span><input id="ceN" class="input" maxlength="60" value="${esc(c.nombre)}" placeholder="Ej.: Combo Hallaquiada en familia"></label></div>
+      <label class="field"><span>Frase</span><input id="ceF" class="input" maxlength="120" value="${esc(c.frase || '')}"></label>
+      <div class="section-title">Productos del combo</div><div id="ceItems"></div>
+      <div class="field mk-pick" id="ceAdd"><span>Agregar producto</span><input class="input" placeholder="Buscar producto…" autocomplete="off"><div class="mk-res"></div></div>
+      <div class="row wrap" style="gap:8px;align-items:flex-end"><label class="field"><span>Precio del combo $</span><input id="ceP" class="input" inputmode="decimal" value="${+c.precio ? String(c.precio).replace('.', ',') : ''}" style="max-width:140px"></label><div id="ceCalc" class="grow"></div></div>
+      <label class="field"><span>✨ Incluye además (opcional)</span><input id="ceX" class="input" maxlength="80" value="${esc(c.incluye || '')}" placeholder="Ej.: Delivery gratis"></label>
+      <div class="row wrap" style="gap:8px"><label class="field"><span>📅 Desde</span><input id="ceD" type="date" class="input" value="${esc(c.desde || '')}"></label><label class="field"><span>Hasta</span><input id="ceH" type="date" class="input" value="${esc(c.hasta || '')}"></label></div>
+      <div class="actions">${isNew ? '' : '<button class="btn btn-danger" id="ceDel">Eliminar</button>'}<span class="grow"></span><button class="btn btn-primary" id="ceOk">Guardar y enviar a autorización</button></div>`, { wide: true });
+    const q = (x) => sh.el.querySelector(x);
+    const precio = () => Math.round((Number(String(q('#ceP').value).replace(/\./g, '').replace(',', '.')) || 0) * 100) / 100;
+    const regaloVal = () => c.items.filter((it) => it.regalo).reduce((a, it) => { const p = P.productById(it.pid); return a + (p ? (+it.cajas || 0) * (+p.boxPrice || 0) + (+it.unidades || 0) * (+p.unitPrice || 0) : 0); }, 0);
+    const calc = () => {
+      const al = comboAlloc({ ...c, precio: precio() }, catPrices), S = al ? al.S : c.items.reduce((a, it) => { const p = P.productById(it.pid); return a + (p ? (+it.cajas || 0) * (+p.boxPrice || 0) + (+it.unidades || 0) * (+p.unitPrice || 0) : 0); }, 0);
+      const rg = regaloVal(), max = r2(S - rg), pr = precio();
+      q('#ceCalc').innerHTML = S ? `Por separado <b>${usd(S)}</b>${rg ? ` · sin los regalos ${usd(max)}` : ''}${pr ? (pr > max ? ` · <b class="warn-txt">El precio no puede pasar de ${usd(max)}${rg ? ' (si no, el regalo no sería regalo)' : ''}</b>` : ` · <b class="pay-ok">ahorra ${usd(S - pr)} (${Math.round(((S - pr) / S) * 100)}%)</b>`) : ''}` : '';
+    };
+    const draw = () => {
+      q('#ceItems').innerHTML = c.items.map((it, i) => { const p = P.productById(it.pid); return `<div class="row wrap" style="gap:8px;align-items:flex-end;margin-bottom:6px"><span class="grow">${p ? `<b>${esc(p.name)}</b> ${esc(p.presentation || '')} <small class="muted">${usd(p.boxPrice)} cj · ${usd(p.unitPrice)} un</small>` : `<span class="warn-txt">«${esc(it.q || '?')}»: elige el producto abajo</span>`}</span>
+        <label class="field" style="max-width:80px"><span>Cajas</span><input class="input" inputmode="numeric" data-cc="${i}" value="${+it.cajas || ''}"></label>
+        <label class="field" style="max-width:80px"><span>Unid.</span><input class="input" inputmode="numeric" data-cu="${i}" value="${+it.unidades || ''}"></label>
+        <label class="chip-check"><input type="checkbox" data-cg="${i}" ${it.regalo ? 'checked' : ''}> 🎁 Regalo</label>
+        <button type="button" class="btn btn-sm btn-danger" data-crm="${i}">✕</button></div>`; }).join('') || '<p class="muted">Sin productos.</p>';
+      calc();
+    };
+    draw();
+    sh.el.addEventListener('input', (e) => { if (e.target.id === 'ceP') calc(); });
+    sh.el.addEventListener('change', (e) => {
+      const a = e.target.closest('[data-cc]'), u = e.target.closest('[data-cu]'), g = e.target.closest('[data-cg]');
+      if (a) c.items[+a.dataset.cc].cajas = Math.max(0, Math.round(+a.value || 0));
+      if (u) c.items[+u.dataset.cu].unidades = Math.max(0, Math.round(+u.value || 0));
+      if (g) c.items[+g.dataset.cg].regalo = g.checked;
+      if (a || u || g) calc();
+    });
+    sh.el.addEventListener('click', (e) => { const r = e.target.closest('[data-crm]'); if (r) { c.items.splice(+r.dataset.crm, 1); draw(); } });
+    picker(q('#ceAdd'), (pid) => {
+      const p = P.productById(pid), unresolved = c.items.findIndex((it) => !P.productById(it.pid));
+      const it = { pid, cajas: p && p.sellBy === 'unidad' ? 0 : 1, unidades: p && p.sellBy === 'unidad' ? 1 : 0 };
+      if (unresolved >= 0) c.items[unresolved] = { ...c.items[unresolved], ...it, cajas: c.items[unresolved].cajas || it.cajas }; else c.items.push(it);
+      draw();
+    });
+    q('#ceOk').onclick = async () => {
+      Object.assign(c, { icono: q('#ceI').value.trim(), nombre: q('#ceN').value.trim(), frase: q('#ceF').value.trim(), incluye: q('#ceX').value.trim(), desde: q('#ceD').value, hasta: q('#ceH').value, precio: precio() });
+      if (!c.nombre) { toast('Ponle un nombre al combo', 'err'); return; }
+      if (c.items.some((it) => !P.productById(it.pid))) { toast('Hay productos sin elegir', 'err'); return; }
+      if (!c.items.some((it) => (+it.cajas || +it.unidades) && !it.regalo)) { toast('El combo necesita al menos un producto que no sea regalo', 'err'); return; }
+      const al = comboAlloc(c, catPrices);
+      if (!(c.precio > 0) || !al) { toast('Pon un precio mayor que 0 y que no pase de lo que vale por separado', 'err'); return; }
+      if (c.precio > r2(al.S - regaloVal()) + 0.001) { toast('Con ese precio el regalo no sería regalo: bájalo', 'err'); return; }
+      if (c.desde && c.hasta && c.hasta < c.desde) { toast('La fecha «hasta» es antes de «desde»', 'err'); return; }
+      if (!c.desde) delete c.desde; if (!c.hasta) delete c.hasta;
+      c.items = c.items.map(({ pid, cajas, unidades, regalo }) => ({ pid, cajas: +cajas || 0, unidades: +unidades || 0, ...(regalo ? { regalo: true } : {}) }));
+      const prev = c0 && c0.aprobado && c0.aprobado.v === comboV(c) ? c0.aprobado : null; // sin cambios de fondo: sigue autorizado
+      if (prev) c.aprobado = prev; else { delete c.aprobado; c.estado = 'pendiente'; delete c.motivo; }
+      const list = data().combos.slice(), i = list.findIndex((x) => x.id === c.id);
+      if (i >= 0) list[i] = c; else list.push(c);
+      await save({ combos: list }, `${isNew ? 'Creó' : 'Editó'} el combo «${c.nombre}» (${P.usd(c.precio)})`);
+      sh.close(); toast(prev ? 'Combo guardado' : 'Combo guardado: espera la autorización de Gerencia', 'ok'); done();
+    };
+    const del = q('#ceDel');
+    if (del) del.onclick = async () => { if (!confirm(`¿Eliminar el combo «${c.nombre}»?`)) return; await save({ combos: data().combos.filter((x) => x.id !== c.id) }, `Eliminó el combo «${c.nombre}»`); sh.close(); done(); };
+  }
+
+  /* ---------------- Campaña (encabezado con cuenta regresiva + carga de la campaña navideña) ---------------- */
+  function campanaForm(body, done) {
+    const P = PV(), { esc, toast } = P, d = data(), c = d.campana || { activa: false, tema: 'navidad', titulo: '', frase: '', meta: '', metaLbl: '' };
+    const has = (arr, id) => arr.some((x) => x.id === id);
+    const faltan = NAV.vitrinas.filter((v) => !has(d.vitrinas, v.id)).length + NAV.mezclas.filter((x) => !has(d.mezclas, x.id)).length + NAV.combos.filter((x) => !has(d.combos, x.id)).length;
+    body.innerHTML = `<div class="card card-pad mk-camp-pre">${campanaHTML() || '<p class="muted">La campaña no está visible hoy (apagada o fuera de fechas).</p>'}</div>
+      ${faltan ? `<div class="hint">🎄 <b>Campaña navideña lista para cargar</b>: ${NAV.vitrinas.length} vitrinas por etapa (Feria de la Chinita → Hallaquiada → Patinatas → Nochebuena → Año Nuevo), ${NAV.mezclas.length} mezclas y ${NAV.combos.length} combos en borrador para que les pongas precio y Gerencia los autorice. Cada vitrina aparece sola en sus fechas.
+        <div style="margin-top:8px"><button class="btn btn-primary" id="cmLoad">✨ Cargar la campaña navideña</button></div></div>` : '<div class="hint">✅ La campaña navideña ya está cargada: revisa las vitrinas y ponles precio a los combos.</div>'}
+      <div class="card card-pad"><h3 style="margin-top:0">Encabezado de la campaña</h3>
+        <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="cmOn" ${c.activa ? 'checked' : ''}> Mostrar el encabezado en la vitrina del vendedor</label>
+        <div class="row wrap" style="gap:8px"><label class="field grow"><span>Título</span><input id="cmT" class="input" maxlength="70" value="${esc(c.titulo || '')}"></label>
+          <label class="field"><span>Decoración</span><select id="cmTema" class="select"><option value="navidad" ${c.tema === 'navidad' ? 'selected' : ''}>🎄 Navidad (luces)</option><option value="fiesta" ${c.tema === 'fiesta' ? 'selected' : ''}>🎉 Fiesta</option><option value="simple" ${c.tema === 'simple' ? 'selected' : ''}>Sencilla</option></select></label></div>
+        <label class="field"><span>Frase</span><input id="cmF" class="input" maxlength="140" value="${esc(c.frase || '')}"></label>
+        <div class="row wrap" style="gap:8px"><label class="field"><span>Cuenta regresiva hasta</span><input id="cmM" type="date" class="input" value="${esc(c.meta || '')}"></label><label class="field"><span>…para</span><input id="cmML" class="input" maxlength="30" value="${esc(c.metaLbl || '')}" placeholder="Nochebuena"></label>
+          <label class="field"><span>Se muestra desde</span><input id="cmD" type="date" class="input" value="${esc(c.desde || '')}"></label><label class="field"><span>hasta</span><input id="cmH" type="date" class="input" value="${esc(c.hasta || '')}"></label></div>
+        <div class="actions"><button class="btn btn-primary" id="cmOk">Guardar encabezado</button></div></div>`;
+    const q = (x) => body.querySelector(x);
+    const ld = q('#cmLoad');
+    if (ld) ld.onclick = async () => {
+      const v = d.vitrinas.concat(NAV.vitrinas.filter((x) => !has(d.vitrinas, x.id)));
+      const m = d.mezclas.concat(NAV.mezclas.filter((x) => !has(d.mezclas, x.id)));
+      // Combos en borrador: sus productos se buscan en el catálogo y el precio arranca igual a lo que vale por separado
+      const cb = d.combos.concat(NAV.combos.filter((x) => !has(d.combos, x.id)).map((x) => {
+        const items = x.items.map((it) => { const p = itemProduct(it); return { pid: p ? p.id : '', q: it.q, cajas: it.cajas, unidades: it.unidades }; });
+        const al = comboAlloc({ items, precio: 0 }, catPrices);
+        return { ...x, items, precio: al ? al.S : 0, estado: 'pendiente' };
+      }));
+      await save({ vitrinas: v, mezclas: m, combos: cb, campana: d.campana || NAV.campana }, 'Cargó la campaña navideña');
+      toast('Campaña navideña cargada: ponles precio a los combos y que Gerencia los autorice', 'ok'); done();
+    };
+    q('#cmOk').onclick = async () => {
+      const nc = { activa: q('#cmOn').checked, tema: q('#cmTema').value, titulo: q('#cmT').value.trim(), frase: q('#cmF').value.trim(), meta: q('#cmM').value, metaLbl: q('#cmML').value.trim(), desde: q('#cmD').value, hasta: q('#cmH').value };
+      if (nc.activa && !nc.titulo) { toast('Ponle un título a la campaña', 'err'); return; }
+      await save({ campana: nc }, `Campaña: «${nc.titulo}» ${nc.activa ? 'visible' : 'apagada'}`); toast('Campaña guardada', 'ok'); done();
+    };
+  }
+
   /** Buscador de productos para agregar a una vitrina o mezcla. */
   function picker(el, onPick) {
     const P = PV(), { esc } = P, inp = el.querySelector('input'), out = el.querySelector('.mk-res');
@@ -373,5 +617,5 @@
     if (del) del.onclick = async () => { if (!confirm(`¿Eliminar la mezcla «${x.nombre}»?`)) return; await save({ mezclas: data().mezclas.filter((y) => y.id !== x.id) }, `Eliminó la mezcla «${x.nombre}»`); sh.close(); done(); };
   }
 
-  global.Mkt = { data, productsOf, sizeOf, itemProduct, renderSeller, afterRender, onSellerClick, siempreOf, combinaCon, ficha, visible, render, DEF_VITRINAS, DEF_MEZCLAS };
+  global.Mkt = { data, comboV, comboOk, comboAlloc, comboLive, applyCmb, addCombo, NAV, productsOf, sizeOf, itemProduct, renderSeller, afterRender, onSellerClick, siempreOf, combinaCon, ficha, visible, render, DEF_VITRINAS, DEF_MEZCLAS };
 })(window);

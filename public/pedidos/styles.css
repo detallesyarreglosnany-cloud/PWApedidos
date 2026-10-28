@@ -698,3 +698,32 @@ body.ro-ger .valery-in, body.ro-ger #dStatus, body.ro-ger #dDisp, body.ro-ger #d
 .vt-row-sm > .pitem { flex-basis: clamp(150px, 18vw, 200px); }
 @media (max-width: 700px) { .vt-ficha { grid-template-columns: 1fr; } }
 .vt-row-sm { --h: 205; }
+
+/* Combos y campaña */
+.vt-combo { position: relative; border-radius: 18px; padding: 14px; display: flex; flex-direction: column; gap: 10px; background: linear-gradient(160deg, hsl(45 70% 26%), hsl(25 70% 14%)); border: 2px solid hsl(45 90% 55%); box-shadow: 0 8px 26px rgba(0,0,0,.4); }
+.vt-combo.on { outline: 3px solid var(--brand-2); outline-offset: -3px; }
+.vt-combo h3 { margin: 0; font: 800 22px var(--display); text-transform: uppercase; }
+.vt-combo p { margin: 0; }
+.vt-cnt { margin-left: auto; font: 800 18px var(--display); font-style: normal; background: var(--brand-2); color: #fff; border-radius: 999px; padding: 2px 10px; }
+.vt-gift { color: #FFD54F; }
+.vt-price { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; }
+.vt-price b { font: 800 30px var(--display); color: #fff; }
+.vt-was { text-decoration: line-through; opacity: .75; }
+.vt-save { background: #00c853; color: #04210f; font-weight: 800; border-radius: 999px; padding: 2px 10px; }
+.vt-inc { font-weight: 700; color: #FFE082; }
+.vt-camp { position: relative; overflow: hidden; border-radius: 22px; padding: 34px 22px 20px; margin: 4px 0 10px; color: #fff; text-align: center;
+  background: radial-gradient(circle at 20% 0%, rgba(255,215,64,.25), transparent 45%), linear-gradient(135deg, #0b5d2a, #7a0b14 70%, #4a050b); box-shadow: 0 12px 34px rgba(0,0,0,.5); }
+.vt-tema-fiesta { background: linear-gradient(135deg, #6a1b9a, #f50057); }
+.vt-tema-simple { background: linear-gradient(135deg, #263238, #37474f); }
+.vt-camp h2 { margin: 0; font: 800 clamp(24px, 4.4vw, 46px)/1.05 var(--display); text-transform: uppercase; text-shadow: 0 3px 12px rgba(0,0,0,.45); }
+.vt-camp p { margin: 8px auto 0; max-width: 60ch; font-size: clamp(15px, 2vw, 20px); opacity: .95; }
+.vt-count { display: inline-flex; align-items: baseline; gap: 8px; margin-top: 14px; padding: 6px 16px; border-radius: 999px; background: rgba(0,0,0,.35); border: 1px solid rgba(255,215,64,.6); }
+.vt-count b { font: 800 30px var(--display); color: #FFD740; }
+.vt-lights { position: absolute; left: 0; right: 0; top: 6px; display: flex; justify-content: space-around; }
+.vt-tema-fiesta .vt-lights, .vt-tema-simple .vt-lights { display: none; }
+.vt-lights i { width: 10px; height: 14px; border-radius: 50% 50% 45% 45%; background: #ff5252; box-shadow: 0 0 10px 2px #ff5252; animation: vt-blink 1.4s ease-in-out infinite; }
+.vt-lights i:nth-child(3n+2) { background: #FFD740; box-shadow: 0 0 10px 2px #FFD740; animation-delay: .45s; }
+.vt-lights i:nth-child(3n) { background: #69F0AE; box-shadow: 0 0 10px 2px #69F0AE; animation-delay: .9s; }
+@keyframes vt-blink { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .vt-lights i { animation: none; } }
+.mk-camp-pre .vt-camp { margin: 0; }

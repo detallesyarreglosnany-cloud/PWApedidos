@@ -50,6 +50,7 @@
         { icon: '📦', label: 'Inventario y productos', go: '#/oficina/inventario' },
       ] },
       { id: 'mkt', icon: '📣', label: 'Promoción y marketing', items: [
+        { icon: '🎄', label: 'Campaña', go: '#/oficina/marketing', mkt: 'campana' },
         { icon: '🛍', label: 'Vitrinas', go: '#/oficina/marketing', mkt: 'vitrinas' },
         { icon: '🍹', label: 'Mezclas', go: '#/oficina/marketing', mkt: 'mezclas' },
         { icon: '🎁', label: 'Combos', go: '#/oficina/marketing', mkt: 'combos' },
@@ -85,6 +86,7 @@
         { icon: '🐢', label: 'Productos sin movimiento', go: '#/gerencia/sinmov' },
       ] },
       { id: 'mkt', icon: '📣', label: 'Promoción y marketing', items: [
+        { icon: '🎄', label: 'Campaña', go: '#/gerencia/marketing', mkt: 'campana' },
         { icon: '🛍', label: 'Vitrinas', go: '#/gerencia/marketing', mkt: 'vitrinas' },
         { icon: '🍹', label: 'Mezclas', go: '#/gerencia/marketing', mkt: 'mezclas' },
         { icon: '🎁', label: 'Combos', go: '#/gerencia/marketing', mkt: 'combos' },
@@ -134,7 +136,7 @@
   function isActive(it, h) {
     const P = PV(), S = P.S, base = h.split('?')[0];
     if (it.act || it.el) return false;
-    if (it.mkt) return base === it.go && (S.ui.mktTab || 'vitrinas') === it.mkt;
+    if (it.mkt) return base === it.go && (S.ui.mktTab || 'campana') === it.mkt;
     const tab = (x) => x.split('/')[2] || '';
     if (it.go.startsWith('#/oficina/')) return base.startsWith('#/oficina') && (tab(base) || 'cargas') === tab(it.go) && !(tab(it.go) === 'archivo' && S.ui.office && S.ui.office.trash);
     if (it.go.startsWith('#/supervisor/')) return base.startsWith('#/supervisor') && (tab(base) || 'resumen') === tab(it.go);

@@ -1238,6 +1238,9 @@
     if (!o) { toast('Primero escribe el nombre del cliente', 'err'); $('#clientInput').focus(); return; }
     if (!editable(o)) { toast('Pedido bloqueado (' + Loads.orderLabel(o) + '): ya no se puede modificar', 'err'); return; }
     const p = productById(pid); if (!p) return;
+    // Un combo se quita con su botón «−»: a mano no se baja de lo que lleva el combo (el descuento es por el combo completo)
+    { const c = (o.lines[pid] || {}).cmb, cap = c ? +(kind === 'cajas' ? c.cj : c.un) || 0 : 0;
+      if (cap && value < cap) { toast(`Este producto va en un combo (${cap} ${kind === 'cajas' ? 'cj' : 'un'}). Para quitarlo, usa «−» en el combo de la vitrina.`, 'err'); renderProductList(); return; } }
     if (!applyQty(o, pid, kind, value)) return;
     await saveOrder(o);
     $$(`#plist [data-pid="${CSS.escape(pid)}"]`).forEach((card) => {
@@ -1320,8 +1323,9 @@
     const tot = Matrix.orderTotals(o);
     const rate = +S.config.exchangeRate || 0;
     if (!lines.length) return '<div class="empty"><strong>Pedido vacío</strong>Agrega productos desde el catálogo.</div>';
-    return `<table class="lines">${groupedRows(lines, 2, ({ l, t }) => `
-        <tr><td><b>${esc(l.name)} ${esc(l.presentation)}</b><div class="muted mono" style="font-size:12px">${esc(Matrix.lineCode(l))} · ${t.cajas ? t.cajas + ' cj × ' + usd(l.boxPrice) : ''}${t.cajas && t.unidades ? ' + ' : ''}${t.unidades ? t.unidades + ' un × ' + usd(l.unitPrice) : ''}</div></td>
+    const cmbs = Object.values(o.combos || {});
+    return `${cmbs.length ? `<div class="hint">🎁 ${cmbs.map((c) => `<b>${esc(c.nombre)}</b> ×${c.n}${+c.ahorro ? ` (ahorra ${usd(c.ahorro)})` : ''}`).join(' · ')}</div>` : ''}<table class="lines">${groupedRows(lines, 2, ({ l, t }) => `
+        <tr><td><b>${esc(l.name)} ${esc(l.presentation)}</b><div class="muted mono" style="font-size:12px">${esc(Matrix.lineCode(l))} · ${t.cajas ? t.cajas + ' cj × ' + usd(l.boxPrice) : ''}${t.cajas && t.unidades ? ' + ' : ''}${t.unidades ? t.unidades + ' un × ' + usd(l.unitPrice) : ''}${Matrix.lineDesc(l) ? ` · <span class="pay-ok">🎁 combo −${usd(Matrix.lineDesc(l))}</span>` : ''}</div></td>
             <td class="num">${usd(t.monto)}</td></tr>`)}
         <tr class="total-row"><td><b>TOTAL</b> · ${tot.cajas} cj + ${tot.unidades} un</td>
             <td class="num">${usd(tot.monto)}${rate ? `<div class="muted" style="font-size:12px">${bs(tot.monto * rate)}</div>` : ''}</td></tr>
@@ -2114,7 +2118,7 @@
     syncInfo: () => ({ idle: isIdle(), every: syncEvery(), last: lastSyncResult }), _idleSince: (ms) => { lastInput = Date.now() - ms; },
     loadAll, saveDocs, saveOrder, saveSettings, setSession, msgThreadHTML, rememberOffice, forgetOffice, PERSIST_HINT, runSync, updateSyncPill, render, refreshAfterRemote, updateBell, beep, logEvent, isSupervisor,
     notifSheet, refreshPush,
-    productById, sellerById, orderById, clientById, rubros, orderLinesHTML, groupLines, groupedRows, productHTML, setQty, activeOrder, popularity, gainOf, isNewProduct,
+    productById, sellerById, orderById, clientById, rubros, orderLinesHTML, groupLines, groupedRows, productHTML, setQty, applyQty, activeOrder, popularity, gainOf, isNewProduct,
     boot, localNotif,
   };
 })();

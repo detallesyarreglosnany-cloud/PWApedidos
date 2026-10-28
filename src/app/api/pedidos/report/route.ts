@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { requireReader } from '@/lib/keys';
+import { lineMoney } from '@/lib/money';
 
 // Reporte de ventas por rango de fechas (oficina o supervisor, sin límite de
 // los 14 días que guarda cada teléfono): totales y desglose por vendedor,
@@ -30,7 +31,7 @@ function orderTotals(o: OrderDoc) {
   for (const l of Object.values(o.lines || {})) {
     cajas += +(l.cajas || 0);
     unidades += +(l.unidades || 0);
-    monto += +(l.cajas || 0) * +(l.boxPrice || 0) + +(l.unidades || 0) * +(l.unitPrice || 0);
+    monto += lineMoney(l);
     if (l.cajas || l.unidades) items++;
   }
   return { cajas, unidades, monto: Math.round(monto * 100) / 100, items };
@@ -88,7 +89,7 @@ export async function POST(req: NextRequest) {
         const cat = l.category || 'Sin categoría';
         const c = byCategory.get(cat) || { category: cat, cajas: 0, unidades: 0, monto: 0 };
         c.cajas += +(l.cajas || 0); c.unidades += +(l.unidades || 0);
-        c.monto += +(l.cajas || 0) * +(l.boxPrice || 0) + +(l.unidades || 0) * +(l.unitPrice || 0);
+        c.monto += lineMoney(l);
         byCategory.set(cat, c);
       }
 

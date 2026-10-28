@@ -9,6 +9,7 @@ import { ordersOfLoads, syncKardexForOrders } from '@/lib/vacios';
 import { dupPairs, DUP_WINDOW_DAYS, type DupOrder } from '@/lib/dedup';
 import { stashImage, productsWithInlineImage } from '@/lib/images';
 import { recordContact } from '@/lib/pin';
+import { comboAlloc, comboOk, comboV, type Combo, type MoneyLine } from '@/lib/money';
 
 // Sincronización de la PWA de pedidos (public/pedidos).
 //
@@ -208,6 +209,65 @@ async function migrateInlineImages(epoch: string) {
   } catch (e) { console.warn('[fotos]', e); }
 }
 
+// ---- Combos promocionales ----
+const numv = (v: unknown) => Number(v) || 0;
+type Rec = Record<string, unknown>;
+/** Lo que cambia con un combo: la lista de combos del pedido y el descuento (cmb) de cada línea. */
+const cmbKey = (d: Rec | null) => {
+  if (!d) return '[null,[]]';
+  const lines = (d.lines || {}) as Record<string, { cmb?: unknown } | null>;
+  return JSON.stringify([d.combos || null, Object.keys(lines).sort().map((k) => [k, (lines[k] && lines[k]!.cmb) || null])]);
+};
+/** ¿El descuento del pedido sale de combos autorizados por Gerencia? (nunca más cantidad ni más descuento que el combo) */
+function combosValid(d: Rec, combos: Combo[]) {
+  const lines = (d.lines || {}) as Record<string, MoneyLine>;
+  const oc = d.combos;
+  if (oc !== undefined && oc !== null && typeof oc !== 'object') return false;
+  const exp: Record<string, { cj: number; un: number; dcj: number; dun: number }> = {};
+  for (const [id, x] of Object.entries((oc || {}) as Record<string, { n?: unknown }>)) {
+    const n = numv(x && x.n);
+    if (!Number.isInteger(n) || n <= 0 || n > 999) return false;
+    const c = combos.find((y) => y.id === id);
+    if (!c || !comboOk(c)) return false;
+    const al = comboAlloc(c, (pid) => lines[pid] || null); if (!al) return false;
+    for (const [pid, a] of Object.entries(al.out)) { const t = (exp[pid] = exp[pid] || { cj: 0, un: 0, dcj: 0, dun: 0 }); t.cj += a.cj * n; t.un += a.un * n; t.dcj += a.dcj * n; t.dun += a.dun * n; }
+  }
+  for (const [pid, l] of Object.entries(lines)) {
+    const c = l && l.cmb; if (!c) continue;
+    if (typeof c !== 'object') return false;
+    const e = exp[pid]; if (!e) return false;
+    const cj = numv(c.cj), un = numv(c.un), dcj = numv(c.dcj), dun = numv(c.dun);
+    if (cj < 0 || un < 0 || dcj < 0 || dun < 0 || cj > e.cj + 1e-6 || un > e.un + 1e-6) return false;
+    if (cj > 0 && dcj > (e.cj ? e.dcj / e.cj : 0) + 1e-4) return false;
+    if (un > 0 && dun > (e.un ? e.dun / e.un : 0) + 1e-4) return false;
+  }
+  return true;
+}
+/** Sin combo válido: el pedido queda a precio normal (se quita el descuento y la lista de combos). */
+function stripCombos(d: Rec, ts: string) {
+  delete d.combos;
+  for (const l of Object.values((d.lines || {}) as Record<string, Rec>)) if (l && typeof l === 'object') delete l.cmb;
+  if (d.fv && typeof d.fv === 'object') { (d.fv as Fv).lines = ts; (d.fv as Fv).combos = ts; }
+}
+/**
+ * Promoción y marketing: solo Gerencia autoriza combos. Si otro equipo cambia un combo autorizado (productos,
+ * cantidades, regalos o precio), vuelve a «pendiente». Una copia vieja sin la autorización no la borra.
+ */
+function guardMkt(doc: Rec, cur: Rec | null, isGer: boolean) {
+  if (!Array.isArray(doc.combos)) return;
+  const prev = new Map(((cur && Array.isArray(cur.combos) ? cur.combos : []) as Combo[]).map((c) => [c.id, c]));
+  doc.combos = (doc.combos as (Combo & Rec)[]).map((c) => {
+    if (!c || typeof c !== 'object') return c;
+    const p = prev.get(c.id);
+    if (!isGer && p && comboOk(p) && comboV(p) === comboV(c) && c.estado !== 'rechazado' && !(c.aprobado && JSON.stringify(c.aprobado) !== JSON.stringify(p.aprobado))) return { ...c, aprobado: p.aprobado, estado: 'aprobado' };
+    if (!c.aprobado) return c;
+    const same = !!p && comboOk(p) && JSON.stringify(p.aprobado) === JSON.stringify(c.aprobado) && comboV(p) === comboV(c);
+    if (comboOk(c) && (isGer || same)) return c;
+    const rest = { ...c }; delete rest.aprobado;
+    return { ...rest, estado: 'pendiente' };
+  });
+}
+
 /** Una hora estrictamente posterior a todas (la versión combinada debe ganar en todos los equipos). */
 function later(...ts: string[]) {
   const max = ts.slice().sort().pop()!;
@@ -350,6 +410,7 @@ const lastContact = new Map<string, number>();
 
 export async function POST(req: NextRequest) {
   const serverTime = new Date();
+  let mktCombos: Combo[] | null = null; // combos autorizados (se leen una vez, si un pedido trae combos)
 
   if (!syncOk(req)) {
     return NextResponse.json({ error: 'Clave de sincronización inválida' }, { status: 401 });
@@ -494,6 +555,7 @@ export async function POST(req: NextRequest) {
           }
           // Gerencia solo cambia la lista de categorías de la configuración (al crear un producto de una categoría nueva)
           // y Promoción y marketing (documento «mkt»: vitrinas, mezclas y combos), que edita igual que la oficina
+          if (kind === 'config' && doc.id === 'mkt') guardMkt(doc as Rec, cur as Rec | null, isGer);
           if (kind === 'config' && isGer && doc.id !== 'mkt') {
             if (!cur) { rejected.push({ kind, id: doc.id, reason: 'foreign' }); continue; }
             doc = { ...cur, rubros: Array.isArray((doc as Record<string, unknown>).rubros) ? (doc as Record<string, unknown>).rubros : cur.rubros, updatedAt: doc.updatedAt } as typeof doc;
@@ -591,6 +653,11 @@ export async function POST(req: NextRequest) {
             const now2 = doc.suspendedUntil && Date.parse(String(doc.suspendedUntil)) > Date.now();
             if (now2 && (!was || cur!.suspendedUntil !== doc.suspendedUntil)) notices.push({ to: 'seller', sellerId: doc.id, msg: { title: '⏸ Pausa en la subida de pedidos', body: 'Excelente trabajo. Toma un respiro: tus hojas de pedidos están por despachar. Te avisaremos cuando puedas volver a subir pedidos.', tag: `s-${doc.id}-pausa` } });
             if (was && !now2) notices.push({ to: 'seller', sellerId: doc.id, msg: { title: '✅ Ya puedes volver a subir pedidos', body: 'Tus hojas se descongestionaron. ¡A vender!', tag: `s-${doc.id}-pausa` } });
+          }
+          // Combos: el descuento solo vale si sale de combos autorizados por Gerencia (nadie inventa descuentos)
+          if (kind === 'orders' && !isAdmin && cmbKey(doc as Rec) !== cmbKey(cur as Rec | null)) {
+            if (!mktCombos) { const r = await db.distDoc.findUnique({ where: { kind_id: { kind: 'config', id: 'mkt' } }, select: { data: true } }); mktCombos = r ? ((JSON.parse(r.data) as Rec).combos as Combo[]) || [] : []; }
+            if (!combosValid(doc as Rec, mktCombos)) { stripCombos(doc as Rec, serverTime.toISOString()); doc.updatedAt = later(existing ? existing.updatedAt : doc.updatedAt, doc.updatedAt); }
           }
           if (kind === 'orders') {
             const n = orderNotice(cur as Record<string, unknown> | null, doc as Record<string, unknown>, isAdmin);
