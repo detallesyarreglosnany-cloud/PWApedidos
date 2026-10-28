@@ -24,7 +24,7 @@ type Ord = { id: string; deleted?: boolean; status?: string; clientId?: string; 
   lines?: Record<string, Line>; delivery?: { at?: string; result?: string; monto?: number; newValery?: string; lines?: Record<string, Line>; dispatcherName?: string } | null };
 type Cli = { id: string; name?: string; sellerId?: string; source?: string; createdAt?: string; deleted?: boolean };
 type Nota = ReturnType<typeof noteStatus> & { clientId: string; clientName: string; sellerId: string; sellerName: string; orderId: string; nota: string; key: string; monto: number; resta: number;
-  pagado: number; espera: number; despacho: string; vence: string; dias: number; tramos: ReturnType<typeof tramos>; liquidado: boolean; seg: unknown };
+  pagado: number; espera: number; despacho: string; vence: string; dias: number; diasTodo: number; tramos: ReturnType<typeof tramos>; liquidado: boolean; seg: unknown };
 const money = (l: Line) => lineMoney(l); // incluye el descuento de combo
 /** Cuentas por cobrar con vencimientos y el crédito de cada cliente (de un vendedor o de todos). */
 export async function cartera(sellerId: string) {
@@ -53,9 +53,9 @@ export async function cartera(sellerId: string) {
   const credRows = await db.$queryRaw<{ name: string; value: string }[]>`SELECT "name", "value" FROM "DistSetting" WHERE "name" LIKE 'cred:%'`;
   const sets = new Map(credRows.map((r) => [r.name.slice(5), JSON.parse(r.value) as CredSetting]));
   // Por cliente: compras (para clientes nuevos), deuda, atraso y cuándo terminó de pagar cada nota
-  type Agg = { compras: { day: string; monto: number }[]; deuda: number; vencido: number; atrasoMax: number; atrasos: number[]; name: string; sellerId: string; sellerName: string };
+  type Agg = { compras: { day: string; monto: number }[]; deuda: number; vencido: number; atrasoMax: number; atrasoTodo: number; atrasos: number[]; name: string; sellerId: string; sellerName: string };
   const agg = new Map<string, Agg>();
-  const aggOf = (o: Ord) => { const k = String(o.clientId); let x = agg.get(k); if (!x) agg.set(k, (x = { compras: [], deuda: 0, vencido: 0, atrasoMax: 0, atrasos: [], name: String(o.clientName || ''), sellerId: String(o.sellerId || ''), sellerName: String(o.sellerName || '') })); return x; };
+  const aggOf = (o: Ord) => { const k = String(o.clientId); let x = agg.get(k); if (!x) agg.set(k, (x = { compras: [], deuda: 0, vencido: 0, atrasoMax: 0, atrasoTodo: 0, atrasos: [], name: String(o.clientName || ''), sellerId: String(o.sellerId || ''), sellerName: String(o.sellerName || '') })); return x; };
   const notas: Nota[] = []; const conDeuda = new Set<string>(), pagaron = new Set<string>(), cerradas: { key: string; monto: number; vence: string; x: Agg }[] = [];
   for (const o of orders) {
     const d = o.delivery && o.delivery.at ? o.delivery : null;
@@ -73,12 +73,16 @@ export async function cartera(sellerId: string) {
     const cg = cargados.get(cargadoName(canon(String(o.clientId)), key));
     if (cg) { pagaron.add(String(o.clientId)); x.atrasos.push(Math.max(0, Number(cg.atraso) || 0)); continue; }
     const tr = tramos(lines, start, rulesAt(R, start), a ? a.pagado : 0), resta = r2(tr.reduce((q, t) => q + t.resta, 0));
-    if (resta <= 0.01) { pagaron.add(String(o.clientId)); cerradas.push({ key: ak, monto, vence: tr[tr.length - 1].vence, x }); continue; }
+    // Récord: el atraso se mide contra el PRIMER vencimiento (si los refrescos vencían a los 8 días, pagar el día 10 es atraso)
+    if (resta <= 0.01) { pagaron.add(String(o.clientId)); cerradas.push({ key: ak, monto, vence: tr[0].vence, x }); continue; }
     conDeuda.add(String(o.clientId));
     const next = tr.find((t) => t.resta > 0.01)!, dias = diffDays(hoy, next.vence);
-    x.deuda += resta; if (dias < 0) { x.vencido += tr.filter((t) => t.vence < hoy).reduce((q, t) => q + t.resta, 0); x.atrasoMax = Math.max(x.atrasoMax, -dias); }
+    x.deuda += resta; if (dias < 0) { x.vencido += tr.filter((t) => t.vence < hoy && t.resta > 0.01).reduce((q, t) => q + t.resta, 0); x.atrasoMax = Math.max(x.atrasoMax, -dias); }
+    // ¿Venció TODO lo que falta de la nota (todas sus categorías)? Desde ahí baja el límite y se avisa al vendedor
+    const pend = tr.filter((t) => t.resta > 0.01), todo = pend.length && pend.every((t) => t.vence < hoy) ? diffDays(pend[pend.length - 1].vence, hoy) : 0;
+    if (todo > 0) x.atrasoTodo = Math.max(x.atrasoTodo, todo);
     notas.push({ ...noteStatus(monto, a), clientId: String(o.clientId), clientName: String(o.clientName || ''), sellerId: String(o.sellerId || ''), sellerName: String(o.sellerName || ''), orderId: o.id, nota, key, monto, resta,
-      pagado: a ? a.pagado : 0, espera: a ? a.espera : 0, despacho: start, vence: next.vence, dias, tramos: tr, liquidado: !!d, seg: seg.get(`${o.clientId}:${key}`) || null });
+      pagado: a ? a.pagado : 0, espera: a ? a.espera : 0, despacho: start, vence: next.vence, dias, diasTodo: todo, tramos: tr, liquidado: !!d, seg: seg.get(`${o.clientId}:${key}`) || null });
   }
   notas.sort((x, y) => x.dias - y.dias);
   // Día en que cada nota quedó pagada completa (fecha real del pago) → días de atraso del récord
@@ -100,7 +104,7 @@ export async function cartera(sellerId: string) {
   for (const id of ids) {
     const c = clients.get(id), x = agg.get(id);
     const info = credInfo({ R, set: sets.get(id) || null, nuevoCliente: !!c && isNuevo(c, R), compras: x ? x.compras.sort((a, b) => a.day.localeCompare(b.day)).map((q) => q.monto) : [],
-      deuda: x ? x.deuda : 0, vencido: x ? x.vencido : 0, atrasoMax: x ? x.atrasoMax : 0, atrasos: x ? x.atrasos : [] });
+      deuda: x ? x.deuda : 0, vencido: x ? x.vencido : 0, atrasoMax: x ? x.atrasoMax : 0, atrasoTodo: x ? x.atrasoTodo : 0, atrasos: x ? x.atrasos : [] });
     credito[id] = info;
     lista.push({ ...info, clientId: id, clientName: (c && c.name) || (x && x.name) || id, sellerId: (c && c.sellerId) || (x && x.sellerId) || '', sellerName: (x && x.sellerName) || '' });
   }

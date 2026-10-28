@@ -764,3 +764,12 @@ tr.agotado-row td { opacity: .65; }
 .cb-chips { flex-wrap: wrap; overflow: visible; }
 .cb-date { display: inline-flex; align-items: center; gap: 6px; }
 .cb-date input { background: transparent; border: 0; color: inherit; font: inherit; max-width: 150px; }
+
+/* Plazos por categoría y WhatsApp en fila */
+.cb-partes { display: flex; flex-direction: column; gap: 2px; font-size: 13px; margin-top: 3px; }
+.cb-baja { color: #fff; background: #c62828; border-radius: 8px; padding: 2px 8px; font-weight: 700; align-self: flex-start; }
+.wq-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 10px; margin: 6px 0 10px; border-radius: 14px; background: rgba(37, 211, 102, .12); border: 1px solid rgba(37, 211, 102, .45); }
+.wq-bar > span { font-weight: 700; margin-right: 4px; }
+.wq-prog { height: 8px; border-radius: 999px; background: var(--line); overflow: hidden; margin: 4px 0 8px; }
+.wq-prog i { display: block; height: 100%; background: #25d366; transition: width .3s; }
+.wq-go { font-size: 18px; min-height: 60px; background: #25d366 !important; border-color: #25d366 !important; color: #06290f !important; }
