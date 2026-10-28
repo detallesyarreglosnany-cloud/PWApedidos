@@ -30,6 +30,18 @@
     return t.unidades && !t.cajas ? u : t.unidades && t.cajas ? `${l.code} / ${u}` : l.code;
   }
 
+  /**
+   * Tamaño de la presentación en ml o g (2 L → 2000, 1,25 L → 1250, 355 ml → 355, 500 g → 500, 1 kg → 1000).
+   * La hoja de carga ordena cada categoría de mayor a menor: 2 L, 1,5 L, 1,25 L, 1 L, 355 ml…
+   */
+  function sizeOf(r) {
+    const s = String(`${r.presentation || ''} ${r.name || ''}`).toLowerCase().replace(/(\d),(\d)/g, '$1.$2');
+    const m = s.match(/(\d+(?:\.\d+)?)\s*(kgs?|kilos?|grs?|gramos?|g|ml|cc|lts?|litros?|l)(?![a-z])/);
+    if (!m) return 0;
+    const n = +m[1], big = /^(kg|kilo|lt|litro|l)/.test(m[2]) && !/^ml/.test(m[2]);
+    return big ? n * 1000 : n;
+  }
+
   /** Totales de una línea de pedido (usa el precio congelado en la línea). */
   function lineTotals(line) {
     const cajas = +line.cajas || 0;
@@ -90,6 +102,7 @@
           productId: line.productId,
           code: um === 'UN' && mode === 'bultos' ? lineCode(line, 'UN') : line.code, name: line.name, presentation: line.presentation,
           category: line.category || '', unitsPerBox: line.unitsPerBox,
+          ...(opts.almacen ? (() => { const a = opts.almacen(line.productId, line.category); return { alm: a.id, almName: a.nombre, almOrd: a.orden }; })() : {}),
           cells: new Array(cols.length).fill(0), total: 0,
         });
       }
@@ -116,12 +129,15 @@
 
     const rows = [...rowsByKey.values()];
     rows.forEach((r) => { r.total = r2(r.cells.reduce((a, b) => a + b, 0)); });
-    // Orden de almacén: rubro (orden configurado) → nombre → código → CJ antes que UN
+    // Orden de almacén: almacén (si se separa) → rubro (orden configurado) → tamaño de mayor a menor (2 L, 1,5 L,
+    // 1,25 L, 1 L, 355 ml…) → orden manual → nombre → código → CJ antes que UN
     const rank = (c) => { const i = (opts.rubros || []).indexOf(c); return i < 0 ? 999 : i; };
     const prank = opts.productRank || {}; // orden manual por producto (Inventario → Orden)
     rows.sort((a, b) =>
+      ((a.almOrd ?? 0) - (b.almOrd ?? 0)) ||
       rank(a.category) - rank(b.category) ||
       a.category.localeCompare(b.category, 'es') ||
+      sizeOf(b) - sizeOf(a) ||
       (prank[a.productId] || 9999) - (prank[b.productId] || 9999) ||
       a.name.localeCompare(b.name, 'es') ||
       String(a.code).localeCompare(String(b.code), 'es', { numeric: true }) ||
@@ -203,5 +219,5 @@
     return encode(out, sep);
   }
 
-  global.Matrix = { build, toDelimited, toFlat, lineTotals, orderTotals, lineDesc, lineCode, unitCodeOf, r2 };
+  global.Matrix = { build, toDelimited, toFlat, lineTotals, orderTotals, lineDesc, lineCode, unitCodeOf, sizeOf, r2 };
 })(window);

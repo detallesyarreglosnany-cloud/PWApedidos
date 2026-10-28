@@ -120,24 +120,47 @@
   /* --------------------------- Hoja de carga --------------------------- */
   function loadSheetHTML(load, orders, ctx) {
     const cfg = ctx.config;
-    const m = Matrix.build(orders, 'bultos', { keepOrder: true, money: false, rubros: cfg.rubros, productRank: ctx.productRank });
+    // Separada por almacén (cada almacén ve lo que sale de él) y cada categoría de mayor a menor tamaño
+    const m = Matrix.build(orders, 'bultos', { keepOrder: true, money: false, rubros: cfg.rubros, productRank: ctx.productRank, almacen: ctx.almacen });
     const u = ctx.usage;
-    const extra = cfg.sheetExtraCols || ['VACÍOS', 'DEVOLUCIÓN'];
+    // DEVOLUCIÓN: lo que el camión trae de la última liquidación del despachador; A CARGAR = TOTAL − DEVOLUCIÓN
+    const devRows = (ctx.carry && ctx.carry.rows) || {}, devOf = (r) => +devRows[r.productId + '|' + r.um] || 0;
+    const hasDev = Object.values(devRows).some((q) => +q > 0);
+    const isDevCol = (x) => /devoluc/i.test(x), isCarCol = (x) => /a cargar/i.test(x);
+    let extra = (cfg.sheetExtraCols || ['VACÍOS', 'DEVOLUCIÓN']).slice();
+    if (hasDev && !extra.some(isDevCol)) extra.push('DEVOLUCIÓN');
+    if (hasDev && !extra.some(isCarCol)) extra.splice(extra.findIndex(isDevCol) + 1, 0, 'A CARGAR');
     const blanks = extra.map(() => '<td class="blank"></td>').join('');
     // VACÍOS: en las filas de cajas de productos retornables, la cantidad de esa fila
     const pById = new Map((ctx.products || []).map((p) => [p.id, p]));
-    const extraCells = (r) => extra.map((x) => (Envases.isVacCol(x) && r.um === 'CJ' && Envases.isReturnable(pById.get(r.productId))
-      ? `<td class="num vac">${nf0.format(r.total)}</td>` : '<td class="blank"></td>')).join('');
-    let lastCat = null;
-    const rows = m.rows.map((r) => {
+    const isVac = (r) => r.um === 'CJ' && Envases.isReturnable(pById.get(r.productId));
+    const extraVals = (x, tot, vac, dev) => (Envases.isVacCol(x) && vac ? `<td class="num vac">${nf0.format(vac)}</td>`
+      : isDevCol(x) && dev ? `<td class="num dev">${nf0.format(dev)}</td>`
+        : isCarCol(x) && hasDev ? `<td class="num tot">${nf0.format(Math.max(0, tot - dev))}</td>` : '<td class="blank"></td>');
+    const extraCells = (r) => extra.map((x) => extraVals(x, r.total, isVac(r) ? r.total : 0, devOf(r))).join('');
+    const multiAlm = m.rows.some((r) => r.almName), span = m.cols.length + 2 + extra.length;
+    const almTot = (alm) => {
+      const rs = m.rows.filter((r) => r.alm === alm.alm), sum = (f) => rs.reduce((a, r) => a + f(r), 0);
+      const tot = sum((r) => r.total);
+      return `<tr class="almt"><td>TOTAL ${esc(alm.almName)}</td>${m.cols.map((c, i) => { const v = sum((r) => r.cells[i]); return `<td class="num">${v ? nf0.format(v) : ''}</td>`; }).join('')}<td class="num tot">${nf0.format(tot)}</td>${extra.map((x) => extraVals(x, tot, sum((r) => (isVac(r) ? r.total : 0)), sum(devOf))).join('')}</tr>`;
+    };
+    let lastCat = null, lastAlm = null;
+    const rows = m.rows.map((r, i) => {
+      let head = '';
+      if (multiAlm && r.alm !== lastAlm) { lastAlm = r.alm; lastCat = null; head = `<tr class="almh"><td colspan="${span}">${esc(r.almName)} · lo que sale de este almacén</td></tr>`; }
       const first = lastCat !== null && r.category !== lastCat;
       lastCat = r.category;
-      return `<tr${first ? ' class="grp"' : ''}><td class="p"><span class="muted">${esc(r.code)}</span> ${esc(r.name)} <b>${esc(r.presentation)}</b> <span class="um">${r.um}</span></td>
-        ${r.cells.map((v) => `<td class="num${v ? ' has' : ''}">${v ? nf0.format(v) : ''}</td>`).join('')}<td class="num tot">${nf0.format(r.total)}</td>${extraCells(r)}</tr>`;
+      const tail = multiAlm && (i === m.rows.length - 1 || m.rows[i + 1].alm !== r.alm) ? almTot(r) : '';
+      return head + `<tr${first ? ' class="grp"' : ''}><td class="p"><span class="muted">${esc(r.code)}</span> ${esc(r.name)} <b>${esc(r.presentation)}</b> <span class="um">${r.um}</span></td>
+        ${r.cells.map((v) => `<td class="num${v ? ' has' : ''}">${v ? nf0.format(v) : ''}</td>`).join('')}<td class="num tot">${nf0.format(r.total)}</td>${extraCells(r)}</tr>` + tail;
     }).join('');
     // Al pie, una sola fila: el total de todo (cajas + unidades sueltas)
-    const vacTotal = m.rows.filter((r) => r.um === 'CJ' && Envases.isReturnable(pById.get(r.productId))).reduce((a, r) => a + r.total, 0);
-    const extraTot = extra.map((x) => (Envases.isVacCol(x) ? `<td class="num tot">${nf0.format(vacTotal)}</td>` : '<td class="blank"></td>')).join('');
+    const vacTotal = m.rows.filter(isVac).reduce((a, r) => a + r.total, 0), devTotal = m.rows.reduce((a, r) => a + devOf(r), 0);
+    const allTotal = m.rows.reduce((a, r) => a + r.total, 0);
+    const extraTot = extra.map((x) => (Envases.isVacCol(x) ? `<td class="num tot">${nf0.format(vacTotal)}</td>` : extraVals(x, allTotal, 0, devTotal))).join('');
+    // Lo que trae el camión de productos que esta hoja no lleva
+    const inSheet = new Set(m.rows.map((r) => r.productId + '|' + r.um));
+    const devOut = Object.entries(devRows).filter(([k, q]) => +q > 0 && !inSheet.has(k)).map(([k, q]) => { const [pid, um] = k.split('|'), p = pById.get(pid); return `${nf0.format(q)} ${esc(um)} ${esc(p ? `${p.code} ${p.name} ${p.presentation || ''}` : pid)}`; });
     const foot = m.footer.filter((f) => f.key === 'TOTAL_BULTOS').map((f) => `<tr class="tot"><td>TOTAL (cajas + unidades)</td>${f.cells.map((v) => `<td class="num">${nf0.format(v)}</td>`).join('')}<td class="num tot">${nf0.format(f.total)}</td>${extraTot}</tr>`).join('')
       // Vacíos al pie (solo si la hoja lleva retornables)
       + (vacTotal ? Envases.sheetRows(m.cols.map((c) => c.order), pById).map((v) => `<tr class="vacrow"><td>${esc(v.label)}</td>${v.cells.map((x) => `<td class="num">${x ? nf0.format(x) : ''}</td>`).join('')}<td class="num tot">${nf0.format(v.total)}</td>${blanks}</tr>`).join('') : '');
@@ -167,6 +190,7 @@
         ${m.cols.map((c, i) => `<th class="cl"><div>${i + 1}. ${esc(c.client)}</div></th>`).join('')}<th class="cl tcol"><div>TOTAL</div></th>
         ${extra.map((x) => `<th class="cl"><div>${esc(x)}</div></th>`).join('')}</tr></thead>
         <tbody>${rows}</tbody><tfoot>${foot}</tfoot></table>
+      ${hasDev ? `<p class="devnote"><b>DEVOLUCIÓN</b> = lo que el camión trae de la última liquidación de ${esc(load.dispatcherName || 'este despachador')} (${nf0.format(devTotal)}). <b>A CARGAR</b> = TOTAL − DEVOLUCIÓN. En la liquidación se decide si se usó para completar la carga, si sigue en el camión o si volvió al almacén.${devOut.length ? ` También trae (esta hoja no lo lleva): ${devOut.join(' · ')}.` : ''}</p>` : ''}
       <p class="muted foot">${m.cols.some((c) => global.Cobranza && global.Cobranza.semOf(c.order.clientId)) ? 'CRÉDITO: V = verde, al día · A = amarillo, con atraso · R = rojo, atraso grave · N = cliente nuevo (contado). ' : ''}CJ = cajas · UN = unidades sueltas. Clientes: ${m.cols.map((c, i) => `${i + 1}. ${esc(c.client)} (${esc(Loads.initials(c.order.sellerName))})`).join(' · ')}</p>
       <div class="sign">${Loads.isRetiro(load) ? '<div>Entregó (oficina)</div><div>Almacén</div><div>Vendedor</div><div>Control / Oficina</div>' : '<div>Despachador</div><div>Almacén</div><div>Vendedor</div><div>Control / Oficina</div>'}</div>
       ${(() => { const cto = (o) => (global.Cobranza ? global.Cobranza.contadoOf(o.clientId) : ''); const obs = m.cols.map((c, i) => ({ i: i + 1, o: c.order })).filter((x) => x.o.factura || x.o.notes || cto(x.o));
@@ -197,6 +221,9 @@
     .sheet tr.sem th.s-rojo{background:#ef7f7f !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
     .sheet tr.sem th.s-nuevo{background:#90caf9 !important;-webkit-print-color-adjust:exact;print-color-adjust:exact} .obs{margin-top:6px;border-top:1px solid #000;padding-top:3px;font-size:10px;line-height:1.25;page-break-inside:avoid}
     tr.grp td{border-top:2px solid #000}
+    tr.almh td{border:2px solid #000;font-weight:900;font-size:13px;letter-spacing:.05em;padding:3px 4px;text-align:left}
+    tr.almt td{border-top:2px solid #000;border-bottom:2px solid #000;font-weight:900} td.dev{font-weight:900}
+    .devnote{font-size:10px;margin:4px 0 0;line-height:1.25}
     td.has{font-weight:bold}
     table.load td.tot,table.load th.tcol{font-size:14px;font-weight:900;border-left:2px solid #000;border-right:2px solid #000}
     table.load tfoot td{font-size:14px;font-weight:900;border-top:2px solid #000}
@@ -512,5 +539,5 @@
   }
 
   global.AlignCols = alignCols;
-  global.Print = { printTruckLedger, printLoadSheet, printNotes, printLiquidation, printKardex, printQuincena, printCatSel, printPagos, printTickets, printTestTicket };
+  global.Print = { printTruckLedger, printLoadSheet, loadSheetHTML, printNotes, printLiquidation, printKardex, printQuincena, printCatSel, printPagos, printTickets, printTestTicket };
 })(window);

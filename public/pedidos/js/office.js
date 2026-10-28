@@ -23,6 +23,7 @@
   const log = (type, text, extra) => PV.logEvent(type, text, extra);
 
   const productRank = () => Object.fromEntries(S.products.map((p) => [p.id, +p.sort || 9999]));
+  const almRes = () => (window.Almacen ? Almacen.resolver(S.config, S.products) : undefined); // hoja separada por almacén
   const byIdMap = (arr) => new Map(arr.map((x) => [x.id, x]));
 
   /* ============================== Shell ============================== */
@@ -405,24 +406,41 @@
     const closed = Loads.isClosed(load);
     const editableLoad = !st.locked && !closed && !roGer();
     const edit = editableLoad && U().editQty;
-    const m = Matrix.build(os, 'bultos', { keepOrder: true, money: false, rubros: rubros(), productRank: productRank() });
+    const m = Matrix.build(os, 'bultos', { keepOrder: true, money: false, rubros: rubros(), productRank: productRank(), almacen: almRes() });
+    // Devolución: lo que el camión trae de la ÚLTIMA liquidación de este despachador; se puede restar del total a cargar
+    const carry = Liq.carryFor(load, S.loads), devRows = (carry && carry.rows) || {};
+    const devOf = (r) => +devRows[r.productId + '|' + r.um] || 0;
+    const hasDev = Object.values(devRows).some((q) => +q > 0), xN = hasDev ? 2 : 0, xBlank = '<td></td>'.repeat(xN);
+    const devCells = (tot, dev) => (hasDev ? `<td class="n dev ${dev ? '' : 'zero'}">${dev ? nf0.format(dev) : '·'}</td><td class="n tot">${nf0.format(Math.max(0, tot - dev))}</td>` : '');
+    const multiAlm = m.rows.some((r) => r.almName);
     const short = closed ? [] : Loads.shortages(os, S.products);
     const shortIds = new Set(short.map((x) => x.product.id));
     const routes = [...new Set((S.config.routes || []).concat(load.route ? [load.route] : []))];
-    let lastCat = null;
+    let lastCat = null, lastAlm = null;
     const colspan = m.cols.length + 2;
-    const body = m.rows.map((r) => {
+    // Al cerrar cada almacén, su total por cliente (lo que sale de ese almacén)
+    const almTotal = (alm) => {
+      const rs = m.rows.filter((r) => r.alm === alm.alm), cells = m.cols.map((c, i) => rs.reduce((a, r) => a + r.cells[i], 0));
+      const tot = rs.reduce((a, r) => a + r.total, 0), dev = rs.reduce((a, r) => a + devOf(r), 0);
+      return `<tr class="alm-tot"><td class="sticky-col">Total ${esc(alm.almName)}</td>${cells.map((v) => `<td class="n">${v ? nf0.format(v) : '·'}</td>`).join('')}<td class="n tot">${nf0.format(tot)}</td>${devCells(tot, dev)}</tr>`;
+    };
+    const body = m.rows.map((r, ri) => {
       let head = '';
-      if (r.category !== lastCat) { lastCat = r.category; head = `<tr class="cat-row"><td class="sticky-col">${esc(r.category)}</td><td colspan="${colspan - 2}"></td><td class="tot"></td></tr>`; }
+      if (multiAlm && r.alm !== lastAlm) { lastAlm = r.alm; lastCat = null; head += `<tr class="alm-row"><td class="sticky-col">🏬 ${esc(r.almName)}</td><td colspan="${colspan - 1 + xN}">Lo que sale del ${esc(r.almName)}</td></tr>`; }
+      if (r.category !== lastCat) { lastCat = r.category; head += `<tr class="cat-row"><td class="sticky-col">${esc(r.category)}</td><td colspan="${colspan - 2}"></td><td class="tot"></td>${xBlank}</tr>`; }
+      const tail = multiAlm && (ri === m.rows.length - 1 || m.rows[ri + 1].alm !== r.alm) ? almTotal(r) : '';
       const kind = r.um === 'CJ' ? 'cajas' : 'unidades';
       return head + `<tr class="${shortIds.has(r.productId) ? 'short' : ''}">
         <td class="sticky-col" title="${esc(r.code + ' · ' + r.name + ' ' + r.presentation)}"><span class="mono muted">${esc(r.code)}</span> ${esc(r.name)} <b>${esc(r.presentation)}</b> <span class="um ${r.um}">${r.um}</span></td>
         ${r.cells.map((v, i) => edit
           ? `<td class="n"><input class="cell-in" inputmode="numeric" value="${v || ''}" data-oid="${esc(m.cols[i].id)}" data-pid="${esc(r.productId)}" data-kind="${kind}" aria-label="${esc(m.cols[i].client)} ${esc(r.name)}"></td>`
           : `<td class="n ${v ? '' : 'zero'}">${v ? nf0.format(v) : '·'}</td>`).join('')}
-        <td class="n tot">${nf0.format(r.total)}</td></tr>`;
+        <td class="n tot">${nf0.format(r.total)}</td>${devCells(r.total, devOf(r))}</tr>` + tail;
     }).join('');
     const pById = byIdMap(S.products);
+    // Lo que trae el camión de productos que esta hoja no lleva: se decide en la liquidación
+    const inSheet = new Set(m.rows.map((r) => r.productId + '|' + r.um));
+    const devOut = Object.entries(devRows).filter(([k, q]) => +q > 0 && !inSheet.has(k)).map(([k, q]) => { const [pid, um] = k.split('|'), p = pById.get(pid); return `<b>${nf0.format(q)} ${esc(um)}</b> ${esc(p ? `${p.code} ${p.name} ${p.presentation || ''}` : pid)}`; });
     const vacRows = m.rows.some((r) => r.um === 'CJ' && Envases.isReturnable(pById.get(r.productId))) ? Envases.sheetRows(m.cols.map((c) => c.order), pById) : [];
     const vacFoot = vacRows.map((v) => `<tr class="vac-row"><td class="sticky-col">♻ ${esc(v.label)}</td>${v.cells.map((x, i) => {
       const ord = m.cols[i].order;
@@ -432,17 +450,18 @@
         return `<td class="n">${items.map((it) => { const a = Envases.assignedOf(ord, it.pid); return `${items.length > 1 ? `<small class="asg-code">${esc(it.code)}</small>` : ''}<input class="cell-in asg-in" inputmode="numeric" value="${a === null ? '' : a}" placeholder="—" data-oid="${esc(m.cols[i].id)}" data-pid="${esc(it.pid)}" title="En blanco = sin decidir · 0 = no se asigna" aria-label="Asignados ${esc(it.code)} ${esc(m.cols[i].client)}">`; }).join('')}</td>`;
       }
       return `<td class="n ${x ? '' : 'zero'}">${x === undefined ? '' : x === null ? '·' : nf0.format(x)}</td>`;
-    }).join('')}<td class="n tot">${nf0.format(v.total)}</td></tr>`).join('');
+    }).join('')}<td class="n tot">${nf0.format(v.total)}</td>${xBlank}</tr>`).join('');
     // Solo «Total bultos» queda fija abajo (lo que lleva cada cliente); el resto del pie se ve al final
     const stickKey = m.footer.some((f) => f.key === 'TOTAL_BULTOS') ? 'TOTAL_BULTOS' : (m.footer[0] || {}).key;
-    const foot = m.footer.map((f) => `<tr class="${f.key === stickKey ? 'stick' : ''}"><td class="sticky-col">${esc(f.label)}</td>${f.cells.map((v) => `<td class="n">${nf0.format(v)}</td>`).join('')}<td class="n tot">${nf0.format(f.total)}</td></tr>`).join('') + vacFoot;
+    const devTot = m.rows.reduce((a, r) => a + devOf(r), 0);
+    const foot = m.footer.map((f) => `<tr class="${f.key === stickKey ? 'stick' : ''}"><td class="sticky-col">${esc(f.label)}</td>${f.cells.map((v) => `<td class="n">${nf0.format(v)}</td>`).join('')}<td class="n tot">${nf0.format(f.total)}</td>${f.key === 'TOTAL_BULTOS' ? devCells(f.total, devTot) : xBlank}</tr>`).join('') + vacFoot;
     const totalUSD = os.reduce((a, o) => a + Matrix.orderTotals(o).monto, 0);
     const dups = dupIndex(os);
     const revG = window.Revision && !closed ? Revision.status(load, os) : null; // revisión de cobranzas
-    const initialsRow = `<tr class="ini-row"><th class="sticky-col">Vendedor →</th>${m.cols.map((c) => `<th>${esc(Loads.initials(c.order.sellerName))}</th>`).join('')}<th class="tot"></th></tr>`;
+    const initialsRow = `<tr class="ini-row"><th class="sticky-col">Vendedor →</th>${m.cols.map((c) => `<th>${esc(Loads.initials(c.order.sellerName))}</th>`).join('')}<th class="tot"></th>${'<th></th>'.repeat(xN)}</tr>`;
     // Semáforo de crédito de cada cliente (lo calcula cobranza): 🟢 al día · 🟡 atraso · 🔴 atraso grave · 🆕 nuevo
     const semOf = (o) => (window.Cobranza ? Cobranza.semOf(o.clientId) : ''), conOf = (o) => (window.Cobranza ? Cobranza.contadoOf(o.clientId) : '');
-    const semRow = m.cols.some((c) => semOf(c.order) || conOf(c.order)) ? `<tr class="ini-row sem-row"><th class="sticky-col" title="Semáforo de crédito: 🟢 al día · 🟡 con atraso · 🔴 atraso grave · 🆕 nuevo · C = contado">Crédito →</th>${m.cols.map((c) => { const s = semOf(c.order), k = conOf(c.order); return `<th title="${esc(c.client)}: ${esc((Cobranza.SEM[s] || 'sin datos') + (k === 'contado' ? ' · CONTADO' : ''))}">${Cobranza.DOT[s] || ''}${k === 'contado' ? '<small>C</small>' : ''}</th>`; }).join('')}<th class="tot"></th></tr>` : '';
+    const semRow = m.cols.some((c) => semOf(c.order) || conOf(c.order)) ? `<tr class="ini-row sem-row"><th class="sticky-col" title="Semáforo de crédito: 🟢 al día · 🟡 con atraso · 🔴 atraso grave · 🆕 nuevo · C = contado">Crédito →</th>${m.cols.map((c) => { const s = semOf(c.order), k = conOf(c.order); return `<th title="${esc(c.client)}: ${esc((Cobranza.SEM[s] || 'sin datos') + (k === 'contado' ? ' · CONTADO' : ''))}">${Cobranza.DOT[s] || ''}${k === 'contado' ? '<small>C</small>' : ''}</th>`; }).join('')}<th class="tot"></th>${'<th></th>'.repeat(xN)}</tr>` : '';
 
     root.innerHTML = `
       <div class="toolbar no-print">
@@ -466,6 +485,7 @@
       </div>
       ${st.locked && !closed ? `<div class="hint">🔒 <b>${esc(st.name)}</b>: los pedidos ya no se pueden editar. Para modificarlos, vuelve la hoja a un estado sin 🔒.</div>` : ''}
       ${window.Revision && !closed ? Revision.officeBlock(load, os, !roGer()) : ''}
+      ${hasDev ? `<div class="hint">↩ <b>Devolución de la última liquidación</b> de ${esc(load.dispatcherName || 'este despachador')}: el camión ya trae ${nf0.format(devTot)} en los productos de la columna DEV. <b>A CARGAR</b> = TOTAL − DEV. En la liquidación se decide si se usó para completar la carga, si sigue en el camión o si volvió al almacén.${devOut.length ? ` También trae (esta hoja no lo lleva): ${devOut.join(' · ')}.` : ''}</div>` : ''}
       ${short.length ? `<div class="hint warn">⚠ Inventario insuficiente: ${short.map((x) => `<b>${esc(x.product.name)}</b> (pedido ${fmtStock(x.need, x.product.unitsPerBox, x.product.sellBy)}, hay ${fmtStock(x.stock, x.product.unitsPerBox, x.product.sellBy)})`).join(' · ')}. Ajusta con ✎.</div>` : ''}
       <div class="toolbar no-print">
         ${editableLoad ? `<button class="btn ${edit ? 'btn-accent' : ''}" id="dEdit">${edit ? '✓ Terminar edición' : '✎ Editar cantidades'}</button>
@@ -479,7 +499,7 @@
       </div>
       ${os.length ? `<div class="table-wrap"><table class="grid sheet-grid">
         <thead>${initialsRow}${semRow}<tr><th class="sticky-col">Producto</th>
-          ${m.cols.map((c, i) => `<th class="client" title="${esc(c.client)}"><div>${i + 1}. ${esc(c.client)}</div></th>`).join('')}<th class="tot">TOTAL</th></tr></thead>
+          ${m.cols.map((c, i) => `<th class="client" title="${esc(c.client)}"><div>${i + 1}. ${esc(c.client)}</div></th>`).join('')}<th class="tot">TOTAL</th>${hasDev ? '<th class="dev" title="Devolución: lo que el camión trae de la última liquidación">DEV</th><th class="tot" title="TOTAL − DEVOLUCIÓN">A CARGAR</th>' : ''}</tr></thead>
         <tbody>${body}</tbody><tfoot>${foot}</tfoot></table></div>` : '<div class="empty card"><strong>Hoja vacía</strong>Mueve clientes aquí con ⇄ desde otra hoja o desde "Clientes en espera".</div>'}
       <div class="section-title">Clientes de la hoja (el orden es el de las columnas) · total ${usd(totalUSD)}</div>
       <div class="card"><table class="inv">
@@ -506,7 +526,7 @@
       if (closed && !location.hash.includes('archivo')) location.hash = baseHash() + '/archivo'; else PV.render();
     };
     const ctx = () => ({ config: S.config, products: S.products, usage: Loads.usage(cur(), byIdMap(S.orders), S.config), draft: !cur().number, clientsById: byIdMap(S.clients),
-      load: cur(), productRank: productRank(), statusName: stName(cur()) });
+      load: cur(), productRank: productRank(), statusName: stName(cur()), almacen: almRes(), carry: Liq.carryFor(cur(), S.loads) });
     $('#dPrint').onclick = () => Print.printLoadSheet(cur(), Loads.loadOrders(cur(), byIdMap(S.orders)), ctx());
     const tctx = () => ({ config: S.config, clientsById: byIdMap(S.clients), productsById: byIdMap(S.products), load: cur() });
     $('#dTicket').onclick = () => Print.printTickets(Loads.loadOrders(cur(), byIdMap(S.orders)), tctx(), S.settings.ticket);
@@ -516,7 +536,7 @@
       const vacRows = Envases.sheetRows(m.cols.map((c) => c.order), pById);
       const extra = vacRows.some((v) => v.total) ? vacRows.map((v) => ({ label: v.label, cells: v.cells, total: v.total })) : [];
       const sheet = Exporta.matrix(m, { sheet: 'Hoja de carga', title: `${Loads.isRetiro(L) ? 'RETIRO POR OFICINA' : 'HOJA DE CARGA'} · ${Loads.labelOf(L)}${L.number ? ' · ' + Loads.loadCode(L) : ''}`,
-        info: [`Fecha de la carga: ${L.date || today()}`, `Pedidos del: ${Loads.orderDateRange(os2) || '—'}`, `Ruta: ${L.route || '—'}`, `Despachador: ${L.dispatcherName || '—'}`, `Vendedor(es): ${L.sellerName || '—'}`], extra });
+        info: [`Fecha de la carga: ${L.date || today()}`, `Pedidos del: ${Loads.orderDateRange(os2) || '—'}`, `Ruta: ${L.route || '—'}`, `Despachador: ${L.dispatcherName || '—'}`, `Vendedor(es): ${L.sellerName || '—'}`], extra, dev: hasDev ? devRows : null });
       await Exporta.save(`hoja_${Loads.labelOf(L)}_${L.date || today()}.xlsx`, [sheet]);
     };
     $('#dCopy').onclick = async () => {
@@ -665,7 +685,7 @@
         <div class="actions" style="flex-direction:column">
           <button class="btn btn-primary" id="pSheet">🖨 Imprimir hoja de carga</button>
           <button class="btn" data-close>Listo</button></div>`);
-      const ctx = { config: S.config, products: S.products, usage: Loads.usage(r.load, byIdMap(S.orders), S.config), clientsById: byIdMap(S.clients), load: r.load, productRank: productRank(), statusName: st.name };
+      const ctx = { config: S.config, products: S.products, usage: Loads.usage(r.load, byIdMap(S.orders), S.config), clientsById: byIdMap(S.clients), load: r.load, productRank: productRank(), statusName: st.name, almacen: almRes(), carry: Liq.carryFor(r.load, S.loads) };
       $('#pSheet', sh.el).onclick = () => Print.printLoadSheet(r.load, r.orders, ctx);
     } else back();
     PV.runSync(false);
@@ -1219,7 +1239,7 @@
   /* ============================ LIQUIDACIÓN ============================ */
   // Fase 2 · E3. Se abre desde el Archivo o desde una hoja cerrada. Todo viene
   // prellenado como «entregado»: la oficina solo marca las novedades.
-  const liqOpts = () => ({ rubros: rubros(), productRank: productRank(), productsById: byIdMap(S.products) });
+  const liqOpts = () => ({ rubros: rubros(), productRank: productRank(), productsById: byIdMap(S.products), almacen: almRes() });
   const blankLiq = () => ({ status: 'borrador', startedAt: DB.now(), orders: {}, truck: {} });
   const RESULT_TXT = Object.fromEntries(Liq.RESULTS);
 
@@ -1255,6 +1275,8 @@
     const destSel = (r) => isRet ? `<select class="select sm ${r.dev > 0 && !r.dest ? 'need' : ''}" data-t="dest" ${dis}>${r.dest === 'almacen' ? '' : '<option value="">— Elegir —</option>'}${opt([['almacen', 'Volvió a almacén']], r.dest)}</select>` : `<select class="select sm ${r.dev > 0 && !r.dest ? 'need' : ''}" data-t="dest" ${dis}>${r.dest ? '' : '<option value="">— Elegir —</option>'}${opt([['almacen', 'Volvió a almacén'], ['siguiente', 'Siguiente carga (la próxima que se liquide)'],
       ...dLoads.map((l) => ['L:' + l.id, '→ ' + lname(l)]), ...(r.destLoad && !dLoads.some((l) => l.id === r.destLoad) ? [['L:' + r.destLoad, '→ ' + ((S.loads.find((l) => l.id === r.destLoad) && lname(S.loads.find((l) => l.id === r.destLoad))) || 'hoja eliminada')]] : [])], destVal(r))}</select>`;
     const fromTxt = (r) => (r.desde || []).map((id) => { const l = S.loads.find((x) => x.id === id); return l ? Loads.labelOf(l) : id; }).join(' + ');
+    const dscBtns = (r) => { const full = r.cargaMan && r.carga === Math.max(0, r.pedido - r.noSalio), dsc = !r.cargaMan;
+      return `<div class="dsc-btns"><button class="btn btn-sm ${dsc ? 'btn-accent' : ''}" data-dsc="si" title="La devolución completó la carga: Carga = Según hoja − Quedan">↩ Se descontó</button><button class="btn btn-sm ${full ? 'btn-accent' : ''}" data-dsc="no" title="Almacén cargó completo: lo que traía sobra y se decide en «Lo que sobra»">Cargaron completo</button></div>`; };
     const opt = (arr, cur) => arr.map(([v, l]) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`).join('');
     const motivoSel = (cur, attr) => `<select class="select sm" ${attr} ${dis}><option value="">— Motivo —</option>${Liq.MOTIVOS.map((m) => `<option ${m === cur ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>`;
     const sh = Liq.sheet(os, liq, rows, vac), rate = +S.config.exchangeRate || 0;
@@ -1344,7 +1366,7 @@
         <tbody>${rows.map((r) => `<tr data-key="${esc(r.key)}" class="${r.dev === null ? 'liq-count' : r.dif !== 0 ? 'liq-bad' : ''}">
           <td data-l="Producto"><span class="mono muted">${esc(r.code)}</span> ${esc(r.name)} <b>${esc(r.presentation)}</b></td><td><span class="um ${r.um}">${r.um}</span></td>
           <td class="n" data-l="Según hoja">${r.pedido}${r.noSalio ? `<div class="muted" style="font-size:11px">−${r.noSalio} no salió</div>` : ''}</td><td class="n" data-l="Entregado"><b>${r.entregado}</b></td>
-          <td class="n in" data-l="Quedan"><input class="input qin small" inputmode="numeric" data-t="queda" value="${r.quedaMan || r.queda ? r.queda : ''}" placeholder="0" aria-label="Quedan ${esc(r.code)}" ${dis}>${r.traia || r.quedaMan ? `<div class="muted" style="font-size:11px">${r.queda !== r.traia ? `<span class="warn-txt">traía ${r.traia}</span>` : 'traía ' + r.traia}${r.traia ? ' · de ' + esc(fromTxt(r)) : ''}</div>` : ''}</td>
+          <td class="n in" data-l="Quedan"><input class="input qin small" inputmode="numeric" data-t="queda" value="${r.quedaMan || r.queda ? r.queda : ''}" placeholder="0" aria-label="Quedan ${esc(r.code)}" ${dis}>${r.traia || r.quedaMan ? `<div class="muted" style="font-size:11px">${r.queda !== r.traia ? `<span class="warn-txt">traía ${r.traia}</span>` : 'traía ' + r.traia}${r.traia ? ' · de ' + esc(fromTxt(r)) : ''}</div>` : ''}${r.traia && !done ? dscBtns(r) : ''}</td>
           <td class="n in" data-l="Carga"><input class="input qin small" inputmode="numeric" data-t="carga" value="${r.carga}" aria-label="Carga ${esc(r.code)}" ${dis}></td>
           ${hasAnt ? `<td class="n" data-l="Dev. anteriores">${r.anterior || ''}</td>` : ''}<td class="n" data-l="Total">${r.total}</td><td class="n" data-l="Debe quedar"><b>${r.debe}</b></td>
           <td class="n in" data-l="Devolución"><input class="input qin small" inputmode="numeric" data-t="dev" value="${r.dev === null ? '' : r.dev}" placeholder="contar" aria-label="Devolución ${esc(r.code)}" ${dis}></td>
@@ -1408,6 +1430,9 @@
     $('#qPrint').onclick = () => { const st = liqState(cur()); Print.printLiquidation(cur(), st, { config: S.config, products: S.products, productRank: productRank(), loads: S.loads }); };
     const qc = $('#qClose'); if (qc) qc.onclick = () => closeLiquidation(cur(), root);
     const qr = $('#qReopen'); if (qr) qr.onclick = () => reopenLiquidation(cur(), root);
+    // Devolución que traía el camión: ¿la descontaron de la carga o cargaron completo? (lo que sobra se decide al final de la fila)
+    root.querySelectorAll('[data-dsc]').forEach((b) => { b.onclick = () => { const key = b.closest('tr').dataset.key, r = rows.find((x) => x.key === key); if (!r) return;
+      saveLiq((q) => { const x = { ...(q.truck[key] || {}) }; if (b.dataset.dsc === 'si') delete x.carga; else x.carga = Math.max(0, r.pedido - r.noSalio); q.truck[key] = x; }); }; });
     const setAll = (dest) => saveLiq((q) => rows.forEach((r) => { if (r.debe > 0 || r.dev > 0) { const x = { ...(q.truck[r.key] || {}), dest }; delete x.destLoad; q.truck[r.key] = x; } }));
     const sa = $('#qAllStore'); if (sa) sa.onclick = () => setAll('almacen');
     const sn = $('#qAllNext'); if (sn) sn.onclick = () => setAll('siguiente');
@@ -2046,6 +2071,7 @@
         <button class="btn" id="iPhotos">📷 Fotos en lote</button>
         <button class="btn" id="iOrder">↕ Ordenar catálogo</button>
         <button class="btn" id="iPlazo" title="Días de crédito de cada categoría">📅 Plazos de crédito</button>
+        <button class="btn" id="iAlm" title="De qué almacén sale cada categoría (la hoja de carga sale separada por almacén)">🏬 Almacenes</button>
       </div>
       ${onlyRet && missing.length ? `<div class="hint warn">Códigos de la lista de retornables que no están en el catálogo: <b>${esc(missing.join(', '))}</b>. Corrige el código del producto y márcalo en «Envase retornable».</div>` : ''}
       <p class="muted">${S.products.length} productos · ${rows.length} mostrados · ${noPhoto} sin foto${S.config.priceListDate ? ' · lista de precios del ' + esc(S.config.priceListDate) : ''}. Los cambios de precio, stock u orden se guardan al salir de la casilla y llegan a los teléfonos al sincronizar.</p>
@@ -2073,6 +2099,7 @@
     $('#iImp').onclick = () => importDialog('products', root);
     $('#iPhotos').onclick = () => bulkPhotos(root);
     $('#iPlazo').onclick = () => Pagos.plazosSheet(!roGer());
+    $('#iAlm').onclick = () => Almacen.sheet(!roGer());
     $('#iOrder').onclick = () => catalogOrderEditor(root);
     root.onclick = async (e) => {
       const a = e.target.closest('[data-ago]');

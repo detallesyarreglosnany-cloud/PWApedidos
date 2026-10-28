@@ -60,16 +60,25 @@
       r++;
     }
     const headRow = r;
+    // Devolución (lo que trae el camión de la última liquidación) y A CARGAR = TOTAL − DEVOLUCIÓN
+    const dev = meta.dev || null, devOf = (r) => +(dev && dev[r.productId + '|' + r.um]) || 0, devC = totC + 1;
     rows.push([{ v: 'CÓDIGO', s: S.hdr }, { v: 'PRODUCTO', s: S.hdrL }, { v: 'UM', s: S.hdr },
-      ...m.cols.map((c, i) => ({ v: `${i + 1}. ${c.client}`, s: S.hdrV })), { v: money ? 'TOTAL $' : 'TOTAL', s: S.hdr }]);
+      ...m.cols.map((c, i) => ({ v: `${i + 1}. ${c.client}`, s: S.hdrV })), { v: money ? 'TOTAL $' : 'TOTAL', s: S.hdr },
+      ...(dev ? [{ v: 'DEVOLUCIÓN', s: S.hdr }, { v: 'A CARGAR', s: S.hdr }] : [])]);
     heights[headRow] = 135;
-    const d0 = headRow + 1, dN = d0 + m.rows.length - 1;
+    // Separada por almacén: un título por almacén dentro de la matriz (sin números, no altera las sumas)
+    const multiAlm = m.rows.some((r) => r.almName), almSpan = {};
+    const d0 = headRow + 1;
     m.rows.forEach((row, i) => {
-      const xr = d0 + i + 1; // fila de Excel (1 = primera)
+      if (multiAlm && (i === 0 || m.rows[i - 1].alm !== row.alm)) rows.push([{ v: row.almName, s: S.tot }, { v: 'Lo que sale de este almacén', s: S.tot }]);
+      const xr = rows.length + 1; // fila de Excel (1 = primera)
+      if (multiAlm) { const a = (almSpan[row.alm] = almSpan[row.alm] || { name: row.almName, from: xr }); a.to = xr; }
       rows.push([cell({ v: row.code }), cell({ v: `${row.name}${row.presentation ? ' ' + row.presentation : ''}` }), cell({ v: row.um, align: 'center', b: true }),
         ...row.cells.map((v) => ({ v: blank0(v), s: kindStyle(kind) })),
-        { v: row.total, f: nC ? `SUM(${col(first)}${xr}:${col(last)}${xr})` : undefined, s: kindStyle(kind, { b: true, fill: '#FFF7DD' }) }]);
+        { v: row.total, f: nC ? `SUM(${col(first)}${xr}:${col(last)}${xr})` : undefined, s: kindStyle(kind, { b: true, fill: '#FFF7DD' }) },
+        ...(dev ? [{ v: blank0(devOf(row)), s: kindStyle(kind, { b: true }) }, { v: Math.max(0, row.total - devOf(row)), f: `MAX(0,${col(totC)}${xr}-${col(devC)}${xr})`, s: kindStyle(kind, { b: true, fill: '#FFF7DD' }) }] : [])]);
     });
+    const dN = rows.length - 1;
     const rng = (c) => `${col(c)}$${d0 + 1}:${col(c)}$${dN + 1}`, umRng = `$C$${d0 + 1}:$C$${dN + 1}`;
     m.footer.forEach((f) => {
       const r2 = rows.length + 1;
@@ -79,9 +88,19 @@
         if (m.mode === 'bultos' && f.key === 'TOTAL_UNIDADES') return `SUMIF(${umRng},"UN",${rng(c)})`;
         return `SUM(${rng(c)})`;
       };
+      const devT = dev && f.key === 'TOTAL_BULTOS' ? m.rows.reduce((a, r) => a + devOf(r), 0) : null;
       rows.push([{ v: f.label.toUpperCase(), s: S.tot }, { v: null, s: S.tot }, { v: f.money ? 'USD' : null, s: S.tot },
         ...f.cells.map((v, i) => ({ v, f: fx(first + i), s: { ...S.tot, fmt: f.money ? 'money' : 'int', align: 'right' } })),
-        { v: f.total, f: nC ? `SUM(${col(first)}${r2}:${col(last)}${r2})` : undefined, s: { ...S.tot, fmt: f.money ? 'money' : 'int', align: 'right' } }]);
+        { v: f.total, f: nC ? `SUM(${col(first)}${r2}:${col(last)}${r2})` : undefined, s: { ...S.tot, fmt: f.money ? 'money' : 'int', align: 'right' } },
+        ...(devT !== null ? [{ v: devT, f: m.rows.length ? `SUM(${rng(devC)})` : undefined, s: { ...S.tot, fmt: 'int', align: 'right' } }, { v: Math.max(0, f.total - devT), f: m.rows.length ? `SUM(${rng(devC + 1)})` : undefined, s: { ...S.tot, fmt: 'int', align: 'right' } }] : [])]);
+    });
+    // Total de cada almacén (lo que sale de él), con fórmulas sobre sus filas
+    Object.values(almSpan).forEach((a) => {
+      const sr = (c) => `SUM(${col(c)}${a.from}:${col(c)}${a.to})`, sv = (f) => m.rows.filter((r) => r.almName === a.name).reduce((x, r) => x + f(r), 0);
+      rows.push([{ v: 'TOTAL ' + a.name, s: S.tot }, { v: null, s: S.tot }, { v: null, s: S.tot },
+        ...m.cols.map((c, i) => ({ v: sv((r) => r.cells[i]), f: sr(first + i), s: { ...S.tot, fmt: kind, align: 'right' } })),
+        { v: sv((r) => r.total), f: sr(totC), s: { ...S.tot, fmt: kind, align: 'right' } },
+        ...(dev ? [{ v: sv(devOf), f: sr(devC), s: { ...S.tot, fmt: 'int', align: 'right' } }, { v: sv((r) => Math.max(0, r.total - devOf(r))), f: sr(devC + 1), s: { ...S.tot, fmt: 'int', align: 'right' } }] : [])]);
     });
     (meta.extra || []).forEach((x) => {
       const r2 = rows.length + 1;
@@ -89,7 +108,7 @@
         ...x.cells.map((v) => ({ v: v === null || v === undefined || v === 0 ? null : v, s: { ...S.vac, fmt: 'int', align: 'right' } })),
         { v: x.total, f: nC ? `SUM(${col(first)}${r2}:${col(last)}${r2})` : undefined, s: { ...S.vac, fmt: 'int', align: 'right' } }]);
     });
-    const widths = [10, 38, 6, ...m.cols.map(() => 6.5), 11];
+    const widths = [10, 38, 6, ...m.cols.map(() => 6.5), 11, ...(dev ? [11, 11] : [])];
     return { name: meta.sheet || 'Hoja', rows, widths, heights, freeze: { r: headRow + 1, c: 3 }, merges: [`A1:${col(Math.max(totC, 6))}1`], landscape: true, tab: '730101' };
   }
 
