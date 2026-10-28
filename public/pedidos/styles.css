@@ -325,6 +325,10 @@ table.grid .um.CJ { background: var(--brand-2); color: #fff; }
 .cell-in { width: 58px; min-height: 34px; text-align: right; background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; color: #fff; padding: 0 6px; font-weight: 700; }
 .cell-in:focus { border-color: var(--accent); outline: none; }
 .cat-row td { background: var(--bg-2) !important; font: 700 12px var(--display); letter-spacing: .1em; text-transform: uppercase; color: var(--ink-2); }
+.alm-row td { background: var(--accent) !important; color: #1b1300; font: 800 13px var(--display); letter-spacing: .08em; text-transform: uppercase; }
+.alm-tot td { font-weight: 800; border-top: 2px solid var(--line); border-bottom: 2px solid var(--line); background: var(--bg-2) !important; }
+.sheet-grid th.dev, .sheet-grid td.dev { color: var(--accent); font-weight: 800; }
+.dsc-btns { display: flex; gap: 4px; margin-top: 3px; justify-content: flex-end; flex-wrap: wrap; } .dsc-btns .btn { font-size: 11px; padding: 2px 6px; }
 .status { display: inline-block; font-size: 11px; font-weight: 900; padding: 2px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: .03em; }
 .status.abierto, .status.espera { background: var(--warn-soft); color: var(--warn); }
 .status.enviado, .status.aprobada { background: var(--ok-soft); color: #53d68e; }
@@ -773,3 +777,4 @@ tr.agotado-row td { opacity: .65; }
 .wq-prog { height: 8px; border-radius: 999px; background: var(--line); overflow: hidden; margin: 4px 0 8px; }
 .wq-prog i { display: block; height: 100%; background: #25d366; transition: width .3s; }
 .wq-go { font-size: 18px; min-height: 60px; background: #25d366 !important; border-color: #25d366 !important; color: #06290f !important; }
+.alm-exc td { background: rgba(255, 180, 0, .08); }

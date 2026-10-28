@@ -208,7 +208,7 @@
    */
   function truckRows(orders, liq, carry, opts) {
     const keyOf = (r) => r.productId + '|' + r.um;
-    const ped = Matrix.build(orders, 'bultos', { keepOrder: true, money: false, rubros: opts.rubros, productRank: opts.productRank });
+    const ped = Matrix.build(orders, 'bultos', { keepOrder: true, money: false, rubros: opts.rubros, productRank: opts.productRank, almacen: opts.almacen });
     const del = Matrix.build(orders.map((o) => delivered(o, liq)), 'bultos', { keepOrder: true, money: false });
     const delBy = new Map(del.rows.map((r) => [keyOf(r), r.total]));
     const rows = ped.rows.map((r) => ({ key: keyOf(r), productId: r.productId, um: r.um, code: r.code, name: r.name, presentation: r.presentation, category: r.category, pedido: r.total }));
