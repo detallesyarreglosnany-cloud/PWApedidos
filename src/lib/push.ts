@@ -23,10 +23,14 @@ export async function getVapid() {
   return vapid!;
 }
 
-/** Envía cada mensaje a todos los equipos suscritos a ese rol (y vendedor). Borra las suscripciones vencidas. */
-export async function sendPush(role: 'office' | 'seller', sellerId: string | null, msgs: PushMsg[]) {
+export type PushRole = 'office' | 'seller' | 'cobranzas' | 'gerencia';
+/**
+ * Envía cada mensaje a todos los equipos suscritos a ese rol (vendedor: solo los de ese vendedor; sellerId «*» = todos
+ * los vendedores). Borra las suscripciones vencidas.
+ */
+export async function sendPush(role: PushRole, sellerId: string | null, msgs: PushMsg[]) {
   if (!msgs.length) return;
-  const subs = await db.distPush.findMany({ where: role === 'seller' ? { role, sellerId } : { role } });
+  const subs = await db.distPush.findMany({ where: role === 'seller' && sellerId !== '*' ? { role, sellerId } : { role } });
   if (!subs.length) return;
   const keys = await getVapid();
   webpush.setVapidDetails('mailto:soporte@puertovenado.app', keys.publicKey, keys.privateKey);

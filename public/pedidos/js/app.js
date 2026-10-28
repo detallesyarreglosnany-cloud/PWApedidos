@@ -550,7 +550,13 @@
     pushKey = k;
     enablePush(false).then((r) => { if (!r.ok) pushKey = ''; });
   }
-  const pushRole = () => (isOffice() ? 'office' : (S.session && S.session.sellerId && !isSupervisor() ? 'seller' : null));
+  // Rol de los avisos en ESTE equipo según la pantalla: Cobranzas y Gerencia (con su PIN) reciben los suyos
+  const pushRole = () => {
+    const R = window.Roles, h = location.hash;
+    if (R && R.isRole('cobranzas') && h.startsWith('#/cobranzas')) return 'cobranzas';
+    if (R && R.isRole('gerencia') && (h.startsWith('#/gerencia') || (h.startsWith('#/ruta') && S.session && S.session.gerencia))) return 'gerencia';
+    return isOffice() ? 'office' : (S.session && S.session.sellerId && !isSupervisor() ? 'seller' : null);
+  };
   function b64ToBytes(b64) {
     const pad = '='.repeat((4 - (b64.length % 4)) % 4);
     const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));

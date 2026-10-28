@@ -335,7 +335,7 @@
   function render(root) {
     const P = PV(), S = P.S, { esc } = P, ui = (S.ui.mkt = S.ui.mkt || { tab: 'vitrinas' }), d = data();
     const tab = S.ui.mktTab || ui.tab || 'campana';
-    root.innerHTML = `<div class="toolbar"><div class="seg">${[['campana', '🎄 Campaña'], ['vitrinas', '🛍 Vitrinas'], ['mezclas', '🍹 Mezclas'], ['combos', '🎁 Combos']].map(([k, l]) => `<button type="button" class="${tab === k ? 'active' : ''}" data-mt="${k}">${l}</button>`).join('')}</div><span class="grow"></span>
+    root.innerHTML = `<div class="toolbar"><div class="seg">${[['campana', '🎄 Campaña'], ['vitrinas', '🛍 Vitrinas'], ['mezclas', '🍹 Mezclas'], ['combos', '🎁 Combos'], ['resultados', '📊 Resultados']].map(([k, l]) => `<button type="button" class="${tab === k ? 'active' : ''}" data-mt="${k}">${l}</button>`).join('')}</div><span class="grow"></span>
         ${tab === 'vitrinas' ? '<button class="btn btn-primary" id="mkNew">＋ Nueva vitrina</button>' : tab === 'mezclas' ? '<button class="btn btn-primary" id="mkNewX">＋ Nueva mezcla</button>' : tab === 'combos' ? '<button class="btn btn-primary" id="mkNewC">＋ Nuevo combo</button>' : ''}</div>
       ${d.saved ? '' : '<div class="hint">✨ Estas son las <b>vitrinas sugeridas</b>. Edítalas a tu gusto: al guardar el primer cambio quedan como las de la empresa y les llegan a todos los vendedores.</div>'}
       <div id="mkBody"></div>`;
@@ -343,6 +343,7 @@
     if (tab === 'vitrinas') listVitrinas(body);
     else if (tab === 'mezclas') listMezclas(body);
     else if (tab === 'combos') listCombos(body);
+    else if (tab === 'resultados') resultados(body);
     else campanaForm(body, () => render(root));
     root.onclick = (e) => {
       const t = e.target.closest('[data-mt]'); if (t) { S.ui.mktTab = t.dataset.mt; render(root); return; }
@@ -475,6 +476,59 @@
     };
     const del = q('#ceDel');
     if (del) del.onclick = async () => { if (!confirm(`¿Eliminar el combo «${c.nombre}»?`)) return; await save({ combos: data().combos.filter((x) => x.id !== c.id) }, `Eliminó el combo «${c.nombre}»`); sh.close(); done(); };
+  }
+
+  /* ---------------- Resultados: ¿funcionó la campaña? ---------------- */
+  // Con los pedidos que hay en este equipo (la oficina guarda 400 días): combos vendidos y ventas de cada vitrina en sus
+  // fechas contra el mismo número de días justo antes (crecimiento). Pedidos eliminados no cuentan.
+  function resultados(body) {
+    const P = PV(), S = P.S, { esc, usd } = P, d = data(), ui = (S.ui.mktRes = S.ui.mktRes || {});
+    const c0 = d.campana || {}, hoy = P.today();
+    const addD = (day, n) => new Date(Date.parse(day + 'T12:00:00Z') + n * 86400000).toISOString().slice(0, 10);
+    const desde = ui.desde || c0.desde || addD(hoy, -30), hasta = ui.hasta || (c0.hasta && c0.hasta < hoy ? c0.hasta : hoy);
+    const vivos = S.orders.filter((o) => !o.deleted && o.status !== 'abierto');
+    const inR = (o, a, b) => String(o.routeDate || '') >= a && String(o.routeDate || '') <= b;
+    const montoOf = (o) => (o.delivery && o.delivery.at ? +o.delivery.monto || 0 : global.Matrix.orderTotals(o).monto);
+    // Combos vendidos en el rango
+    const cmb = new Map(), porVend = new Map();
+    vivos.filter((o) => inR(o, desde, hasta) && o.combos).forEach((o) => Object.entries(o.combos).forEach(([id, x]) => {
+      const n = +x.n || 0; if (!n) return;
+      const r = cmb.get(id) || { id, nombre: x.nombre || id, n: 0, clientes: new Set(), monto: 0, ahorro: 0 };
+      r.n += n; r.clientes.add(o.clientId); r.monto += (+x.precio || 0) * n; r.ahorro += +x.ahorro || 0; cmb.set(id, r);
+      const v = porVend.get(o.sellerName || o.sellerId) || { n: 0, monto: 0 }; v.n += n; v.monto += (+x.precio || 0) * n; porVend.set(o.sellerName || o.sellerId, v);
+    }));
+    // Vitrinas: ventas de sus productos en sus fechas (o en el rango) contra el período anterior del mismo largo
+    const span = (a, b) => Math.max(1, Math.round((Date.parse(b + 'T12:00:00Z') - Date.parse(a + 'T12:00:00Z')) / 86400000) + 1);
+    const ventas = (ids, a, b) => { let m = 0, cj = 0, cl = new Set(); vivos.filter((o) => inR(o, a, b)).forEach((o) => { let hit = false; Object.entries(o.lines || {}).forEach(([pid, l]) => { if (!ids.has(pid)) return; m += global.Matrix.lineTotals(l).monto; cj += +l.cajas || 0; hit = true; }); if (hit) cl.add(o.clientId); }); return { m: r2(m), cj, cl: cl.size }; };
+    const vit = d.vitrinas.map((v) => {
+      const a = v.desde && v.desde > desde ? v.desde : desde, b = v.hasta && v.hasta < hasta ? v.hasta : hasta; if (a > b) return null;
+      const ids = new Set(productsOf(v).map((p) => p.id)); if (!ids.size) return null;
+      const n = span(a, b), now = ventas(ids, a, b), antes = ventas(ids, addD(a, -n), addD(a, -1));
+      return { v, a, b, now, antes, pct: antes.m > 0 ? Math.round(((now.m - antes.m) / antes.m) * 100) : null };
+    }).filter(Boolean);
+    const tot = [...cmb.values()].reduce((x, r) => ({ n: x.n + r.n, monto: x.monto + r.monto, ahorro: x.ahorro + r.ahorro }), { n: 0, monto: 0, ahorro: 0 });
+    const ventaTot = r2(vivos.filter((o) => inR(o, desde, hasta)).reduce((a, o) => a + montoOf(o), 0));
+    body.innerHTML = `<div class="row wrap" style="gap:8px;align-items:flex-end"><label class="field"><span>Desde</span><input id="rsD" type="date" class="input" value="${esc(desde)}"></label><label class="field"><span>Hasta</span><input id="rsH" type="date" class="input" value="${esc(hasta)}"></label>
+        <span class="grow"></span><button class="btn" id="rsX">⇩ Excel</button></div>
+      <div class="kpis big" style="margin:10px 0"><span><b>${tot.n}</b> combos vendidos</span><span><b>${usd(tot.monto)}</b> en combos</span><span><b>${usd(tot.ahorro)}</b> de ahorro dado a clientes</span><span><b>${usd(ventaTot)}</b> venta total del período</span></div>
+      <div class="section-title">🎁 Combos</div>
+      ${cmb.size ? `<div class="card" style="overflow:auto"><table class="inv"><thead><tr><th>Combo</th><th class="n">Vendidos</th><th class="n">Clientes</th><th class="n">Venta $</th><th class="n">Ahorro dado</th></tr></thead><tbody>${[...cmb.values()].sort((a, b) => b.n - a.n).map((r) => `<tr><td><b>${esc(r.nombre)}</b></td><td class="n">${r.n}</td><td class="n">${r.clientes.size}</td><td class="n">${usd(r.monto)}</td><td class="n">${usd(r.ahorro)}</td></tr>`).join('')}</tbody></table></div>
+        <div class="section-title">Por vendedor</div><div class="card" style="overflow:auto"><table class="inv"><thead><tr><th>Vendedor</th><th class="n">Combos</th><th class="n">Venta $</th></tr></thead><tbody>${[...porVend.entries()].sort((a, b) => b[1].n - a[1].n).map(([k, x]) => `<tr><td>${esc(k)}</td><td class="n">${x.n}</td><td class="n">${usd(x.monto)}</td></tr>`).join('')}</tbody></table></div>`
+        : '<p class="muted">Aún no se han vendido combos en este período.</p>'}
+      <div class="section-title">🛍 Vitrinas: venta de sus productos contra el período anterior</div>
+      <div class="card" style="overflow:auto"><table class="inv"><thead><tr><th>Vitrina</th><th>Fechas</th><th class="n">Venta $</th><th class="n">Cajas</th><th class="n">Clientes</th><th class="n">Antes $</th><th class="n">Crecimiento</th></tr></thead><tbody>
+        ${vit.map((x) => `<tr><td>${esc(x.v.icono || '')} <b>${esc(x.v.nombre)}</b></td><td><small>${esc(P.fmtDate(x.a))} – ${esc(P.fmtDate(x.b))}</small></td><td class="n">${usd(x.now.m)}</td><td class="n">${x.now.cj}</td><td class="n">${x.now.cl}</td><td class="n">${usd(x.antes.m)}</td>
+          <td class="n ${x.pct === null ? '' : x.pct >= 0 ? 'pay-ok' : 'warn-txt'}"><b>${x.pct === null ? (x.now.m ? 'nuevo' : '—') : (x.pct >= 0 ? '▲ +' : '▼ ') + x.pct + '%'}</b></td></tr>`).join('') || '<tr><td colspan="7" class="muted">Sin vitrinas con productos en este período.</td></tr>'}</tbody></table></div>
+      <p class="muted" style="font-size:13px">«Antes» = los mismos días justo antes de la vitrina. Se cuentan los pedidos enviados, en hoja o despachados que hay en este equipo.</p>`;
+    const q = (x) => body.querySelector(x);
+    q('#rsD').onchange = (e) => { ui.desde = e.target.value; resultados(body); };
+    q('#rsH').onchange = (e) => { ui.hasta = e.target.value; resultados(body); };
+    q('#rsX').onclick = () => global.Exporta.save(`resultados_campana_${desde}_${hasta}.xlsx`, [
+      global.Exporta.table({ name: 'Combos', title: 'COMBOS VENDIDOS', subtitle: `Del ${desde} al ${hasta}`, cols: [{ h: 'COMBO', w: 34 }, { h: 'VENDIDOS', k: 'int', total: true }, { h: 'CLIENTES', k: 'int' }, { h: 'VENTA $', k: 'money', total: true }, { h: 'AHORRO DADO', k: 'money', total: true }],
+        rows: [...cmb.values()].map((r) => [r.nombre, r.n, r.clientes.size, r2(r.monto), r2(r.ahorro)]) }),
+      global.Exporta.table({ name: 'Vitrinas', title: 'VITRINAS: VENTA CONTRA EL PERÍODO ANTERIOR', subtitle: `Del ${desde} al ${hasta}`, cols: [{ h: 'VITRINA', w: 40 }, { h: 'DESDE', w: 12 }, { h: 'HASTA', w: 12 }, { h: 'VENTA $', k: 'money', total: true }, { h: 'CAJAS', k: 'int', total: true }, { h: 'CLIENTES', k: 'int' }, { h: 'ANTES $', k: 'money', total: true }, { h: 'CRECIMIENTO %', k: 'int' }],
+        rows: vit.map((x) => [x.v.nombre, x.a, x.b, x.now.m, x.now.cj, x.now.cl, x.antes.m, x.pct === null ? '' : x.pct]) }),
+    ]);
   }
 
   /* ---------------- Campaña (encabezado con cuenta regresiva + carga de la campaña navideña) ---------------- */
