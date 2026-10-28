@@ -18,7 +18,7 @@
     copyText, saveFile, pickFile, saveDocs, saveOrder, productById, sellerById, orderById, clientById, rubros } = PV;
   const U = () => S.ui.office;
 
-  const TABS = [['cargas', '🚚 Cargas'], ['pedidos', '🧾 Pedidos'], ['archivo', '🗄 Archivo'], ['envases', '♻ Envases'], ['reportes', '📈 Reportes'], ['pagos', '💵 Pagos'], ['inventario', '📦 Inventario'],
+  const TABS = [['cargas', '🚚 Cargas'], ['pedidos', '🧾 Pedidos'], ['archivo', '🗄 Archivo'], ['envases', '♻ Envases'], ['reportes', '📈 Reportes'], ['pagos', '💵 Pagos'], ['inventario', '📦 Inventario'], ['marketing', '📣 Marketing'],
     ['clientes', '👥 Clientes'], ['vendedores', '🧑‍💼 Vendedores'], ['usuarios', '🔐 Usuarios y roles'], ['historial', '🕘 Historial'], ['ajustes', '⚙ Ajustes']];
   const log = (type, text, extra) => PV.logEvent(type, text, extra);
 
@@ -58,7 +58,7 @@
   }
 
   // Gerencia ve las mismas pantallas de la oficina, en consulta (salvo pedidos, clientes e inventario)
-  const GER_TABS = ['pedidos', 'cargas', 'archivo', 'envases', 'pagos', 'inventario', 'reportes', 'clientes', 'historial'];
+  const GER_TABS = ['pedidos', 'cargas', 'archivo', 'envases', 'pagos', 'inventario', 'marketing', 'reportes', 'clientes', 'historial'];
   const roGer = () => document.body.classList.contains('ro-ger'); // Gerencia: hojas y liquidaciones en consulta
   const baseHash = () => (location.hash.startsWith('#/gerencia') ? '#/gerencia' : '#/oficina');
   PV.renderOffice = function (tab, opts) {
@@ -91,7 +91,7 @@
     }
     const body = $('#officeBody');
     if (!ger && !S.products.length && tab !== 'ajustes') body.insertAdjacentHTML('beforebegin', setupBanner());
-    ({ cargas: renderLoads, pedidos: renderOrders, archivo: renderArchive, envases: renderEnvases, reportes: (root) => { upgradeLiquidations(root); Reportes.render(root, U().rep || (U().rep = {})); }, pagos: (root) => window.Pagos.renderOffice(root), usuarios: (root) => window.Roles.renderAdmin(root), inventario: renderInventory,
+    ({ cargas: renderLoads, pedidos: renderOrders, archivo: renderArchive, envases: renderEnvases, reportes: (root) => { upgradeLiquidations(root); Reportes.render(root, U().rep || (U().rep = {})); }, pagos: (root) => window.Pagos.renderOffice(root), usuarios: (root) => window.Roles.renderAdmin(root), inventario: renderInventory, marketing: (root) => window.Mkt.render(root),
       clientes: renderClients, vendedores: renderSellers, historial: renderHistory, ajustes: renderSettings })[tab](body);
     const sb = $('#setupImport');
     if (sb) sb.onclick = importStarter;
@@ -2205,6 +2205,7 @@
           <label class="field"><span>+ Stock unidades</span><input name="stockUn" class="input" inputmode="numeric" value="${stockUn}" placeholder="—"></label>
         </div>
         <p class="muted" style="margin:0">Deja el stock vacío si no quieres controlar inventario de este producto.</p>
+        <label class="field"><span>💰 Precio de venta al público sugerido, por unidad $ <small class="muted">(opcional: la vitrina le muestra al bodeguero cuánto gana)</small></span><input name="pvp" class="input" inputmode="decimal" value="${p.pvp ? nf2.format(p.pvp) : ''}" placeholder="—"></label>
         <label class="row"><input type="checkbox" name="active" ${p.active ? 'checked' : ''} style="width:24px;height:24px"> Activo (visible para los vendedores)</label>
         <fieldset class="ret-box">
           <legend>♻ Envase retornable</legend>
@@ -2251,10 +2252,13 @@
         unitPrice: sellBy === 'caja' ? 0 : Matrix.r2(dec(form.unitPrice.value)),
         stock: cj === '' && un === '' ? null : int(cj) * u + int(un),
         active: form.active.checked, deleted: false,
+        pvp: form.pvp.value.trim() ? Matrix.r2(dec(form.pvp.value)) : 0,
+        createdAt: p.createdAt || (isNew ? new Date().toISOString() : ''), // para el sello 🆕 de la vitrina
         ret: form.retOn.checked ? { type: form.retType.value.trim().toUpperCase(), regime: form.retRegime.value, assign: form.retAssign.value === '1' } : false,
       };
       if (image !== image0) { doc.image = image; if (!image) doc.imageV = ''; } else if (!/^data:/.test(String(doc.image || ''))) delete doc.image;
-      if (doc.boxPrice < 0 || doc.unitPrice < 0) { toast('Los precios no pueden ser negativos', 'err'); return; }
+      if (!doc.createdAt) delete doc.createdAt;
+      if (doc.boxPrice < 0 || doc.unitPrice < 0 || doc.pvp < 0) { toast('Los precios no pueden ser negativos', 'err'); return; }
       if (S.products.some((x) => x.id === doc.id && x.id !== p.id)) doc.id = DB.uid('p');
       const moved = isNew || doc.sort !== (+p.sort || 0) || doc.category !== p.category;
       await saveDocs('products', [doc].concat(moved ? shiftSort(doc) : []));

@@ -493,7 +493,8 @@ export async function POST(req: NextRequest) {
             if (fv) { if (cfv.cobRev) fv.cobRev = cfv.cobRev; else delete fv.cobRev; }
           }
           // Gerencia solo cambia la lista de categorías de la configuración (al crear un producto de una categoría nueva)
-          if (kind === 'config' && isGer) {
+          // y Promoción y marketing (documento «mkt»: vitrinas, mezclas y combos), que edita igual que la oficina
+          if (kind === 'config' && isGer && doc.id !== 'mkt') {
             if (!cur) { rejected.push({ kind, id: doc.id, reason: 'foreign' }); continue; }
             doc = { ...cur, rubros: Array.isArray((doc as Record<string, unknown>).rubros) ? (doc as Record<string, unknown>).rubros : cur.rubros, updatedAt: doc.updatedAt } as typeof doc;
           }

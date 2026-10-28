@@ -49,6 +49,11 @@
       { id: 'inv', icon: '📦', label: 'Inventario y catálogo', items: [
         { icon: '📦', label: 'Inventario y productos', go: '#/oficina/inventario' },
       ] },
+      { id: 'mkt', icon: '📣', label: 'Promoción y marketing', items: [
+        { icon: '🛍', label: 'Vitrinas', go: '#/oficina/marketing', mkt: 'vitrinas' },
+        { icon: '🍹', label: 'Mezclas', go: '#/oficina/marketing', mkt: 'mezclas' },
+        { icon: '🎁', label: 'Combos', go: '#/oficina/marketing', mkt: 'combos' },
+      ] },
       { id: 'rep', icon: '📈', label: 'Reportes', items: [
         { icon: '📈', label: 'Quincena, ventas y notas', go: '#/oficina/reportes' },
       ] },
@@ -78,6 +83,11 @@
       { id: 'inv', icon: '📦', label: 'Inventario y catálogo', items: [
         { icon: '📦', label: 'Inventario y productos', go: '#/gerencia/inventario' },
         { icon: '🐢', label: 'Productos sin movimiento', go: '#/gerencia/sinmov' },
+      ] },
+      { id: 'mkt', icon: '📣', label: 'Promoción y marketing', items: [
+        { icon: '🛍', label: 'Vitrinas', go: '#/gerencia/marketing', mkt: 'vitrinas' },
+        { icon: '🍹', label: 'Mezclas', go: '#/gerencia/marketing', mkt: 'mezclas' },
+        { icon: '🎁', label: 'Combos', go: '#/gerencia/marketing', mkt: 'combos' },
       ] },
       { id: 'rep', icon: '📈', label: 'Reportes', items: [
         { icon: '📊', label: 'Resumen del día', go: '#/gerencia/resumen' },
@@ -124,6 +134,7 @@
   function isActive(it, h) {
     const P = PV(), S = P.S, base = h.split('?')[0];
     if (it.act || it.el) return false;
+    if (it.mkt) return base === it.go && (S.ui.mktTab || 'vitrinas') === it.mkt;
     const tab = (x) => x.split('/')[2] || '';
     if (it.go.startsWith('#/oficina/')) return base.startsWith('#/oficina') && (tab(base) || 'cargas') === tab(it.go) && !(tab(it.go) === 'archivo' && S.ui.office && S.ui.office.trash);
     if (it.go.startsWith('#/supervisor/')) return base.startsWith('#/supervisor') && (tab(base) || 'resumen') === tab(it.go);
@@ -190,6 +201,7 @@
     const ib = e.target.closest('[data-it]'); if (!ib) return;
     const [sid, i] = ib.dataset.it.split(':'), it = menu.find((s) => s.id === sid).items[+i];
     close();
+    if (it.mkt) S.ui.mktTab = it.mkt;
     if (it.myo) S.ui.myo = { ...(S.ui.myo || { g: 'todos', r: '15' }), tab: it.myo };
     if (it.go.startsWith('#/oficina') && S.ui.office) S.ui.office.trash = it.act === 'trash' ? { q: '' } : null;
     if (location.hash !== it.go) { location.hash = it.go; await new Promise((r) => setTimeout(r, 60)); }
