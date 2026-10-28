@@ -945,6 +945,16 @@
     return popMemo;
   }
   const topSellers = () => popularity().top;
+  // 🆕 Producto creado en los últimos 30 días
+  const isNewProduct = (p) => !!p.createdAt && Date.now() - Date.parse(p.createdAt) < 30 * 86400000;
+  /** 💰 Ganancia del bodeguero con el precio de venta sugerido (PVP por unidad, se carga en Inventario). */
+  function gainOf(p) {
+    const pvp = +p.pvp || 0; if (!pvp) return null;
+    const caja = p.sellBy !== 'unidad' && +p.boxPrice > 0, cost = caja ? +p.boxPrice : +p.unitPrice, venta = caja ? pvp * (+p.unitsPerBox || 1) : pvp;
+    const g = Math.round((venta - cost) * 100) / 100;
+    return g > 0 && cost > 0 ? { g, pct: Math.round((g / cost) * 100), por: caja ? 'por caja' : 'por unidad', pvp } : null;
+  }
+  const gainHTML = (p) => { const x = gainOf(p); return x ? `<div class="pgain" title="Vendiendo a ${usd(x.pvp)} la unidad">💰 Ganas ${usd(x.g)} ${x.por} <b>(+${x.pct}%)</b></div>` : ''; };
 
   function productHTML(p, o) {
     const l = o && o.lines[p.id];
@@ -958,12 +968,13 @@
     return `
       <article class="pitem ${req ? 'has-qty' : ''}" data-pid="${esc(p.id)}" style="--grp:${grpHue(p.category + '|' + (p.subgroup || ''))}">
         <div class="pimg">${hasPhoto(p) ? `<img src="${esc(imgSrc(p))}" alt="" loading="lazy">` : `<span aria-hidden="true">${rubroIcon(p.category)}</span>`}
-          ${popularity().cat.has(p.id) && popularity().cat.size > 1 ? `<em class="hot-badge">🏆 N°1 en ${esc(p.category)}</em>` : topSellers().has(p.id) ? '<em class="hot-badge">⭐ Más vendido</em>' : ''}
+          ${isNewProduct(p) ? '<em class="hot-badge new-badge">🆕 Nuevo</em>' : popularity().cat.has(p.id) && popularity().cat.size > 1 ? `<em class="hot-badge">🏆 N°1 en ${esc(p.category)}</em>` : topSellers().has(p.id) ? '<em class="hot-badge">⭐ Más vendido</em>' : ''}
           ${req ? `<em class="qty-badge">${cj ? cj + 'cj' : ''}${cj && un ? '+' : ''}${un ? un + 'u' : ''}</em>` : ''}</div>
         <div class="pname">${esc(p.name)}</div>
         <div class="pcode mono">${p.unitCode && p.unitCode !== p.code && p.sellBy !== 'caja' ? (p.sellBy === 'unidad' ? esc(p.unitCode) : `<span class="${cj ? 'on' : ''}" title="Código al mayor (caja)">CJ ${esc(p.code)}</span> · <span class="${un ? 'on' : ''}" title="Código por unidad">UN ${esc(p.unitCode)}</span>`) : esc(p.code)}</div>
         <div class="ppres">${esc(p.presentation)}${p.brand && !norm(p.name).includes(norm(p.brand)) ? ' · ' + esc(p.brand) : ''}</div>
         <div class="pprice">${prices.map((x) => '<div>' + x + '</div>').join('')}</div>
+        ${gainHTML(p)}
         ${hasStock(p) ? `<div class="pmeta"><span class="${over || low ? 'stock-low' : ''}">${over ? '⚠ ' : ''}${fmtStock(p.stock, p.unitsPerBox, p.sellBy)}</span></div>` : ''}
         <div class="qty-col">
           ${p.sellBy !== 'unidad' ? stepperHTML(p, 'cajas', cj, over) : ''}
@@ -1133,7 +1144,7 @@
       return;
     }
     // Modo vitrina (tablet): las vitrinas de Promoción y marketing; al buscar, vuelve a la lista
-    if (S.ui.vitrina && !S.ui.q && !S.ui.onlyInOrder && window.Mkt) { list.innerHTML = hint + Mkt.renderSeller(o); list.classList.add('vt-mode'); return; }
+    if (S.ui.vitrina && !S.ui.q && !S.ui.onlyInOrder && window.Mkt) { list.innerHTML = hint + Mkt.renderSeller(o); list.classList.add('vt-mode'); Mkt.afterRender(list); return; }
     list.classList.remove('vt-mode');
     // Encabezados de rubro / subgrupo (ej. REFRESCOS · 2 L)
     let last = '';
@@ -2103,7 +2114,7 @@
     syncInfo: () => ({ idle: isIdle(), every: syncEvery(), last: lastSyncResult }), _idleSince: (ms) => { lastInput = Date.now() - ms; },
     loadAll, saveDocs, saveOrder, saveSettings, setSession, msgThreadHTML, rememberOffice, forgetOffice, PERSIST_HINT, runSync, updateSyncPill, render, refreshAfterRemote, updateBell, beep, logEvent, isSupervisor,
     notifSheet, refreshPush,
-    productById, sellerById, orderById, clientById, rubros, orderLinesHTML, groupLines, groupedRows, productHTML, setQty, activeOrder, popularity,
+    productById, sellerById, orderById, clientById, rubros, orderLinesHTML, groupLines, groupedRows, productHTML, setQty, activeOrder, popularity, gainOf, isNewProduct,
     boot, localNotif,
   };
 })();

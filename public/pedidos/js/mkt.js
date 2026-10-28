@@ -15,9 +15,10 @@
   const DEF_VITRINAS = [
     { id: 'v_siempre', nombre: 'Los que siempre te acompañan', frase: 'En cada comida y en cada momento: los refrescos que nunca pueden faltar', icono: '🥤', hue: 356, buscar: ['refresco', 'soda', 'coca', 'chinotto', 'gaseosa'], orden: 'ventas', sello: '⭐ El favorito de todos', activa: true },
     { id: 'v_lonchera', nombre: 'Arma la lonchera de los más pequeños', frase: 'Todos los sabores para el recreo: lleva uno de cada uno', icono: '🎒', hue: 42, buscar: ['nectar', 'jugo'], orden: 'peso', sello: '💛 Lo más pedido por las mamás', activa: true },
-    { id: 'v_salsas', nombre: 'Quiero, la sazón del hogar', frase: 'Comida casera en minutos, para cuando no hay tiempo: napolitana, rabiata, boloñesa, guiso…', icono: '🍝', hue: 14, buscar: ['salsa'], orden: 'peso', sello: '👩‍🍳 La que más se lleva', activa: true },
+    { id: 'v_salsas', nombre: 'Kiero, la sazón del hogar', frase: 'Comida casera en minutos, para cuando no hay tiempo: napolitana, rabiata, boloñesa, guiso… en todos los tamaños', icono: '🍝', hue: 14, buscar: ['salsa', 'kiero'], orden: 'peso', sello: '👩‍🍳 La que más se lleva', activa: true },
     { id: 'v_maltas', nombre: 'Nuestra morena, el sabor de aquí', frase: 'Refrescante y bien nuestra: nada que envidiarle a nadie', icono: '🟤', hue: 28, buscar: ['malta'], orden: 'ventas', sello: '🇻🇪 La preferida', activa: true },
     { id: 'v_finde', nombre: 'Para tus fines de semana', frase: 'Cervezas, sangrías y licores bien fríos para compartir', icono: '🍻', hue: 205, buscar: ['cerveza', 'toxica', 'sangria', 'ron', 'anis', 'whisky', 'licor', 'vino'], orden: 'ventas', sello: '🔥 Se va rápido', adultos: true, activa: true },
+    { id: 'v_navidad', nombre: 'Navidad y fin de año: brinda con los tuyos', frase: 'Lo que no puede faltar en la mesa, el brindis y las visitas de diciembre', icono: '🎄', hue: 150, buscar: ['ron', 'anis', 'whisky', 'vino', 'sangria', 'toxica', 'galleta', 'coca', 'chinotto'], orden: 'ventas', sello: '🎁 Infaltable en diciembre', activa: true, desde: '2026-11-15', hasta: '2027-01-06' },
     { id: 'v_evento', nombre: 'Todo para tu evento o celebración', frase: 'Cotillón, piñata y mesa de dulces: chowy, surtidos y galletas para todos', icono: '🎉', hue: 300, buscar: ['chowy', 'surtido', 'galleta', 'wabi', 'cotufi', 'charmy', 'mini maria', 'punto rojo'], orden: 'ventas', sello: '🎈 Infaltable en la fiesta', activa: true },
   ];
   const DEF_MEZCLAS = [
@@ -39,6 +40,9 @@
   }
   const hayOf = (p) => PV().norm([p.category, p.subgroup, p.brand, p.name, p.presentation].join(' '));
   const active = () => PV().S.products.filter((p) => p.active !== false && !p.deleted);
+  /** Visible hoy: activa y dentro de sus fechas (vitrinas de temporada: Navidad, Carnaval, Regreso a clases…). */
+  const enFecha = (v) => { const t = PV().today(); return (!v.desde || t >= v.desde) && (!v.hasta || t <= v.hasta); };
+  const visible = (v) => v.activa !== false && enFecha(v);
 
   /** Tamaño de la presentación en gramos o mililitros (para ordenar salsas por peso: 120 g, 340 g, 500 g…). */
   function sizeOf(p) {
@@ -90,37 +94,116 @@
       ${x.pasos ? `<p class="vt-pasos">${esc(x.pasos)}</p>` : ''}
       <button type="button" class="btn btn-primary" data-mix="${esc(x.id)}">➕ Agregar los ingredientes · ${usd(monto)}</button></article>`;
   }
+  /** 🔁 Lo de siempre: lo que este cliente más compra (sus pedidos anteriores) y aún no lleva en este pedido. */
+  function siempreOf(o) {
+    const P = PV(); if (!o || !o.clientId) return [];
+    const from = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10), n = new Map();
+    P.S.orders.forEach((x) => {
+      if (x.deleted || x.id === o.id || x.clientId !== o.clientId || String(x.routeDate || '') < from) return;
+      Object.entries(x.lines || {}).forEach(([pid, l]) => { const c = n.get(pid) || { k: 0, cajas: 0, unidades: 0, at: '' }; c.k++; if (String(x.routeDate) >= c.at) { c.at = String(x.routeDate); c.cajas = +l.cajas || 0; c.unidades = +l.unidades || 0; } n.set(pid, c); });
+    });
+    return [...n.entries()].map(([pid, c]) => ({ p: P.productById(pid), ...c })).filter((x) => x.p && x.p.active !== false && !x.p.deleted && !(o.lines || {})[x.p.id])
+      .sort((a, b2) => b2.k - a.k || String(a.p.name).localeCompare(String(b2.p.name), 'es')).slice(0, 12);
+  }
+  /** 🤝 Combina con: lo que otros clientes llevan en el mismo pedido que este producto. */
+  function combinaCon(pid) {
+    const P = PV(), n = new Map();
+    P.S.orders.forEach((x) => { if (x.deleted || !(x.lines || {})[pid]) return; Object.keys(x.lines).forEach((q) => { if (q !== pid) n.set(q, (n.get(q) || 0) + 1); }); });
+    return [...n.entries()].filter((x) => x[1] >= 2).sort((a, b) => b[1] - a[1]).map(([q]) => P.productById(q)).filter((p) => p && p.active !== false && !p.deleted).slice(0, 6);
+  }
   /** HTML de la vitrina para el catálogo del vendedor (mismas tarjetas y mismo pedido que la lista). */
   function renderSeller(o) {
     const P = PV(), { esc } = P, d = data(), pop = P.popularity().n;
-    const vs = d.vitrinas.filter((v) => v.activa !== false).map((v) => ({ v, ps: productsOf(v) })).filter((x) => x.ps.length);
+    const vs = d.vitrinas.filter(visible).map((v) => ({ v, ps: productsOf(v) })).filter((x) => x.ps.length);
     if (!vs.length) return '<div class="empty"><strong>Aún no hay vitrinas</strong>La oficina las arma en «Promoción y marketing».</div>';
     const card = (v, p, top) => {
       const h = P.productHTML(p, o);
       return top.has(p.id) && v.sello ? h.replace('<div class="pimg">', `<div class="pimg"><em class="vt-sello">${esc(v.sello)}</em>`) : h;
     };
-    return `<div class="vt-nav">${vs.map(({ v }) => `<button type="button" class="vt-go" data-vgo="${esc(v.id)}" style="--h:${+v.hue || 0}">${esc(v.icono || '')} ${esc(v.nombre)}</button>`).join('')}
-        <button type="button" class="vt-go vt-full" data-vfull="1" title="Pantalla completa para mostrar en la tablet">⛶</button></div>
+    const sie = siempreOf(o);
+    // Historias (burbujas) para saltar a cada vitrina + carrusel destacado que avanza solo
+    return `<div class="vt-stories">${vs.map(({ v, ps }) => { const p = ps.find((x) => P.hasPhoto(x)); return `<button type="button" class="vt-story" data-vgo="${esc(v.id)}" style="--h:${+v.hue || 0}"><span class="vt-ring">${p ? `<img src="${esc(P.imgSrc(p))}" alt="" loading="lazy">` : `<b>${esc(v.icono || '🛍')}</b>`}</span><small>${esc(v.nombre)}</small></button>`; }).join('')}
+        <button type="button" class="vt-story" data-vfull="1" title="Pantalla completa para mostrar en la tablet"><span class="vt-ring vt-ring-plain"><b>⛶</b></span><small>Pantalla completa</small></button></div>
+      <div class="vt-hero" id="vtHero">${vs.map(({ v, ps }) => `<div class="vt-slide" data-vgo="${esc(v.id)}" style="--h:${+v.hue || 0}">${banner(v, ps)}</div>`).join('')}</div>
+      ${vs.length > 1 ? `<div class="vt-dots">${vs.map((x, i) => `<i data-dot="${i}" class="${i ? '' : 'on'}"></i>`).join('')}</div>` : ''}
+      ${sie.length ? `<section class="vt vt-siempre" style="--h:265"><header class="vt-mini"><div><h3>🔁 Lo de siempre de ${esc(o.clientName)}</h3><p>Lo que más compra y hoy aún no lleva</p></div>
+        <button type="button" class="btn btn-primary" data-siempre="1">➕ Agregar lo de siempre</button></header><div class="vt-row">${sie.map((x) => P.productHTML(x.p, o)).join('')}</div></section>` : ''}
       ${vs.map(({ v, ps }) => {
         const top = new Set(ps.filter((p) => (pop.get(p.id) || 0) >= 2).sort((a, b) => (pop.get(b.id) || 0) - (pop.get(a.id) || 0)).slice(0, 3).map((p) => p.id));
         let lastSz = null;
         const row = ps.map((p) => {
           let sep = '';
-          if (v.orden === 'peso') { const s = sizeOf(p), lbl = s ? s.label : 'Otras'; if (lbl !== lastSz) { sep = `<div class="vt-sep">${esc(lbl)}</div>`; lastSz = lbl; } }
+          if (v.orden === 'peso') { const sz = sizeOf(p), lbl = sz ? sz.label : 'Otras'; if (lbl !== lastSz) { sep = `<div class="vt-sep">${esc(lbl)}</div>`; lastSz = lbl; } }
           return sep + card(v, p, top);
         }).join('');
         const mixes = d.mezclas.filter((x) => x.vitrina === v.id).map(mezclaHTML).filter(Boolean).join('');
         return `<section class="vt" id="vt-${esc(v.id)}" style="--h:${+v.hue || 0}">${banner(v, ps)}<div class="vt-row">${row}</div>${mixes ? `<div class="vt-mixes">${mixes}</div>` : ''}</section>`;
       }).join('')}`;
   }
+  // El carrusel destacado avanza solo cada 6 s; se detiene mientras el vendedor lo toca
+  let heroTimer = null;
+  function afterRender(list) {
+    clearInterval(heroTimer);
+    const h = list.querySelector('#vtHero'); if (!h) return;
+    const dots = [...list.querySelectorAll('[data-dot]')];
+    let hold = 0;
+    const cur = () => Math.round(h.scrollLeft / Math.max(1, h.clientWidth));
+    const mark = () => dots.forEach((x, i) => x.classList.toggle('on', i === cur()));
+    h.addEventListener('scroll', () => { clearTimeout(h._t); h._t = setTimeout(mark, 80); }, { passive: true });
+    h.addEventListener('pointerdown', () => { hold = Date.now(); }, { passive: true });
+    heroTimer = setInterval(() => {
+      if (!h.isConnected) { clearInterval(heroTimer); return; }
+      if (Date.now() - hold < 12000 || document.hidden || document.querySelector('.overlay')) return;
+      const n = h.children.length, i = (cur() + 1) % n;
+      h.scrollTo({ left: i * h.clientWidth, behavior: 'smooth' });
+    }, 6000);
+  }
+  /** Ficha a pantalla completa: foto grande, precios, ganancia del bodeguero y lo que combina con el producto. */
+  function ficha(p) {
+    const P = PV(), { esc, usd } = P;
+    const draw = () => {
+      const o = P.activeOrder(), g = P.gainOf(p), cc = combinaCon(p.id), sz = sizeOf(p);
+      return `<div class="row"><span class="grow"></span><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+        <div class="vt-ficha"><div class="vt-ficha-img">${P.hasPhoto(p) ? `<img src="${esc(P.imgSrc(p))}" alt="">` : `<span>${P.rubroIcon(p.category)}</span>`}</div>
+          <div class="vt-ficha-txt">${P.isNewProduct(p) ? '<span class="hot-badge new-badge" style="position:static">🆕 Nuevo</span>' : ''}<h2>${esc(p.name)}</h2>
+            <p class="muted">${esc([p.presentation, p.brand, p.category].filter(Boolean).join(' · '))}${sz ? '' : ''}</p>
+            <div class="vt-ficha-prices">${p.sellBy !== 'unidad' ? `<div><small>Caja x${p.unitsPerBox}</small><b>${usd(p.boxPrice)}</b></div>` : ''}${p.sellBy !== 'caja' ? `<div><small>Unidad</small><b>${usd(p.unitPrice)}</b></div>` : ''}</div>
+            ${g ? `<div class="vt-gain">💰 Vendiéndolo a <b>${usd(g.pvp)}</b> la unidad, el bodeguero gana <b>${usd(g.g)} ${g.por}</b> <span>(+${g.pct}%)</span></div>` : ''}
+            <div class="vt-ficha-card">${P.productHTML(p, o)}</div></div></div>
+        ${cc.length ? `<div class="section-title">🤝 Combina con (lo que otros clientes llevan junto)</div><div class="vt-row vt-row-sm">${cc.map((q) => P.productHTML(q, o)).join('')}</div>` : ''}`;
+    };
+    const sh = P.openSheet(draw(), { wide: true });
+    sh.el.addEventListener('click', async (e) => {
+      const b = e.target.closest('button[data-act]'); if (!b) return;
+      const pid = b.closest('[data-pid]').dataset.pid, o = P.activeOrder(), l = o && o.lines[pid];
+      await P.setQty(pid, b.dataset.kind, (l ? +l[b.dataset.kind] || 0 : 0) + (b.dataset.act === 'inc' ? 1 : -1));
+      sh.el.innerHTML = draw();
+    });
+  }
   /** Clics de la vitrina en el catálogo del vendedor. true = ya se atendió. */
   function onSellerClick(e) {
     const P = PV();
+    const im = e.target.closest('.pimg');
+    if (im && !e.target.closest('button')) { const c = im.closest('[data-pid]'), p = c && P.productById(c.dataset.pid); if (p) { ficha(p); return true; } }
     const go = e.target.closest('[data-vgo]');
     if (go) { const t = document.getElementById('vt-' + go.dataset.vgo); if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' }); return true; }
+    const dot = e.target.closest('[data-dot]');
+    if (dot) { const h = document.getElementById('vtHero'); if (h) h.scrollTo({ left: +dot.dataset.dot * h.clientWidth, behavior: 'smooth' }); return true; }
     if (e.target.closest('[data-vfull]')) {
       const de = document.documentElement;
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); else if (de.requestFullscreen) de.requestFullscreen().catch(() => {});
+      return true;
+    }
+    if (e.target.closest('[data-siempre]')) {
+      (async () => {
+        const o = P.activeOrder(); if (!o) return;
+        const list = siempreOf(o);
+        for (const x of list) {
+          if (x.cajas && x.p.sellBy !== 'unidad') await P.setQty(x.p.id, 'cajas', x.cajas);
+          if (x.unidades && x.p.sellBy !== 'caja') await P.setQty(x.p.id, 'unidades', x.unidades);
+        }
+        P.toast(`Lo de siempre de ${o.clientName}: ${list.length} productos agregados`, 'ok'); P.render();
+      })();
       return true;
     }
     const mb = e.target.closest('[data-mix]'); if (!mb) return false;
@@ -176,7 +259,7 @@
       <div class="mk-list">${list.map((v, i) => { const ps = productsOf(v); return `<div class="mk-card ${v.activa === false ? 'off' : ''}" style="--h:${+v.hue || 0}">
         <div class="mk-sw">${esc(v.icono || '🛍')}</div>
         <div class="grow"><b>${esc(v.nombre)}</b>${v.adultos ? ' <span class="status over">🔞 +18</span>' : ''}${v.activa === false ? ' <span class="status espera">oculta</span>' : ''}<div class="muted">${esc(v.frase || '')}</div>
-          <small class="muted">${ps.length} productos · orden: ${({ peso: 'por peso', ventas: 'más vendidos primero', nombre: 'por nombre', manual: 'a mano' })[v.orden || 'ventas']}${v.sello ? ' · sello «' + esc(v.sello) + '»' : ''}</small></div>
+          ${v.desde || v.hasta ? ` <span class="status ${enFecha(v) ? 'en_carga' : 'espera'}">📅 ${v.desde ? 'del ' + esc(P.fmtDate(v.desde)) : ''}${v.hasta ? ' al ' + esc(P.fmtDate(v.hasta)) : ''}${enFecha(v) ? '' : ' · fuera de fecha'}</span>` : ''}<small class="muted" style="display:block">${ps.length} productos · orden: ${({ peso: 'por peso', ventas: 'más vendidos primero', nombre: 'por nombre', manual: 'a mano' })[v.orden || 'ventas']}${v.sello ? ' · sello «' + esc(v.sello) + '»' : ''}</small></div>
         <div class="row" style="gap:4px"><button class="btn btn-sm" data-mv="${esc(v.id)}|-1" ${i ? '' : 'disabled'} aria-label="Subir">↑</button><button class="btn btn-sm" data-mv="${esc(v.id)}|1" ${i < list.length - 1 ? '' : 'disabled'} aria-label="Bajar">↓</button>
           <button class="btn btn-sm" data-tg="${esc(v.id)}">${v.activa === false ? '👁 Mostrar' : '🙈 Ocultar'}</button><button class="btn btn-sm btn-primary" data-ev="${esc(v.id)}">✎ Editar</button></div></div>`; }).join('')}</div>`;
   }
@@ -212,11 +295,13 @@
       <label class="field"><span>Qué productos entran: palabras (marca, tipo, sabor…), separadas por coma</span><input id="veB" class="input" value="${esc((v.buscar || []).join(', '))}" placeholder="Ej.: salsa, quiero"></label>
       <div class="field"><span>…o categorías completas</span><div class="mk-cats">${cats.map((c) => `<label class="chip-check"><input type="checkbox" data-cat="${esc(c)}" ${v.cats.includes(c) ? 'checked' : ''}> ${esc(c)}</label>`).join('')}</div></div>
       <div class="field mk-pick" id="veAdd"><span>Agregar un producto a mano</span><input class="input" placeholder="Buscar producto…" autocomplete="off"><div class="mk-res"></div></div>
+      <div class="row wrap" style="gap:8px"><label class="field"><span>📅 Se muestra desde (opcional)</span><input id="veD" type="date" class="input" value="${esc(v.desde || '')}"></label>
+        <label class="field"><span>hasta</span><input id="veH" type="date" class="input" value="${esc(v.hasta || '')}"></label><small class="muted" style="align-self:center">Para temporadas: Navidad, Carnaval, Día de las Madres, Regreso a clases…</small></div>
       <label style="display:flex;gap:8px;align-items:center;margin:6px 0"><input type="checkbox" id="veA" ${v.adultos ? 'checked' : ''}> 🔞 Bebidas alcohólicas: «Solo mayores de 18 · Consumo responsable»</label>
       <div class="section-title">Vista previa · <span id="veCnt"></span></div><div id="veList" class="mk-prev"></div>
       <div class="actions">${isNew ? '' : '<button class="btn btn-danger" id="veDel">Eliminar</button>'}<span class="grow"></span><button class="btn btn-primary" id="veOk">Guardar vitrina</button></div>`, { wide: true });
     const q = (s) => sh.el.querySelector(s);
-    const read = () => { v.icono = q('#veI').value.trim(); v.nombre = q('#veN').value.trim(); v.frase = q('#veF').value.trim(); v.sello = q('#veS').value.trim(); v.orden = q('#veO').value; v.adultos = q('#veA').checked;
+    const read = () => { v.icono = q('#veI').value.trim(); v.nombre = q('#veN').value.trim(); v.frase = q('#veF').value.trim(); v.sello = q('#veS').value.trim(); v.orden = q('#veO').value; v.adultos = q('#veA').checked; v.desde = q('#veD').value; v.hasta = q('#veH').value;
       v.buscar = q('#veB').value.split(',').map((w) => w.trim()).filter(Boolean); v.cats = [...sh.el.querySelectorAll('[data-cat]:checked')].map((x) => x.dataset.cat); };
     const prev = () => {
       read(); const ps = productsOf(v);
@@ -237,6 +322,8 @@
     q('#veOk').onclick = async () => {
       read();
       if (!v.nombre) { toast('Ponle un nombre a la vitrina', 'err'); return; }
+      if (v.desde && v.hasta && v.hasta < v.desde) { toast('La fecha «hasta» es antes de «desde»', 'err'); return; }
+      if (!v.desde) delete v.desde; if (!v.hasta) delete v.hasta;
       const list = data().vitrinas.slice(), i = list.findIndex((x) => x.id === v.id);
       if (i >= 0) list[i] = v; else list.push(v);
       await save({ vitrinas: list }, `${isNew ? 'Creó' : 'Editó'} la vitrina «${v.nombre}»`);
@@ -286,5 +373,5 @@
     if (del) del.onclick = async () => { if (!confirm(`¿Eliminar la mezcla «${x.nombre}»?`)) return; await save({ mezclas: data().mezclas.filter((y) => y.id !== x.id) }, `Eliminó la mezcla «${x.nombre}»`); sh.close(); done(); };
   }
 
-  global.Mkt = { data, productsOf, sizeOf, itemProduct, renderSeller, onSellerClick, render, DEF_VITRINAS, DEF_MEZCLAS };
+  global.Mkt = { data, productsOf, sizeOf, itemProduct, renderSeller, afterRender, onSellerClick, siempreOf, combinaCon, ficha, visible, render, DEF_VITRINAS, DEF_MEZCLAS };
 })(window);

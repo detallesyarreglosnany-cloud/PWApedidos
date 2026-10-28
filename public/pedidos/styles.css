@@ -659,3 +659,42 @@ body.ro-ger .valery-in, body.ro-ger #dStatus, body.ro-ger #dDisp, body.ro-ger #d
 .mk-pi { display: flex; gap: 6px; align-items: center; padding: 6px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); }
 .mk-pi img, .mk-pi > span { width: 40px; height: 40px; object-fit: contain; background: #fff; border-radius: 8px; display: grid; place-items: center; flex: 0 0 auto; }
 .mk-pi small { flex: 1; min-width: 0; line-height: 1.2; }
+
+/* Vitrina: historias, carrusel destacado, «lo de siempre», ficha y ganancia */
+.vt-stories { display: flex; gap: 14px; overflow-x: auto; padding: 10px 4px 6px; scrollbar-width: none; }
+.vt-story { --h: 205; flex: 0 0 auto; width: 92px; display: flex; flex-direction: column; align-items: center; gap: 6px; background: none; border: 0; color: var(--ink, #fff); }
+.vt-ring { width: 76px; height: 76px; flex: 0 0 76px; box-sizing: border-box; overflow: hidden; border-radius: 50%; padding: 3px; background: conic-gradient(from 200deg, hsl(var(--h) 90% 60%), #ffb300, hsl(var(--h) 80% 45%), hsl(var(--h) 90% 60%)); display: grid; place-items: center; }
+.vt-ring img, .vt-ring b { display: grid; box-sizing: border-box; width: 70px; height: 70px; border-radius: 50%; background: radial-gradient(#fff, #e9ecf0); object-fit: contain; padding: 8px; border: 3px solid var(--bg); display: grid; place-items: center; font-size: 30px; }
+.vt-ring-plain { background: var(--line); }
+.vt-ring-plain b { background: var(--bg-2); color: #fff; }
+.vt-story small { font-size: 11px; line-height: 1.15; text-align: center; max-height: 2.4em; overflow: hidden; }
+.vt-hero { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; margin-top: 6px; border-radius: 22px; }
+.vt-slide { --h: 205; flex: 0 0 100%; scroll-snap-align: start; cursor: pointer; }
+.vt-slide .vt-banner { min-height: clamp(170px, 26vw, 260px); }
+.vt-dots { display: flex; justify-content: center; gap: 6px; margin: 8px 0 4px; }
+.vt-dots i { width: 8px; height: 8px; border-radius: 999px; background: var(--line); transition: width .25s, background .25s; cursor: pointer; }
+.vt-dots i.on { width: 22px; background: var(--brand-2); }
+.vt-banner::after { content: ""; position: absolute; inset: 0; background: linear-gradient(110deg, transparent 35%, rgba(255,255,255,.18) 50%, transparent 65%); background-size: 250% 100%; animation: vt-shine 5s ease-in-out infinite; pointer-events: none; }
+@keyframes vt-shine { 0% { background-position: 130% 0; } 60%, 100% { background-position: -30% 0; } }
+@media (prefers-reduced-motion: reduce) { .vt-banner::after { animation: none; } }
+.vt-mini { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 14px 18px; border-radius: 18px; color: #fff; background: linear-gradient(135deg, hsl(var(--h) 70% 40%), hsl(var(--h) 75% 22%)); }
+.vt-mini h3 { margin: 0; font: 800 clamp(20px, 3vw, 28px) var(--display); text-transform: uppercase; }
+.vt-mini p { margin: 2px 0 0; opacity: .9; }
+.pgain { font-size: 13px; font-weight: 700; color: #7CFFB2; background: rgba(0,0,0,.28); border-radius: 10px; padding: 4px 8px; }
+.pgain b { color: #fff; }
+.new-badge { background: linear-gradient(135deg, #00c853, #00897b); }
+.vt-ficha { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+.vt-ficha-img { position: relative; aspect-ratio: 1; border-radius: 20px; background: radial-gradient(ellipse at 50% 38%, #fff 0%, #f6f7f9 55%, #e4e7ec 100%); display: grid; place-items: center; overflow: hidden; font-size: 90px; }
+.vt-ficha-img img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; padding: 6%; mix-blend-mode: multiply; }
+.vt-ficha-txt h2 { margin: 6px 0 2px; font: 800 clamp(26px, 3.4vw, 40px)/1.05 var(--display); text-transform: uppercase; }
+.vt-ficha-prices { display: flex; gap: 18px; margin: 10px 0; }
+.vt-ficha-prices small { display: block; color: var(--muted); font-weight: 700; text-transform: uppercase; font-size: 12px; }
+.vt-ficha-prices b { font: 800 32px var(--display); }
+.vt-gain { padding: 10px 12px; border-radius: 14px; background: linear-gradient(135deg, rgba(0,200,83,.22), rgba(0,137,123,.18)); border: 1px solid rgba(0,200,83,.45); margin-bottom: 10px; }
+.vt-gain span { color: #7CFFB2; font-weight: 800; }
+.vt-ficha-card .pitem { max-width: 320px; }
+.vt-ficha-card .pimg, .vt-ficha-card .pname, .vt-ficha-card .pcode, .vt-ficha-card .ppres, .vt-ficha-card .pprice, .vt-ficha-card .pgain { display: none; }
+.vt-ficha-card .pitem { background: none; border: 0; box-shadow: none; padding: 0; }
+.vt-row-sm > .pitem { flex-basis: clamp(150px, 18vw, 200px); }
+@media (max-width: 700px) { .vt-ficha { grid-template-columns: 1fr; } }
+.vt-row-sm { --h: 205; }
