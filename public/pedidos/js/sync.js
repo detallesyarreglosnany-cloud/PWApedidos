@@ -473,6 +473,7 @@
       if (!cfg.adminKey) return { ok: false, error: 'Falta la clave admin en Ajustes' };
       headers['x-admin-key'] = cfg.adminKey;
     }
+    await withUser(headers, cfg); // Cobranzas y Gerencia se suscriben con su sesión de PIN
     return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/push'), headers, body);
   }
 

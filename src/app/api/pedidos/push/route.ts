@@ -2,12 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { getVapid } from '@/lib/push';
 import { isAdminReq, syncOk } from '@/lib/keys';
+import { userOf } from '@/lib/roles';
 
 // Suscripción de un equipo a las notificaciones push.
 //
 // POST /api/pedidos/push
 //   { action: 'key' }                                   → { publicKey }
 //   { action: 'subscribe', role, sellerId, subscription } (oficina: clave admin)
+//   { action: 'subscribe', role: 'cobranzas' | 'gerencia', subscription } (usuario con su PIN, de ese rol)
 //   { action: 'unsubscribe', role, endpoint }
 
 export const dynamic = 'force-dynamic';
@@ -38,12 +40,15 @@ export async function POST(req: NextRequest) {
   if (!syncOk(req)) return NextResponse.json({ error: 'Clave de sincronización inválida' }, { status: 401 });
   let body: { action?: string; role?: string; sellerId?: unknown; subscription?: Sub; endpoint?: unknown };
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }); }
-  const role = body.role === 'office' ? 'office' : 'seller';
+  const role = body.role === 'office' || body.role === 'cobranzas' || body.role === 'gerencia' ? body.role : 'seller';
+  // Cobranzas y Gerencia: solo un usuario de ese rol, con su sesión de PIN en este equipo
+  const userRoleOk = async () => { const u = await userOf(req); return !!u && u.role === role; };
   try {
     if (body.action === 'key') return NextResponse.json({ publicKey: (await getVapid()).publicKey });
 
     if (body.action === 'subscribe') {
       if (role === 'office' && !isAdminReq(req)) return NextResponse.json({ error: 'Solo la oficina (clave admin)' }, { status: 401 });
+      if ((role === 'cobranzas' || role === 'gerencia') && !(await userRoleOk())) return NextResponse.json({ error: 'Entra con tu usuario y PIN' }, { status: 401 });
       const sellerId = typeof body.sellerId === 'string' && body.sellerId.length < 120 ? body.sellerId : null;
       if (role === 'seller' && !sellerId) return NextResponse.json({ error: 'Falta el vendedor' }, { status: 400 });
       if (!validSub(body.subscription)) return NextResponse.json({ error: 'Suscripción inválida' }, { status: 400 });
@@ -55,13 +60,14 @@ export async function POST(req: NextRequest) {
         update: { sellerId: role === 'seller' ? sellerId : null, data },
       });
       // Tope por vendedor: se quedan los equipos más recientes
-      const same = await db.distPush.findMany({ where: role === 'seller' ? { role, sellerId } : { role }, orderBy: { updatedAt: 'desc' }, skip: MAX_PER_SELLER * (role === 'office' ? 3 : 1) });
+      const same = await db.distPush.findMany({ where: role === 'seller' ? { role, sellerId } : { role }, orderBy: { updatedAt: 'desc' }, skip: MAX_PER_SELLER * (role === 'seller' ? 1 : 3) });
       for (const x of same) await db.distPush.deleteMany({ where: { endpoint: x.endpoint, role: x.role } });
       return NextResponse.json({ ok: true });
     }
 
     if (body.action === 'unsubscribe' && typeof body.endpoint === 'string') {
       if (role === 'office' && !isAdminReq(req)) return NextResponse.json({ error: 'Solo la oficina (clave admin)' }, { status: 401 });
+      if ((role === 'cobranzas' || role === 'gerencia') && !(await userRoleOk())) return NextResponse.json({ error: 'Entra con tu usuario y PIN' }, { status: 401 });
       await db.distPush.deleteMany({ where: { endpoint: body.endpoint, role } });
       return NextResponse.json({ ok: true });
     }

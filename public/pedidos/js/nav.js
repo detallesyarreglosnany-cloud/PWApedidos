@@ -54,6 +54,7 @@
         { icon: '🛍', label: 'Vitrinas', go: '#/oficina/marketing', mkt: 'vitrinas' },
         { icon: '🍹', label: 'Mezclas', go: '#/oficina/marketing', mkt: 'mezclas' },
         { icon: '🎁', label: 'Combos', go: '#/oficina/marketing', mkt: 'combos' },
+        { icon: '📊', label: 'Resultados de campaña', go: '#/oficina/marketing', mkt: 'resultados' },
       ] },
       { id: 'rep', icon: '📈', label: 'Reportes', items: [
         { icon: '📈', label: 'Quincena, ventas y notas', go: '#/oficina/reportes' },
@@ -90,6 +91,7 @@
         { icon: '🛍', label: 'Vitrinas', go: '#/gerencia/marketing', mkt: 'vitrinas' },
         { icon: '🍹', label: 'Mezclas', go: '#/gerencia/marketing', mkt: 'mezclas' },
         { icon: '🎁', label: 'Combos', go: '#/gerencia/marketing', mkt: 'combos' },
+        { icon: '📊', label: 'Resultados de campaña', go: '#/gerencia/marketing', mkt: 'resultados' },
       ] },
       { id: 'rep', icon: '📈', label: 'Reportes', items: [
         { icon: '📊', label: 'Resumen del día', go: '#/gerencia/resumen' },

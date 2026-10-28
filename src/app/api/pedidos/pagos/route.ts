@@ -281,9 +281,14 @@ export async function POST(req: NextRequest) {
         fv.cobRev = upd;
         const next = { ...l, cobRev: rev, fv, updatedAt: upd };
         await tx.distDoc.update({ where: { kind_id: { kind: 'loads', id: loadId } }, data: { data: JSON.stringify(next), updatedAt: upd, syncedAt: new Date() } });
-        return { cobRev: rev, at: upd, label: String(l.label || ''), clientName: String(o.clientName || '') };
+        const ids = Array.isArray(l.orderIds) ? (l.orderIds as string[]) : [], prevRev = (l.cobRev || {}) as Record<string, unknown>;
+        const done = ids.length > 0 && ids.every((id) => rev[id]) && !ids.every((id) => prevRev[id]); // esta decisión completó la hoja
+        return { cobRev: rev, at: upd, label: String(l.label || ''), clientName: String(o.clientName || ''), done, n: ids.length };
       });
       if ('error' in out) return NextResponse.json({ error: out.error }, { status: out.status });
+      if (out.done) {
+        try { await sendPush('office', null, [{ title: '✅ Cobranzas revisó una hoja', body: `${out.label || 'Hoja'} · ${out.n} clientes revisados`, tag: `crev-done-${loadId}` }]); } catch (e) { console.warn('[push revisar]', e); }
+      }
       if (estado === 'retener') {
         try { await sendPush('office', null, [{ title: '⏸ Cobranzas retuvo un cliente', body: `${out.clientName}${out.label ? ' · hoja ' + out.label : ''}${nota ? ': ' + nota : ''}`.slice(0, 300), tag: `crev-${orderId}` }]); } catch (e) { console.warn('[push revisar]', e); }
       }

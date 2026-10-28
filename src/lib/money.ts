@@ -20,7 +20,7 @@ export const lineMoney = (l: MoneyLine) => r2(num(l.cajas) * num(l.boxPrice) + n
 
 /* ---------------- Combos ---------------- */
 export type ComboItem = { pid?: string; cajas?: number; unidades?: number; regalo?: boolean };
-export type Combo = { id: string; items?: ComboItem[]; precio?: number; aprobado?: { v?: string; by?: string; at?: string } | null };
+export type Combo = { id: string; items?: ComboItem[]; precio?: number; estado?: string; aprobado?: { v?: string; by?: string; at?: string } | null };
 
 /** Huella del contenido que Gerencia autoriza (productos, cantidades, regalos y precio). */
 export function comboV(c: Combo) {

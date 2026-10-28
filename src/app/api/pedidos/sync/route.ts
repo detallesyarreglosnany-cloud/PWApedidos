@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import { db, TX_WAIT } from '@/lib/db';
 import { isAdminReq, isSupervisorReq, syncOk } from '@/lib/keys';
 import { userHeaderInvalid, userOf } from '@/lib/roles';
-import { sendPush, type PushMsg } from '@/lib/push';
+import { sendPush, type PushMsg, type PushRole } from '@/lib/push';
 import { RESET_LOCK, currentEpoch, epochAt } from '@/lib/epoch';
 import { ordersOfLoads, syncKardexForOrders } from '@/lib/vacios';
 import { dupPairs, DUP_WINDOW_DAYS, type DupOrder } from '@/lib/dedup';
@@ -332,7 +332,7 @@ function sellerLoadView(d: Doc): Doc {
 }
 
 // ---- Avisos push según el cambio de un pedido ----
-type Notice = { to: 'office' | 'seller'; sellerId: string; msg: PushMsg };
+type Notice = { to: PushRole; sellerId: string; msg: PushMsg };
 const SENT = ['enviado', 'en_carga', 'en_espera', 'despachado'];
 const isSent = (o: Record<string, unknown> | null) => !!o && !o.deleted && SENT.includes(String(o.status));
 
@@ -386,7 +386,7 @@ function orderNotice(cur: Record<string, unknown> | null, doc: Record<string, un
 
 /** Agrupa: si un mismo destino recibe muchos avisos iguales de golpe, sale uno solo con la lista. */
 function grouped(list: Notice[]) {
-  const out = new Map<string, { to: 'office' | 'seller'; sellerId: string; msgs: PushMsg[] }>();
+  const out = new Map<string, { to: PushRole; sellerId: string; msgs: PushMsg[] }>();
   const byTitle = new Map<string, Notice[]>();
   for (const n of list) {
     const k = n.to + '|' + (n.to === 'seller' ? n.sellerId : '') + '|' + n.msg.title;
@@ -555,7 +555,21 @@ export async function POST(req: NextRequest) {
           }
           // Gerencia solo cambia la lista de categorías de la configuración (al crear un producto de una categoría nueva)
           // y Promoción y marketing (documento «mkt»: vitrinas, mezclas y combos), que edita igual que la oficina
-          if (kind === 'config' && doc.id === 'mkt') guardMkt(doc as Rec, cur as Rec | null, isGer);
+          if (kind === 'config' && doc.id === 'mkt') {
+            guardMkt(doc as Rec, cur as Rec | null, isGer);
+            // Avisos: combo por autorizar → Gerencia · combo autorizado → oficina y todos los vendedores
+            const prev = new Map((((cur as Rec | null)?.combos as Combo[]) || []).map((c) => [c.id, c]));
+            for (const c of ((doc as Rec).combos as (Combo & Rec)[]) || []) {
+              if (!c || typeof c !== 'object') continue;
+              const p = prev.get(c.id), nom = String(c.nombre || 'Combo'), pr = `$${Number(c.precio || 0).toFixed(2)}`;
+              if (comboOk(c) && !(p && comboOk(p))) {
+                extraNotices.push({ id: doc.id, n: { to: 'office', sellerId: '', msg: { title: '✅ Gerencia autorizó un combo', body: `${nom} · ${pr}`, tag: `cmb-${c.id}` } } });
+                extraNotices.push({ id: doc.id, n: { to: 'seller', sellerId: '*', msg: { title: '🎁 Nuevo combo para ofrecer', body: `${nom} · combo ${pr}. Míralo en 🛍 Vitrina.`, tag: `cmb-${c.id}` } } });
+              } else if (!comboOk(c) && c.estado === 'pendiente' && (!p || comboV(p) !== comboV(c) || comboOk(p) || p.estado !== 'pendiente')) {
+                extraNotices.push({ id: doc.id, n: { to: 'gerencia', sellerId: '', msg: { title: '🎁 Combo por autorizar', body: `${nom} · ${pr}`, tag: `cmb-${c.id}` } } });
+              }
+            }
+          }
           if (kind === 'config' && isGer && doc.id !== 'mkt') {
             if (!cur) { rejected.push({ kind, id: doc.id, reason: 'foreign' }); continue; }
             doc = { ...cur, rubros: Array.isArray((doc as Record<string, unknown>).rubros) ? (doc as Record<string, unknown>).rubros : cur.rubros, updatedAt: doc.updatedAt } as typeof doc;
@@ -653,6 +667,12 @@ export async function POST(req: NextRequest) {
             const now2 = doc.suspendedUntil && Date.parse(String(doc.suspendedUntil)) > Date.now();
             if (now2 && (!was || cur!.suspendedUntil !== doc.suspendedUntil)) notices.push({ to: 'seller', sellerId: doc.id, msg: { title: '⏸ Pausa en la subida de pedidos', body: 'Excelente trabajo. Toma un respiro: tus hojas de pedidos están por despachar. Te avisaremos cuando puedas volver a subir pedidos.', tag: `s-${doc.id}-pausa` } });
             if (was && !now2) notices.push({ to: 'seller', sellerId: doc.id, msg: { title: '✅ Ya puedes volver a subir pedidos', body: 'Tus hojas se descongestionaron. ¡A vender!', tag: `s-${doc.id}-pausa` } });
+          }
+          // Hoja enviada a cobranzas: les llega el aviso a Cobranzas
+          if (kind === 'loads') {
+            const sent = (x: Rec | null) => String((x && x.cobSent && typeof x.cobSent === 'object' ? (x.cobSent as Rec).at : '') || '');
+            const d = doc as Rec;
+            if (sent(d) && sent(d) !== sent(cur as Rec | null) && !d.deleted) extraNotices.push({ id: doc.id, n: { to: 'cobranzas', sellerId: '', msg: { title: '🧾 Hoja por aprobar', body: `${String(d.label || 'Hoja')} · ${String(d.sellerName || '')} · ${Array.isArray(d.orderIds) ? d.orderIds.length : 0} clientes`.slice(0, 300), tag: `cob-${doc.id}` } } });
           }
           // Combos: el descuento solo vale si sale de combos autorizados por Gerencia (nadie inventa descuentos)
           if (kind === 'orders' && !isAdmin && cmbKey(doc as Rec) !== cmbKey(cur as Rec | null)) {
