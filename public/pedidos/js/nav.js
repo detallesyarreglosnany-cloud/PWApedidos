@@ -54,6 +54,8 @@
         { icon: '🛍', label: 'Vitrinas', go: '#/oficina/marketing', mkt: 'vitrinas' },
         { icon: '🍹', label: 'Mezclas', go: '#/oficina/marketing', mkt: 'mezclas' },
         { icon: '🎁', label: 'Combos', go: '#/oficina/marketing', mkt: 'combos' },
+        { icon: '💰', label: 'Ganancia bodega', go: '#/oficina/marketing', mkt: 'ganancia' },
+        { icon: '📈', label: 'Impacto de la vitrina', go: '#/oficina/marketing', mkt: 'impacto' },
         { icon: '📊', label: 'Resultados de campaña', go: '#/oficina/marketing', mkt: 'resultados' },
       ] },
       { id: 'rep', icon: '📈', label: 'Reportes', items: [
@@ -91,6 +93,8 @@
         { icon: '🛍', label: 'Vitrinas', go: '#/gerencia/marketing', mkt: 'vitrinas' },
         { icon: '🍹', label: 'Mezclas', go: '#/gerencia/marketing', mkt: 'mezclas' },
         { icon: '🎁', label: 'Combos', go: '#/gerencia/marketing', mkt: 'combos' },
+        { icon: '💰', label: 'Ganancia bodega', go: '#/gerencia/marketing', mkt: 'ganancia' },
+        { icon: '📈', label: 'Impacto de la vitrina', go: '#/gerencia/marketing', mkt: 'impacto' },
         { icon: '📊', label: 'Resultados de campaña', go: '#/gerencia/marketing', mkt: 'resultados' },
       ] },
       { id: 'rep', icon: '📈', label: 'Reportes', items: [

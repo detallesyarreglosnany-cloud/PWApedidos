@@ -141,6 +141,7 @@
     [S.products, S.sellers, S.orders, S.clients, S.loads] = all.slice(0, 5).map((a) => a.filter((x) => !x.deleted));
     S.config = all[5].find((c) => c.id === 'main') || Seed.defaultConfig();
     S.mkt = all[5].find((c) => c.id === 'mkt') || null; // vitrinas y mezclas (Promoción y marketing)
+    S.banners = Object.fromEntries(all[5].filter((c) => String(c.id).startsWith('bn_')).map((c) => [c.id, c])); // imágenes de fondo de los banners
     idxVer++;
     await loadMeta();
   }
@@ -160,7 +161,10 @@
       got.forEach((d) => { if (!d.deleted) out.push(d); });
       S[k] = out;
     }
-    if (touched.config && touched.config.length) { S.config = (await DB.get('config', 'main')) || S.config; S.mkt = (await DB.get('config', 'mkt')) || S.mkt || null; }
+    if (touched.config && touched.config.length) {
+      S.config = (await DB.get('config', 'main')) || S.config; S.mkt = (await DB.get('config', 'mkt')) || S.mkt || null;
+      for (const id of touched.config.filter((x) => String(x).startsWith('bn_'))) { const b = await DB.get('config', id); if (b) S.banners = { ...(S.banners || {}), [id]: b }; }
+    }
     idxVer++;
     await loadMeta();
   }
@@ -200,7 +204,7 @@
   async function gerenciaBlocks(kind, docs) {
     if (!(window.Roles && Roles.isRole('gerencia')) || S.settings.adminKey) return '';
     if (!['orders', 'clients', 'products', 'config', 'events'].includes(kind)) return 'Gerencia: las hojas de carga, liquidaciones y ajustes son solo de consulta';
-    if (kind === 'config' && docs.some((d) => d.id !== 'mkt' && Object.keys(d).some((k) => k !== 'rubros' && k !== 'updatedAt' && k !== 'fv' && JSON.stringify(d[k]) !== JSON.stringify(S.config[k])))) return 'Gerencia: los ajustes los cambia la oficina';
+    if (kind === 'config' && docs.some((d) => d.id !== 'mkt' && !String(d.id).startsWith('bn_') && Object.keys(d).some((k) => k !== 'rubros' && k !== 'updatedAt' && k !== 'fv' && JSON.stringify(d[k]) !== JSON.stringify(S.config[k])))) return 'Gerencia: los ajustes los cambia la oficina';
     if (kind === 'orders') {
       for (const d of docs) {
         const prev = await DB.get('orders', d.id); if (!prev) continue;
@@ -226,7 +230,7 @@
     const skipOf = (prev, d) => (kind === 'orders' && !isOffice() && !(prev && SELLER_ST.includes(prev.status) && SELLER_ST.includes(d.status)) ? DB.FV_GROUPS.orders : null);
     docs.forEach((d, i) => { DB.touch(d); if (byField) DB.stampFields(prevs[i], d, skipOf(prevs[i], d)); });
     await DB.putMany(kind, docs);
-    if (kind === 'config') { docs.forEach((d) => { if (d.id === 'mkt') S.mkt = d; else S.config = d; }); }
+    if (kind === 'config') { docs.forEach((d) => { if (d.id === 'mkt') S.mkt = d; else if (String(d.id).startsWith('bn_')) S.banners = { ...(S.banners || {}), [d.id]: d }; else S.config = d; }); }
     else {
       const arr = S[kind];
       docs.forEach((d) => {
@@ -972,9 +976,9 @@
     if (p.sellBy !== 'unidad') prices.push(`<span>Caja${p.unitsPerBox > 1 ? ' x' + p.unitsPerBox : ''}</span><b>${usd(p.boxPrice)}</b>`);
     if (p.sellBy !== 'caja') prices.push(`<span>Unidad</span><b>${usd(p.unitPrice)}</b>`);
     return `
-      <article class="pitem ${req ? 'has-qty' : ''}" data-pid="${esc(p.id)}" style="--grp:${grpHue(p.category + '|' + (p.subgroup || ''))}">
+      <article class="pitem ${req ? 'has-qty' : ''} ${p.agotado ? 'agotado' : ''}" data-pid="${esc(p.id)}" style="--grp:${grpHue(p.category + '|' + (p.subgroup || ''))}">
         <div class="pimg">${hasPhoto(p) ? `<img src="${esc(imgSrc(p))}" alt="" loading="lazy">` : `<span aria-hidden="true">${rubroIcon(p.category)}</span>`}
-          ${isNewProduct(p) ? '<em class="hot-badge new-badge">🆕 Nuevo</em>' : popularity().cat.has(p.id) && popularity().cat.size > 1 ? `<em class="hot-badge">🏆 N°1 en ${esc(p.category)}</em>` : topSellers().has(p.id) ? '<em class="hot-badge">⭐ Más vendido</em>' : ''}
+          ${p.agotado ? '<em class="agotado-badge">AGOTADO</em>' : ''}${p.agotado ? '' : isNewProduct(p) ? '<em class="hot-badge new-badge">🆕 Nuevo</em>' : popularity().cat.has(p.id) && popularity().cat.size > 1 ? `<em class="hot-badge">🏆 N°1 en ${esc(p.category)}</em>` : topSellers().has(p.id) ? '<em class="hot-badge">⭐ Más vendido</em>' : ''}
           ${req ? `<em class="qty-badge">${cj ? cj + 'cj' : ''}${cj && un ? '+' : ''}${un ? un + 'u' : ''}</em>` : ''}</div>
         <div class="pname">${esc(p.name)}</div>
         <div class="pcode mono">${p.unitCode && p.unitCode !== p.code && p.sellBy !== 'caja' ? (p.sellBy === 'unidad' ? esc(p.unitCode) : `<span class="${cj ? 'on' : ''}" title="Código al mayor (caja)">CJ ${esc(p.code)}</span> · <span class="${un ? 'on' : ''}" title="Código por unidad">UN ${esc(p.unitCode)}</span>`) : esc(p.code)}</div>
@@ -1122,13 +1126,13 @@
       const cur0 = activeOrder();
       const l = cur0 && cur0.lines[pid];
       const cur = l ? l[b.dataset.kind] : 0;
-      setQty(pid, b.dataset.kind, cur + (b.dataset.act === 'inc' ? 1 : -1));
+      setQty(pid, b.dataset.kind, cur + (b.dataset.act === 'inc' ? 1 : -1), list.classList.contains('vt-mode') ? 'vt' : '');
       if (navigator.vibrate) navigator.vibrate(8);
     });
     list.addEventListener('focusin', (e) => { if (e.target.matches('input[data-kind]')) e.target.select(); });
     list.addEventListener('change', (e) => {
       const inp = e.target.closest('input[data-kind]'); if (!inp) return;
-      setQty(inp.closest('[data-pid]').dataset.pid, inp.dataset.kind, int(inp.value));
+      setQty(inp.closest('[data-pid]').dataset.pid, inp.dataset.kind, int(inp.value), list.classList.contains('vt-mode') ? 'vt' : '');
     });
     list.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.matches('input[data-kind]')) e.target.blur(); });
   }
@@ -1239,15 +1243,24 @@
     }
     return true;
   }
-  async function setQty(pid, kind, value) {
+  /** Métrica de la vitrina: el pedido recuerda qué productos se agregaron desde la vitrina (o.vt). */
+  function markVt(o, pid) {
+    const pids = (o.vt && Array.isArray(o.vt.pids) ? o.vt.pids : []);
+    if (!pids.includes(pid)) o.vt = { at: (o.vt && o.vt.at) || DB.now(), pids: pids.concat(pid).slice(-300) };
+  }
+  async function setQty(pid, kind, value, src) {
     const o = activeOrder();
     if (!o) { toast('Primero escribe el nombre del cliente', 'err'); $('#clientInput').focus(); return; }
     if (!editable(o)) { toast('Pedido bloqueado (' + Loads.orderLabel(o) + '): ya no se puede modificar', 'err'); return; }
     const p = productById(pid); if (!p) return;
+    // Agotado (Inventario): no se agrega; sí se puede bajar lo que ya estaba en el pedido
+    { const cur0 = +((o.lines[pid] || {})[kind]) || 0; if (p.agotado && value > cur0) { toast(`⛔ ${p.name} está AGOTADO: no se puede agregar`, 'err'); return; } }
     // Un combo se quita con su botón «−»: a mano no se baja de lo que lleva el combo (el descuento es por el combo completo)
     { const c = (o.lines[pid] || {}).cmb, cap = c ? +(kind === 'cajas' ? c.cj : c.un) || 0 : 0;
       if (cap && value < cap) { toast(`Este producto va en un combo (${cap} ${kind === 'cajas' ? 'cj' : 'un'}). Para quitarlo, usa «−» en el combo de la vitrina.`, 'err'); renderProductList(); return; } }
+    const before = +((o.lines[pid] || {})[kind]) || 0;
     if (!applyQty(o, pid, kind, value)) return;
+    if (src === 'vt' && value > before) markVt(o, pid);
     await saveOrder(o);
     $$(`#plist [data-pid="${CSS.escape(pid)}"]`).forEach((card) => {
       if (S.ui.onlyInOrder && !o.lines[pid]) { card.remove(); return; }
@@ -2124,7 +2137,7 @@
     syncInfo: () => ({ idle: isIdle(), every: syncEvery(), last: lastSyncResult }), _idleSince: (ms) => { lastInput = Date.now() - ms; },
     loadAll, saveDocs, saveOrder, saveSettings, setSession, msgThreadHTML, rememberOffice, forgetOffice, PERSIST_HINT, runSync, updateSyncPill, render, refreshAfterRemote, updateBell, beep, logEvent, isSupervisor,
     notifSheet, refreshPush,
-    gerMode, productById, sellerById, orderById, clientById, rubros, orderLinesHTML, groupLines, groupedRows, productHTML, setQty, applyQty, activeOrder, popularity, gainOf, isNewProduct,
+    gerMode, productById, sellerById, orderById, clientById, rubros, orderLinesHTML, groupLines, groupedRows, productHTML, setQty, applyQty, markVt, activeOrder, popularity, gainOf, isNewProduct,
     boot, localNotif,
   };
 })();

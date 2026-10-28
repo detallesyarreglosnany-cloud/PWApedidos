@@ -2052,7 +2052,7 @@
       <div class="card" style="overflow:auto"><table class="inv inv-edit">
         <thead><tr><th></th><th>Código</th><th>Producto</th><th>Rubro</th><th>Venta</th><th>$ Caja</th><th>$ Unidad</th><th>Stock</th><th>Orden</th><th></th></tr></thead>
         <tbody>${rows.map((p) => `
-          <tr class="${p.active ? '' : 'inactive'}" data-row="${esc(p.id)}">
+          <tr class="${p.active ? '' : 'inactive'} ${p.agotado ? 'agotado-row' : ''}" data-row="${esc(p.id)}">
             <td class="thumb">${PV.hasPhoto(p) ? `<img src="${esc(PV.imgSrc(p))}" alt="" loading="lazy">` : `<span>${PV.rubroIcon(p.category)}</span>`}</td>
             <td class="mono" data-l="Código">${esc(p.code)}${p.unitCode ? `<div class="muted">UN: ${esc(p.unitCode)}</div>` : ''}${Envases.isReturnable(p) ? `<div class="ret-tag">${esc(Envases.label(p))}</div>` : ''}</td>
             <td><b>${esc(p.name)}</b><div class="muted">${esc(p.presentation)}${p.brand ? ' · ' + esc(p.brand) : ''}${p.unitsPerBox > 1 ? ' · caja x' + p.unitsPerBox : ''}</div></td>
@@ -2062,7 +2062,7 @@
             <td data-l="$ Unidad">${p.sellBy !== 'caja' ? `<input class="input qin" inputmode="decimal" data-f="unitPrice" value="${nf2.format(p.unitPrice || 0)}">` : '—'}</td>
             <td data-l="Stock" title="${hasStock(p) ? esc(fmtStock(p.stock, p.unitsPerBox, p.sellBy)) : 'Sin control de inventario'}"><input class="input qin" inputmode="numeric" data-f="stock" placeholder="—" value="${hasStock(p) ? p.stock : ''}"><div class="muted">${hasStock(p) ? esc(fmtStock(p.stock, p.unitsPerBox, p.sellBy)) : 'sin control'}</div></td>
             <td data-l="Orden"><input class="input qin small" inputmode="numeric" data-f="sort" value="${p.sort || ''}"></td>
-            <td><button class="btn btn-sm" data-edit="${esc(p.id)}">Editar</button></td>
+            <td style="white-space:nowrap"><button class="btn btn-sm ${p.agotado ? 'btn-danger' : ''}" data-ago="${esc(p.id)}" title="${p.agotado ? 'Está AGOTADO: toca cuando vuelva a haber' : 'Marcar como AGOTADO: el vendedor no lo puede agregar'}">${p.agotado ? '⛔ Agotado' : 'Agotado'}</button> <button class="btn btn-sm" data-edit="${esc(p.id)}">Editar</button></td>
           </tr>`).join('')}</tbody></table></div>`;
     let t;
     $('#iq').oninput = (e) => { clearTimeout(t); t = setTimeout(() => { U().invQ = e.target.value; renderInventory(root); const i = $('#iq'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 250); };
@@ -2074,7 +2074,17 @@
     $('#iPhotos').onclick = () => bulkPhotos(root);
     $('#iPlazo').onclick = () => Pagos.plazosSheet(!roGer());
     $('#iOrder').onclick = () => catalogOrderEditor(root);
-    root.onclick = (e) => { const b = e.target.closest('[data-edit]'); if (b) productForm(productById(b.dataset.edit), root); };
+    root.onclick = async (e) => {
+      const a = e.target.closest('[data-ago]');
+      if (a) {
+        // Agotado: el vendedor lo ve marcado y no lo puede agregar (ni en combos ni mezclas) hasta que vuelva a haber
+        const p = productById(a.dataset.ago); if (!p) return;
+        await saveDocs('products', { ...p, agotado: !p.agotado, agotadoAt: !p.agotado ? DB.now() : '' });
+        await log('producto_agotado', `${p.name} ${p.presentation || ''}: ${!p.agotado ? 'AGOTADO' : 'vuelve a haber'}`);
+        toast(!p.agotado ? `⛔ ${p.name}: agotado` : `✅ ${p.name}: vuelve a haber`, 'ok'); PV.runSync(false); renderInventory(root); return;
+      }
+      const b = e.target.closest('[data-edit]'); if (b) productForm(productById(b.dataset.edit), root);
+    };
     root.onchange = async (e) => {
       const inp = e.target.closest('.qin'); if (!inp) return;
       const p = productById(inp.closest('[data-row]').dataset.row); if (!p) return;

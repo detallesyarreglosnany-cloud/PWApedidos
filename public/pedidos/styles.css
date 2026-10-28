@@ -727,3 +727,32 @@ body.ro-ger .valery-in, body.ro-ger #dStatus, body.ro-ger #dDisp, body.ro-ger #d
 @keyframes vt-blink { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
 @media (prefers-reduced-motion: reduce) { .vt-lights i { animation: none; } }
 .mk-camp-pre .vt-camp { margin: 0; }
+
+/* Agotado */
+.pitem.agotado .pimg img { filter: grayscale(1); opacity: .55; }
+.pitem.agotado .qty-col { opacity: .45; }
+.agotado-badge { position: absolute; z-index: 2; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-12deg); background: #d50000; color: #fff; font: 800 18px var(--display); font-style: normal; letter-spacing: .06em; padding: 6px 14px; border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.4); }
+tr.agotado-row td { opacity: .65; }
+
+/* Banner configurable */
+.vt-banner.al-centro .vt-txt { text-align: center; }
+.vt-banner.al-centro .vt-banner p, .vt-banner.al-centro p { margin-left: auto; margin-right: auto; }
+.vt-banner.al-der { flex-direction: row-reverse; }
+.vt-banner.al-der .vt-txt { text-align: right; }
+.vt-banner.al-der p { margin-left: auto; }
+.vt-banner.al-der .vt-collage { justify-content: flex-start; }
+.vt-banner.va-arriba { align-items: flex-start; }
+.vt-banner.va-abajo { align-items: flex-end; }
+.vt-banner.tam-grande h2 { font-size: clamp(30px, 5.4vw, 56px); }
+.vt-banner.tam-enorme h2 { font-size: clamp(38px, 7vw, 76px); }
+.vt-banner.con-img { min-height: clamp(190px, 30vw, 300px); }
+.mk-bn { border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; margin: 8px 0; }
+.mk-bn summary { cursor: pointer; }
+.mk-bn input[type="color"] { width: 64px; padding: 2px; height: 44px; }
+.mk-launch { border-left: 8px solid #ffb300; }
+.mk-launch.on { border-left-color: #00c853; }
+.vt-preview { padding: 0; max-height: 70vh; overflow: auto; }
+.mk-conc { border-left: 8px solid var(--brand-2); }
+.mk-conc p { margin: 6px 0; line-height: 1.45; }
+.mk-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin: 10px 0; }
+.mk-cards h3 { margin: 0 0 4px; }
