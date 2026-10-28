@@ -325,6 +325,54 @@
   }
 
   /* ======================= Estado de cuenta de un cliente ======================= */
+  /** Oficina o cobranzas (pueden deshacer un «pago cargado al sistema»). */
+  const esCob = () => { const S = PV().S; return !!((S.settings && S.settings.adminKey && location.hash.startsWith('#/oficina')) || (global.Roles && global.Roles.isRole('cobranzas') && location.hash.startsWith('#/cobranzas'))); };
+  /**
+   * «✅ Pago cargado al sistema»: la nota ya se pagó completa en el sistema de cobranzas de la empresa. No hace falta
+   * subir el pago: solo la fecha. La nota sale de la deuda; con la fecha, el sistema calcula si pagó dentro del plazo
+   * o con atraso (y ese atraso sí cuenta en su crédito y semáforo).
+   */
+  function cargadoForm(o) {
+    const P = PV(), { esc, usd, toast } = P;
+    const sh = P.openSheet(`<div class="row"><h2 class="grow">✅ Pago cargado al sistema</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <p><b>${esc(o.clientName || '')}</b>${o.nota ? ` · nota <b>${esc(o.nota)}</b>` : ''}${o.monto ? ` · ${usd(o.monto)}` : ''}</p>
+      <p class="muted">Úsalo cuando el pago <b>ya está cargado en el sistema de cobranzas de la empresa</b>. No hace falta subir el detalle: la nota queda pagada completa y sale de la lista de deudores. Con la <b>fecha del pago</b> el sistema calcula si pagó dentro del plazo o con atraso (el atraso afecta su crédito).</p>
+      <label class="field"><span>Fecha del pago</span><input id="cgF" type="date" class="input" value="${esc(P.today())}" max="${esc(P.today())}"></label>
+      <div id="cgV"></div><p id="cgE" class="warn-txt"></p>
+      <div class="actions"><button class="btn" data-close>Cancelar</button><button class="btn btn-primary" id="cgOk">Marcar como pagada</button></div>`);
+    // Vista previa: ¿dentro del plazo? (con el vencimiento de la nota, si lo tenemos; si no, lo calcula el servidor)
+    const dd = (a, b) => Math.round((Date.parse(b + 'T12:00:00Z') - Date.parse(a + 'T12:00:00Z')) / 86400000);
+    const prev = () => {
+      const f = sh.el.querySelector('#cgF').value, box = sh.el.querySelector('#cgV');
+      if (!o.vence || !f) { box.innerHTML = ''; return; }
+      const at = dd(o.vence, f);
+      box.innerHTML = at > 0 ? `<div class="hint warn">⚠ Venció el ${esc(P.fmtDate(o.vence))}: pagó <b>${at} día${at === 1 ? '' : 's'} tarde</b>. Cuenta como atraso y afecta su crédito.</div>`
+        : `<div class="hint">✅ Dentro del plazo (vencía el ${esc(P.fmtDate(o.vence))}): no afecta su crédito.</div>`;
+    };
+    sh.el.querySelector('#cgF').addEventListener('input', prev); prev();
+    sh.el.querySelector('#cgOk').onclick = async () => {
+      const fecha = sh.el.querySelector('#cgF').value, err = sh.el.querySelector('#cgE');
+      if (!fecha || fecha > P.today()) { err.textContent = 'Pon la fecha del pago (no puede ser futura)'; return; }
+      const b = sh.el.querySelector('#cgOk'); b.disabled = true;
+      const r = await global.Sync.pagosCall({ action: 'cargado', sellerId: o.sellerId || '', orderId: o.orderId, fecha, by: (P.S.config && P.S.config.adminName) || '' });
+      b.disabled = false;
+      if (!r.ok) { err.textContent = r.error || 'No se pudo guardar (hace falta internet)'; return; }
+      P.logEvent('pago_cargado', `Pago cargado al sistema: ${o.clientName}${o.nota ? ' · nota ' + o.nota : ''} · ${fecha}`, { orderId: o.orderId, clientName: o.clientName });
+      try { Object.keys(localStorage).filter((k) => k.startsWith('pv_cart:')).forEach((k) => localStorage.removeItem(k)); } catch (e) { /* noop */ }
+      const at = r.data.cargado && +r.data.cargado.atraso || 0;
+      sh.close(); toast(at ? `✅ Nota pagada · ${at} día${at === 1 ? '' : 's'} de atraso (cuenta en su crédito)` : '✅ Nota pagada a tiempo', at ? 'err' : 'ok'); if (o.onDone) o.onDone();
+    };
+  }
+  async function cargadoUndo(o) {
+    const P = PV();
+    if (!confirm(`¿Deshacer «pago cargado al sistema» de la nota ${o.nota || ''}? Vuelve a aparecer como deuda.`)) return;
+    const r = await global.Sync.pagosCall({ action: 'cargado', orderId: o.orderId, deshacer: true });
+    if (!r.ok) { P.toast(r.error || 'No se pudo deshacer', 'err'); return; }
+    P.logEvent('pago_cargado', `Deshizo «pago cargado al sistema»: ${o.clientName || ''}${o.nota ? ' · nota ' + o.nota : ''}`, { orderId: o.orderId });
+    try { Object.keys(localStorage).filter((k) => k.startsWith('pv_cart:')).forEach((k) => localStorage.removeItem(k)); } catch (e) { /* noop */ }
+    P.toast('Listo: la nota vuelve a la deuda', 'ok'); if (o.onDone) o.onDone();
+  }
+
   function cuentaSheet(sid, cid) {
     const P = PV(), { esc, usd, fmtDate, openSheet } = P;
     const sh = openSheet(`<div class="row"><h2 class="grow">📒 Estado de cuenta</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
@@ -342,10 +390,14 @@
           <div class="kpi"><small>Esperando a cobranza</small><b>${usd(r.enEspera)}</b></div></div>` : ''}
         ${notas.length ? notas.map((n) => `<div class="card card-pad" style="margin-bottom:6px"><div class="row wrap" style="gap:8px;align-items:center"><span class="grow"><b>Nota ${esc(n.nota || '—')}</b> · ${esc(fmtDate(n.date))} · ${usd(n.monto)}${n.hoja ? ` <span class="muted">· ${esc(n.hoja)}</span>` : ''}${n.manual ? ' <span class="muted">(a mano)</span>' : ''}
             ${n.texto ? `<br><span class="${EST[n.estado] || 'muted'}">${esc(n.texto)}</span>` : ''}</span>
-          ${n.resta > 0.01 ? `<button class="btn btn-sm btn-primary" data-pay="${esc(n.key)}">💵 Pagar ${usd(n.resta)}</button><button class="btn btn-sm" data-ant="${esc(n.key)}">🗂 Ya pagada en FileMaker</button>` : ''}</div></div>`).join('')
+          ${n.resta > 0.01 ? `<button class="btn btn-sm btn-primary" data-pay="${esc(n.key)}">💵 Pagar ${usd(n.resta)}</button>${!n.manual && n.orderId ? `<button class="btn btn-sm btn-ok" data-car="${esc(n.key)}">✅ Pago cargado al sistema</button>` : ''}<button class="btn btn-sm" data-ant="${esc(n.key)}">🗂 Ya pagada en FileMaker</button>` : ''}
+          ${n.cargado && esCob() ? `<button class="btn btn-sm" data-carx="${esc(n.key)}">↩ Deshacer</button>` : ''}</div></div>`).join('')
           : '<p class="muted">Sin notas despachadas o liquidadas de este cliente.</p>'}
         <div class="actions"><button class="btn btn-primary" data-pay="">＋ Registrar pago de ${esc(c.name)}</button></div>`;
-      out.onclick = (e) => { const an = e.target.closest('[data-ant]'); if (an) { sh.close(); anteriorForm({ sellerId: sid, clientId: c.id, notaKey: an.dataset.ant, onSaved: () => cuentaSheet(sid, c.id) }); return; }
+      out.onclick = (e) => {
+        const cg = e.target.closest('[data-car]'), cx = e.target.closest('[data-carx]');
+        if (cg || cx) { const n = notas.find((x) => x.key === (cg || cx).dataset[cg ? 'car' : 'carx']); if (!n) return; const arg = { sellerId: sid, orderId: n.orderId, nota: n.nota, monto: n.monto, clientName: c.name, onDone: () => show(c.id) }; if (cg) cargadoForm(arg); else cargadoUndo(arg); return; }
+        const an = e.target.closest('[data-ant]'); if (an) { sh.close(); anteriorForm({ sellerId: sid, clientId: c.id, notaKey: an.dataset.ant, onSaved: () => cuentaSheet(sid, c.id) }); return; }
         const b = e.target.closest('[data-pay]'); if (!b) return; sh.close(); payForm({ sellerId: sid, clientId: c.id, notaKey: b.dataset.pay, onSaved: () => { if (location.hash === '#/ruta/pagos') { PV().S.ui.pagos = null; renderSeller(); } } }); };
     };
     sh.el.querySelector('#ecCli').addEventListener('input', (e) => { sh.el.querySelector('#ecSug').innerHTML = sugHTML(searchHits(e.target.value, sid), e.target.value); });
@@ -884,5 +936,5 @@
     };
   }
 
-  global.Pagos = { calc, METHODS, ADJUSTS, BANKS, normRef, renderSeller, renderOffice, renderAccounts, payForm, cuentaSheet, anteriorForm, importSheet, integridadSheet, plazosSheet, fillStatus, flush, pend };
+  global.Pagos = { calc, METHODS, ADJUSTS, BANKS, normRef, renderSeller, renderOffice, renderAccounts, payForm, cuentaSheet, anteriorForm, importSheet, integridadSheet, plazosSheet, cargadoForm, cargadoUndo, fillStatus, flush, pend };
 })(window);

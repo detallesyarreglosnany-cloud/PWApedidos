@@ -1,7 +1,7 @@
 // Cuentas por cobrar y crédito por cliente (Fases 5 y 6). Lo usan /api/pedidos/pagos y el aviso diario (cron).
 import { db } from '@/lib/db';
 import { credInfo, diffDays, rulesAt, rulesOf, tramos, vzDay, type CredInfo, type CredSetting } from '@/lib/cobranza';
-import { abonoKey, allocate, noteKey, notaNum, noteStatus, r2, type Pago } from '@/lib/pagos';
+import { cargadoName, abonoKey, allocate, noteKey, notaNum, noteStatus, r2, type Pago } from '@/lib/pagos';
 import { lineMoney } from '@/lib/money';
 
 const LIVE = ['espera', 'aprobado'];
@@ -46,6 +46,9 @@ export async function cartera(sellerId: string) {
   const pagos = clientIds.length ? (await db.distPago.findMany({ where: { clientId: { in: clientIds }, status: { in: LIVE } } })).map(parse) : [];
   const ab = allocate(pagos, canon);
   const segRows = await db.$queryRaw<{ name: string; value: string }[]>`SELECT "name", "value" FROM "DistSetting" WHERE "name" LIKE 'seg:%'`;
+  // Notas marcadas «Pago cargado al sistema»: no son deuda y cuentan como pagadas a tiempo
+  const carRows = await db.$queryRaw<{ name: string; value: string }[]>`SELECT "name", "value" FROM "DistSetting" WHERE "name" LIKE 'cargado:%'`;
+  const cargados = new Map(carRows.map((r) => [r.name, JSON.parse(r.value) as { atraso?: number }]));
   const seg = new Map(segRows.map((r) => [r.name.slice(4), JSON.parse(r.value)]));
   const credRows = await db.$queryRaw<{ name: string; value: string }[]>`SELECT "name", "value" FROM "DistSetting" WHERE "name" LIKE 'cred:%'`;
   const sets = new Map(credRows.map((r) => [r.name.slice(5), JSON.parse(r.value) as CredSetting]));
@@ -66,6 +69,9 @@ export async function cartera(sellerId: string) {
     // Si lo entregado no cuadra con las líneas (redondeos), manda el monto de la nota
     const sum = r2(lines.reduce((a, l) => a + l.monto, 0)); if (sum > 0 && Math.abs(sum - monto) > 0.01) lines.forEach((l) => { l.monto = r2((l.monto * monto) / sum); });
     const nota = notaNum((d && d.newValery) || o.valeryNote), key = noteKey({ nota, orderId: o.id }), ak = abonoKey(canon(String(o.clientId)), { nota, orderId: o.id }), a = ab.get(ak);
+    // Pago cargado al sistema: sale de la deuda; su atraso (fecha del pago contra el vencimiento) cuenta en el récord
+    const cg = cargados.get(cargadoName(canon(String(o.clientId)), key));
+    if (cg) { pagaron.add(String(o.clientId)); x.atrasos.push(Math.max(0, Number(cg.atraso) || 0)); continue; }
     const tr = tramos(lines, start, rulesAt(R, start), a ? a.pagado : 0), resta = r2(tr.reduce((q, t) => q + t.resta, 0));
     if (resta <= 0.01) { pagaron.add(String(o.clientId)); cerradas.push({ key: ak, monto, vence: tr[tr.length - 1].vence, x }); continue; }
     conDeuda.add(String(o.clientId));

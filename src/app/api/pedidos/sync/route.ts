@@ -9,6 +9,7 @@ import { ordersOfLoads, syncKardexForOrders } from '@/lib/vacios';
 import { dupPairs, DUP_WINDOW_DAYS, type DupOrder } from '@/lib/dedup';
 import { stashImage, productsWithInlineImage } from '@/lib/images';
 import { recordContact } from '@/lib/pin';
+import { mktWriteOk } from '@/lib/mktpin';
 import { comboAlloc, comboOk, comboV, type Combo, type MoneyLine } from '@/lib/money';
 
 // Sincronización de la PWA de pedidos (public/pedidos).
@@ -411,6 +412,7 @@ const lastContact = new Map<string, number>();
 export async function POST(req: NextRequest) {
   const serverTime = new Date();
   let mktCombos: Combo[] | null = null; // combos autorizados (se leen una vez, si un pedido trae combos)
+  let mktOk: boolean | null = null; // ¿puede construir Promoción y marketing? (PIN de la sección)
 
   if (!syncOk(req)) {
     return NextResponse.json({ error: 'Clave de sincronización inválida' }, { status: 401 });
@@ -555,6 +557,20 @@ export async function POST(req: NextRequest) {
           }
           // Gerencia solo cambia la lista de categorías de la configuración (al crear un producto de una categoría nueva)
           // y Promoción y marketing (documento «mkt»: vitrinas, mezclas y combos), que edita igual que la oficina
+          // Promoción y marketing con PIN: sin el permiso del PIN no se cambia nada; Gerencia solo autoriza o rechaza combos
+          if (kind === 'config' && (doc.id === 'mkt' || String(doc.id).startsWith('bn_'))) {
+            if (mktOk === null) mktOk = await mktWriteOk(req);
+            if (!mktOk) {
+              if (isGer && doc.id === 'mkt' && cur) {
+                const g = new Map((((doc as Rec).combos as (Combo & Rec)[]) || []).map((c) => [c.id, c]));
+                doc = { ...cur, combos: (((cur as Rec).combos as (Combo & Rec)[]) || []).map((c) => {
+                  const x = g.get(c.id); if (!x) return c;
+                  const y: Rec = { ...c }; for (const f of ['aprobado', 'estado', 'motivo']) { if (f in x) y[f] = x[f]; else delete y[f]; }
+                  return y;
+                }), updatedAt: doc.updatedAt } as typeof doc;
+              } else { rejected.push({ kind, id: doc.id, reason: 'locked', doc: cur || undefined }); continue; }
+            }
+          }
           if (kind === 'config' && doc.id === 'mkt') {
             guardMkt(doc as Rec, cur as Rec | null, isGer);
             // Avisos: combo por autorizar → Gerencia · combo autorizado → oficina y todos los vendedores

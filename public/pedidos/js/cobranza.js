@@ -94,6 +94,8 @@
   }
 
   /** Nota con productos de plazos distintos: cada parte que falta pagar con su vencimiento («$70 vence 4 nov (8 d) · $30 vence 11 nov (15 d)»). */
+  // Vencimiento final de la nota (si lleva productos de varios plazos, el último): con él se mide el atraso de un pago
+  const lastVence = (n) => ((n.tramos || []).length ? n.tramos[n.tramos.length - 1].vence : n.vence);
   const partesOf = (n) => (n.tramos || []).filter((t) => t.resta > 0.01);
   function partesHTML(n) {
     const P = PV(), ts = partesOf(n); if (ts.length < 2) return '';
@@ -200,8 +202,9 @@
       <div class="row" style="justify-content:space-between;margin-top:8px;font-size:17px"><b>Total nota ${usd(n.monto)}</b><b>Saldo ${usd(n.resta)}${rate ? ' · ' + bs(n.resta * rate) : ''}</b></div>
       <div class="${n.estado === 'parcial' ? 'warn-txt' : 'muted'}" style="margin-top:4px">${esc(n.texto || '')}</div>
       ${(n.tramos || []).length > 1 ? `<p class="muted" style="font-size:13px">${n.tramos.map((t) => `${t.days} días: ${usd(t.monto)} (vence ${fmtDate(t.vence)}${t.resta < 0.01 ? ' · pagado' : ' · resta ' + usd(t.resta)})`).join(' · ')}</p>` : ''}
-      <div class="actions"><button class="btn btn-primary" id="nsWA">📲 Enviar por WhatsApp</button><button class="btn" id="nsPay">💵 Registrar pago</button></div>`);
+      <div class="actions"><button class="btn btn-primary" id="nsWA">📲 Enviar por WhatsApp</button><button class="btn" id="nsPay">💵 Registrar pago</button><button class="btn btn-ok" id="nsCar">✅ Pago cargado al sistema</button></div>`);
     sh.el.querySelector('#nsWA').onclick = () => openWA(c, [n]);
+    sh.el.querySelector('#nsCar').onclick = () => { sh.close(); global.Pagos.cargadoForm({ sellerId: S.session.sellerId, orderId: n.orderId, nota: n.nota, monto: n.resta, clientName: c.name, vence: lastVence(n), onDone: () => renderSeller(true) }); };
     sh.el.querySelector('#nsPay').onclick = () => { sh.close(); global.Pagos.payForm({ sellerId: S.session.sellerId, clientId: n.clientId, notaKey: n.key, onSaved: () => renderSeller(true) }); };
   }
 
@@ -236,10 +239,7 @@
     const box = document.getElementById('cbBody'); if (!box) return;
     if (!d) { box.innerHTML = '<div class="empty card"><strong>Sin datos</strong>Conéctate a internet para ver tus cobros.</div>'; return; }
     const notas = d.notas, total = notas.reduce((a, n) => a + n.resta, 0), atr = notas.filter((n) => n.dias < 0);
-    // Grupos: atrasados (por días de atraso), hoy, mañana y los demás por días que faltan
-    const groups = new Map();
-    notas.forEach((n) => { const k = n.dias < 0 ? 'atr' : String(n.dias); (groups.get(k) || groups.set(k, []).get(k)).push(n); });
-    const order = [...groups.keys()].filter((k) => k !== 'atr').sort((a, b) => +a - +b); if (groups.has('atr')) order.unshift('atr');
+    const f = (S.ui.cobF = S.ui.cobF || { q: '', dia: '', fecha: '' });
     const title = (k) => (k === 'atr' ? '🚩 Atrasados' : k === '0' ? '⏰ Vence HOY' : k === '1' ? '📅 Vence mañana' : `Faltan ${k} días`);
     const clientBlock = (list) => {
       const byC = new Map(); list.forEach((n) => (byC.get(n.clientId) || byC.set(n.clientId, []).get(n.clientId)).push(n));
@@ -255,7 +255,17 @@
         <div class="kpi"><small>Atrasado</small><b class="${atr.length ? 'warn-txt' : ''}">${usd(atr.reduce((a, n) => a + n.resta, 0))}</b><small>${new Set(atr.map((n) => n.clientId)).size} clientes</small></div>
         <div class="kpi"><small>Al día</small><b>${(d.alDia || []).length}</b><small>clientes sin deuda 🙌</small></div></div>
       <p class="muted" style="font-size:13px">Plazos: ${esc((d.reglas.rules || []).map((r) => `${r.category} ${r.days} días`).concat(`lo demás ${d.reglas.def} días`).join(' · '))}, desde que la carga quedó despachada${d.reglas.desde ? ` · notas despachadas desde el ${esc(fmtDate(d.reglas.desde))}` : ''}.</p>
-      ${notas.length ? order.map((k) => `<h3>${title(k)} <span class="muted">(${new Set(groups.get(k).map((n) => n.clientId)).size})</span></h3>${clientBlock(groups.get(k))}`).join('') : '<div class="empty card"><strong>🎉 Ningún cliente te debe</strong>Todas tus notas están pagadas.</div>'}`;
+      ${notas.length ? `${filtroHTML(f)}<div id="cbList"></div>` : '<div class="empty card"><strong>🎉 Ningún cliente te debe</strong>Todas tus notas están pagadas.</div>'}`;
+    // Grupos: atrasados (por días de atraso), hoy, mañana y los demás por días que faltan — con la búsqueda aplicada
+    const drawList = () => {
+      const el = document.getElementById('cbList'); if (!el) return;
+      const vis = filtrar(notas, f), groups = new Map();
+      vis.forEach((n) => { const k = n.dias < 0 ? 'atr' : String(n.dias); (groups.get(k) || groups.set(k, []).get(k)).push(n); });
+      const order = [...groups.keys()].filter((k) => k !== 'atr').sort((a, b) => +a - +b); if (groups.has('atr')) order.unshift('atr');
+      el.innerHTML = (f.q || f.dia ? `<p class="muted">${vis.length} nota${vis.length === 1 ? '' : 's'} · ${new Set(vis.map((n) => n.clientId)).size} cliente(s) · ${usd(vis.reduce((a, n) => a + n.resta, 0))}</p>` : '')
+        + (vis.length ? order.map((k) => `<h3>${title(k)} <span class="muted">(${new Set(groups.get(k).map((n) => n.clientId)).size})</span></h3>${clientBlock(groups.get(k))}`).join('') : '<p class="muted">Ninguna nota coincide con la búsqueda.</p>');
+    };
+    if (notas.length) { wireFiltro(box, f, drawList); drawList(); }
     box.onclick = (e) => {
       const get = (cid) => notas.filter((n) => n.clientId === cid), cl = (cid) => P.clientById(cid) || { id: cid, name: (get(cid)[0] || {}).clientName };
       const wa = e.target.closest('[data-wa]'), sg = e.target.closest('[data-seg]'), py = e.target.closest('[data-pay]'), nt = e.target.closest('[data-nota]');
@@ -266,6 +276,43 @@
     };
   }
 
+  /* ---------------- Búsqueda rápida (vendedor, oficina, gerencia y cobranzas) ---------------- */
+  // Por cliente o N° de nota, y por día: atrasadas, hoy, mañana, próximos 7 días, más de 7 días o una fecha exacta.
+  const FILTROS = [['', 'Todas'], ['atr', '🚩 Atrasadas'], ['hoy', '⏰ Hoy'], ['man', '📅 Mañana'], ['sem', 'Próximos 7 días'], ['mas', 'Más de 7 días']];
+  function filtroHTML(f, extra) {
+    const esc = PV().esc;
+    return `<div class="cb-filtro"><input class="input" data-fq placeholder="🔍 Buscar cliente o N° de nota" value="${esc(f.q || '')}" autocomplete="off" aria-label="Buscar cliente o nota">
+      <div class="chips cb-chips">${FILTROS.map(([k, l]) => `<button type="button" class="chip ${(f.dia || '') === k ? 'active' : ''}" data-fd="${k}">${l}</button>`).join('')}
+        <label class="chip cb-date ${f.dia === 'fecha' ? 'active' : ''}">📆 Vence el <input type="date" data-ff value="${esc(f.fecha || '')}"></label></div>${extra || ''}</div>`;
+  }
+  function filtrar(notas, f) {
+    const P = PV(), toks = P.norm(f.q || '').split(' ').filter(Boolean);
+    return notas.filter((n) => {
+      if (toks.length) { const c = P.clientById(n.clientId) || {}, h = P.norm(`${n.clientName || ''} ${c.name || ''} ${c.tradeName || ''} ${n.nota || ''} ${n.sellerName || ''}`); if (!toks.every((t) => h.includes(t))) return false; }
+      if (f.seller && n.sellerId !== f.seller) return false;
+      switch (f.dia || '') {
+        case 'atr': return n.dias < 0;
+        case 'hoy': return n.dias === 0;
+        case 'man': return n.dias === 1;
+        case 'sem': return n.dias >= 0 && n.dias <= 7;
+        case 'mas': return n.dias > 7;
+        case 'fecha': return !f.fecha || n.vence === f.fecha || (n.tramos || []).some((t) => t.vence === f.fecha && t.resta > 0.01);
+        default: return true;
+      }
+    });
+  }
+  /** Conecta la barra: escribir filtra al instante (la barra no se redibuja: no pierde el foco), chips y fecha también. */
+  function wireFiltro(box, f, onChange) {
+    let t;
+    const q = box.querySelector('[data-fq]');
+    if (q) q.oninput = () => { clearTimeout(t); t = setTimeout(() => { f.q = q.value; onChange(); }, 120); };
+    const mark = () => { box.querySelectorAll('[data-fd]').forEach((b) => b.classList.toggle('active', (f.dia || '') === b.dataset.fd)); const c = box.querySelector('.cb-date'); if (c) c.classList.toggle('active', f.dia === 'fecha'); };
+    box.querySelectorAll('[data-fd]').forEach((b) => { b.onclick = () => { f.dia = b.dataset.fd; mark(); onChange(); }; });
+    const dt = box.querySelector('[data-ff]');
+    if (dt) dt.onchange = () => { f.fecha = dt.value; f.dia = dt.value ? 'fecha' : ''; mark(); onChange(); };
+    const sel = box.querySelector('[data-fs]'); if (sel) sel.onchange = () => { f.seller = sel.value; onChange(); };
+  }
+
   /* ---------------- Oficina: cuentas por cobrar de todos ---------------- */
   async function officeSheet() {
     const P = PV(), { esc, usd, fmtDate, openSheet, S } = P;
@@ -273,15 +320,26 @@
     const r = await global.Sync.pagosCall({ action: 'cartera' });
     const out = sh.el.querySelector('#ocOut');
     if (!r.ok) { out.innerHTML = `<div class="hint warn">${esc(r.error || 'No se pudo consultar')}</div>`; return; }
-    const notas = r.data.notas, bySeller = new Map(); notas.forEach((n) => (bySeller.get(n.sellerName || '—') || bySeller.set(n.sellerName || '—', []).get(n.sellerName || '—')).push(n));
-    out.innerHTML = `<div class="kpi-row"><div class="kpi"><small>Por cobrar</small><b>${usd(notas.reduce((a, n) => a + n.resta, 0))}</b><small>${notas.length} notas</small></div>
-        <div class="kpi"><small>Atrasado</small><b class="warn-txt">${usd(notas.filter((n) => n.dias < 0).reduce((a, n) => a + n.resta, 0))}</b></div></div>
-      <div class="row" style="gap:8px;margin:6px 0"><button class="btn" id="ocXls">⇩ Excel</button></div>
-      ${[...bySeller.entries()].map(([name, ns]) => `<h3>${esc(name)} · ${usd(ns.reduce((a, n) => a + n.resta, 0))}</h3><div style="overflow:auto"><table class="inv"><thead><tr><th>Cliente</th><th>Nota</th><th class="n">Saldo</th><th>Vence</th><th>Situación</th><th>Seguimiento</th></tr></thead><tbody>
-        ${ns.map((n) => `<tr><td><b>${esc(n.clientName)}</b></td><td>${esc(n.nota || '—')}</td><td class="n">${usd(n.resta)}</td><td>${esc(fmtDate(n.vence))}${partesHTML(n)}</td><td class="${n.dias < 0 ? 'warn-txt' : ''}">${esc(diasTxt(n.dias))}${n.espera ? ' · pago en espera' : ''}</td><td>${n.seg ? esc(n.seg.texto + (n.seg.comentario ? ' — ' + n.seg.comentario : '')) : ''}</td></tr>`).join('')}</tbody></table></div>`).join('') || '<p class="muted">Nadie debe.</p>'}`;
-    out.querySelector('#ocXls').onclick = () => global.Exporta.save(`por_cobrar_${r.data.hoy}.xlsx`, [global.Exporta.table({ name: 'Por cobrar', title: 'CUENTAS POR COBRAR', subtitle: 'Al ' + r.data.hoy,
-      cols: [{ h: 'VENDEDOR', w: 16 }, { h: 'CLIENTE', w: 32 }, { h: 'NOTA', w: 10 }, { h: 'DESPACHADA', k: 'date', w: 12 }, { h: 'VENCE', k: 'date', w: 12 }, { h: 'DÍAS', k: 'int' }, { h: 'MONTO NOTA', k: 'money', total: true }, { h: 'SALDO', k: 'money', total: true }, { h: 'SEGUIMIENTO', w: 30 }],
-      rows: notas.map((n) => [n.sellerName, n.clientName, n.nota, n.despacho, n.vence, n.dias, n.monto, n.resta, n.seg ? n.seg.texto + (n.seg.comentario ? ' — ' + n.seg.comentario : '') : '']) })]);
+    const all = r.data.notas, f = (S.ui.cobFO = S.ui.cobFO || { q: '', dia: '', fecha: '', seller: '' }), ger = location.hash.startsWith('#/gerencia');
+    const sellers = [...new Map(all.map((n) => [n.sellerId, n.sellerName || '—'])).entries()].sort((a, b) => String(a[1]).localeCompare(String(b[1]), 'es'));
+    // La barra de búsqueda se dibuja una vez; al buscar solo cambia la lista (no se pierde lo que se escribe)
+    out.innerHTML = `${filtroHTML(f, sellers.length > 1 ? `<select class="select" data-fs aria-label="Vendedor" style="max-width:220px"><option value="">Todos los vendedores</option>${sellers.map(([id, nm]) => `<option value="${esc(id)}" ${f.seller === id ? 'selected' : ''}>${esc(nm)}</option>`).join('')}</select>` : '')}<div id="ocList"></div>`;
+    let notas = all;
+    const draw = () => {
+      notas = filtrar(all, f);
+      const bySeller = new Map(); notas.forEach((n) => (bySeller.get(n.sellerName || '—') || bySeller.set(n.sellerName || '—', []).get(n.sellerName || '—')).push(n));
+      out.querySelector('#ocList').innerHTML = `<div class="kpi-row"><div class="kpi"><small>Por cobrar${f.q || f.dia || f.seller ? ' (búsqueda)' : ''}</small><b>${usd(notas.reduce((a, n) => a + n.resta, 0))}</b><small>${notas.length} notas · ${new Set(notas.map((n) => n.clientId)).size} clientes</small></div>
+          <div class="kpi"><small>Atrasado</small><b class="warn-txt">${usd(notas.filter((n) => n.dias < 0).reduce((a, n) => a + n.resta, 0))}</b></div></div>
+        <div class="row" style="gap:8px;margin:6px 0"><button class="btn" id="ocXls">⇩ Excel</button></div>
+        ${[...bySeller.entries()].map(([name, ns]) => `<h3>${esc(name)} · ${usd(ns.reduce((a, n) => a + n.resta, 0))}</h3><div style="overflow:auto"><table class="inv"><thead><tr><th>Cliente</th><th>Nota</th><th class="n">Saldo</th><th>Vence</th><th>Situación</th><th>Seguimiento</th><th></th></tr></thead><tbody>
+          ${ns.map((n) => `<tr><td><b>${esc(n.clientName)}</b></td><td>${esc(n.nota || '—')}</td><td class="n">${usd(n.resta)}</td><td>${esc(fmtDate(n.vence))}${partesHTML(n)}</td><td class="${n.dias < 0 ? 'warn-txt' : ''}">${esc(diasTxt(n.dias))}${n.espera ? ' · pago en espera' : ''}</td><td>${n.seg ? esc(n.seg.texto + (n.seg.comentario ? ' — ' + n.seg.comentario : '')) : ''}</td>
+            <td>${ger ? '' : `<button class="btn btn-sm btn-ok" data-ocar="${esc(n.orderId)}" title="El pago ya está en el sistema de cobranzas de la empresa">✅ Cargado</button>`}</td></tr>`).join('')}</tbody></table></div>`).join('') || `<p class="muted">${all.length ? 'Ninguna nota coincide con la búsqueda.' : 'Nadie debe.'}</p>`}`;
+      out.querySelector('#ocXls').onclick = () => global.Exporta.save(`por_cobrar_${r.data.hoy}.xlsx`, [global.Exporta.table({ name: 'Por cobrar', title: 'CUENTAS POR COBRAR', subtitle: 'Al ' + r.data.hoy,
+        cols: [{ h: 'VENDEDOR', w: 16 }, { h: 'CLIENTE', w: 32 }, { h: 'NOTA', w: 10 }, { h: 'DESPACHADA', k: 'date', w: 12 }, { h: 'VENCE', k: 'date', w: 12 }, { h: 'DÍAS', k: 'int' }, { h: 'MONTO NOTA', k: 'money', total: true }, { h: 'SALDO', k: 'money', total: true }, { h: 'SEGUIMIENTO', w: 30 }],
+        rows: notas.map((n) => [n.sellerName, n.clientName, n.nota, n.despacho, n.vence, n.dias, n.monto, n.resta, n.seg ? n.seg.texto + (n.seg.comentario ? ' — ' + n.seg.comentario : '') : '']) })]);
+    };
+    wireFiltro(out, f, draw); draw();
+    out.onclick = (e) => { const b = e.target.closest('[data-ocar]'); if (!b) return; const n = all.find((x) => x.orderId === b.dataset.ocar); if (n) global.Pagos.cargadoForm({ sellerId: n.sellerId, orderId: n.orderId, nota: n.nota, monto: n.resta, clientName: n.clientName, vence: lastVence(n), onDone: () => { sh.close(); officeSheet(); } }); };
   }
 
   /* ---------------- Oficina: crédito de clientes (lo ajusta cobranza) ---------------- */
