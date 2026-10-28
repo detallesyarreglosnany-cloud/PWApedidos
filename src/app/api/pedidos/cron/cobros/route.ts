@@ -31,7 +31,9 @@ export async function GET(req: NextRequest) {
   for (const s of sellers) {
     try {
       const mine = all.notas.filter((n) => n.sellerId === s.id);
-      const man = mine.filter((n) => n.dias === 1), hoyN = mine.filter((n) => n.dias === 0), atr = mine.filter((n) => n.dias < 0);
+      const man = mine.filter((n) => n.dias === 1), hoyN = mine.filter((n) => n.dias === 0), atr = mine.filter((n) => n.dias < 0), todo = mine.filter((n) => n.diasTodo > 0);
+      // Venció TODO (todas sus categorías): se le está bajando el crédito → que le envíe el recordatorio por WhatsApp
+      if (todo.length) await sendPush('seller', s.id, [{ title: '📉 Se les está bajando el crédito', body: `Venció todo lo que deben: ${names(todo, 5)}. Envíales hoy el recordatorio de pago por WhatsApp (Cobrar → 📲 Enviar a todos).`.slice(0, 300), tag: `credito-${hoy}` }]);
       if (!man.length && !hoyN.length && !atr.length) continue;
       const parts = [hoyN.length ? `⏰ Vence HOY: ${names(hoyN)}` : '', man.length ? `📅 Vence mañana: ${names(man)}` : '', atr.length ? `🚩 Atrasados: ${names(atr, 4)}` : ''].filter(Boolean);
       await sendPush('seller', s.id, [{ title: '📅 Cobros de hoy', body: (parts.join(' · ') + '. Toca «Cobrar» para enviarles el detalle por WhatsApp.').slice(0, 300), tag: `cobros-${hoy}` }]);

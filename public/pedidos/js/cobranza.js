@@ -56,6 +56,8 @@
     if (man.length) P.localNotif({ kind: 'cobro', icon: '📅', warn: true, msg: `Mañana vence el plazo de pago de: ${names(man).join(', ')}. Recuérdales que deben cancelar para hacer su nuevo pedido y mantener limpio su historial.` });
     if (hoy.length) P.localNotif({ kind: 'cobro', icon: '⏰', warn: true, msg: `HOY vence el plazo de pago de: ${names(hoy).join(', ')}.` });
     if (atr.length) P.localNotif({ kind: 'cobro', icon: '🚩', warn: true, msg: `${names(atr).length} cliente(s) con pagos atrasados: ${names(atr).slice(0, 6).join(', ')}${names(atr).length > 6 ? '…' : ''}. Esto afecta su crédito.` });
+    const todo = d.notas.filter((n) => n.diasTodo > 0);
+    if (todo.length) P.localNotif({ kind: 'cobro', icon: '📉', warn: true, msg: `A ${names(todo).length} cliente(s) se les está bajando el crédito (venció todo lo que deben): ${names(todo).slice(0, 6).join(', ')}${names(todo).length > 6 ? '…' : ''}. Envíales hoy el recordatorio por WhatsApp desde «Cobrar».` });
     if (man.length || hoy.length || atr.length) { if (P.beep) P.beep(); if (P.toast) P.toast('📅 Tienes cobros por hacer: revisa «Cobrar»', 'ok'); }
   }
 
@@ -93,13 +95,20 @@
     return '';
   }
 
-  /** Nota con productos de plazos distintos: cada parte que falta pagar con su vencimiento («$70 vence 4 nov (8 d) · $30 vence 11 nov (15 d)»). */
-  // Vencimiento final de la nota (si lleva productos de varios plazos, el último): con él se mide el atraso de un pago
-  const lastVence = (n) => ((n.tramos || []).length ? n.tramos[n.tramos.length - 1].vence : n.vence);
+  /**
+   * Nota con productos de plazos distintos: cada categoría con su plazo, lo que falta y si ya venció
+   * («🚩 REFRESCOS (8 d): $70 · vencido hace 2 días · LICORES (15 d): $30 · vence 11 nov»). Una categoría vencida
+   * ya afecta el crédito; cuando vence todo, empieza a bajar el límite.
+   */
+  // Primer vencimiento de la nota (la categoría de menos días): con él se mide el atraso de un pago
+  const firstVence = (n) => ((n.tramos || []).length ? n.tramos[0].vence : n.vence);
   const partesOf = (n) => (n.tramos || []).filter((t) => t.resta > 0.01);
+  const ddays = (a, b) => Math.round((Date.parse(b + 'T12:00:00Z') - Date.parse(a + 'T12:00:00Z')) / 86400000);
   function partesHTML(n) {
-    const P = PV(), ts = partesOf(n); if (ts.length < 2) return '';
-    return `<div class="muted" style="font-size:12px">${ts.map((t) => `${P.usd(t.resta)} vence ${P.esc(P.fmtDate(t.vence))} (${t.days} d)`).join(' · ')}</div>`;
+    const P = PV(), ts = partesOf(n); if (!(n.tramos || []).length || (n.tramos.length < 2 && !n.diasTodo)) return '';
+    const hoy = P.today();
+    return `<div class="cb-partes">${ts.map((t) => { const d = ddays(t.vence, hoy); return `<span class="${d > 0 ? 'warn-txt' : 'muted'}">${d > 0 ? '🚩 ' : ''}<b>${P.esc((t.cats || []).join(', ') || t.days + ' días')}</b> (${t.days} d): ${P.usd(t.resta)} · ${d > 0 ? `vencido hace ${d} día${d === 1 ? '' : 's'}` : d === 0 ? 'vence HOY' : 'vence ' + P.esc(P.fmtDate(t.vence))}</span>`; }).join('')}
+      ${n.diasTodo > 0 ? '<span class="cb-baja">📉 Venció todo: se le está bajando el crédito</span>' : ts.some((t) => ddays(t.vence, hoy) > 0) ? '<span class="pay-rev">Una categoría vencida ya afecta su crédito</span>' : ''}</div>`;
   }
   /** Deuda del cliente según la cartera del teléfono: vencido, por vencer y sus notas. */
   function debtOf(clientId) {
@@ -171,7 +180,7 @@
     const lines = [`Hola ${client.name}, le saluda ${seller.name || 'su vendedor'} de ${co}.`, '', `Le recordamos ${notas.length === 1 ? 'su nota pendiente' : 'sus notas pendientes'}:`];
     notas.forEach((n) => {
       lines.push(`• Nota ${n.nota || '—'} · despachada el ${f(n.despacho)} · ${diasTxt(n.dias)} (${f(n.vence)}) · saldo $ ${nf.format(n.resta)}${rate ? ` (Bs ${nf.format(n.resta * rate)})` : ''}`);
-      const ps = partesOf(n); if (ps.length > 1) lines.push(`   (${ps.map((t) => `$ ${nf.format(t.resta)} vence el ${f(t.vence)}`).join(' y ')})`);
+      const ps = partesOf(n); if (ps.length > 1) lines.push(`   (${ps.map((t) => `${(t.cats || []).join(', ') || t.days + ' días'}: $ ${nf.format(t.resta)} ${t.vence < P.today() ? 'VENCIDO el' : 'vence el'} ${f(t.vence)}`).join(' · ')})`);
       const o = P.orderById(n.orderId), d = o && o.delivery && o.delivery.at ? o.delivery : null, src = o ? (d ? d.lines : o.lines) || {} : {};
       Object.values(src).filter((l) => (+l.cajas || 0) || (+l.unidades || 0)).slice(0, 25).forEach((l) => lines.push(`   - ${l.cajas ? l.cajas + ' cj' : ''}${l.cajas && l.unidades ? ' + ' : ''}${l.unidades ? l.unidades + ' un' : ''} ${l.name} ${l.presentation || ''}`.replace(/\s+/g, ' ')));
     });
@@ -190,6 +199,42 @@
     if (!ph) PV().toast('El cliente no tiene teléfono en su ficha: elige el contacto en WhatsApp', 'ok');
   }
 
+  /* ---------------- 📲 WhatsApp en fila: el recordatorio de deuda a varios clientes seguidos ---------------- */
+  // WhatsApp no deja que una app envíe sola desde el teléfono: se abre el chat de cada cliente con su mensaje ya escrito,
+  // el vendedor toca Enviar y, al volver, aparece el siguiente. Sin teléfono en la ficha: se salta y se avisa al final.
+  const sentKey = () => 'pv_waSent:' + PV().today();
+  const sentSet = () => new Set(lsGet(sentKey()) || []);
+  const markSent = (cid) => { const s2 = sentSet(); s2.add(cid); lsSet(sentKey(), [...s2]); };
+  /** items: [{ c: cliente, notas }] en el orden en que se envían. */
+  function waQueue(items, label, onDone) {
+    const P = PV(), { esc, usd } = P;
+    const conTel = items.filter((x) => phoneOf(x.c)), sinTel = items.filter((x) => !phoneOf(x.c));
+    let i = 0; const enviados = [];
+    const sh = P.openSheet(`<div class="row"><h2 class="grow">📲 ${esc(label)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div><div id="wqBody"></div>`);
+    const body = sh.el.querySelector('#wqBody');
+    const draw = () => {
+      if (i >= conTel.length) {
+        body.innerHTML = `<div class="hint">✅ <b>Listo:</b> ${enviados.length} recordatorio${enviados.length === 1 ? '' : 's'} enviado${enviados.length === 1 ? '' : 's'}${conTel.length - enviados.length ? ` · ${conTel.length - enviados.length} saltado(s)` : ''}.</div>
+          ${sinTel.length ? `<div class="hint warn">📵 Sin teléfono en su ficha (agrégalo en «Mis clientes»): ${sinTel.map((x) => esc(x.c.name)).join(', ')}</div>` : ''}
+          <div class="actions"><button class="btn btn-primary" data-close>Terminar</button></div>`;
+        return;
+      }
+      const x = conTel[i], tot = x.notas.reduce((a, n) => a + n.resta, 0), ya = sentSet().has(x.c.id);
+      body.innerHTML = `<div class="wq-prog"><i style="width:${Math.round((i / conTel.length) * 100)}%"></i></div>
+        <p class="muted">Cliente <b>${i + 1} de ${conTel.length}</b>${sinTel.length ? ` · ${sinTel.length} sin teléfono` : ''}</p>
+        <div class="card card-pad"><h3 style="margin:0">${esc(x.c.name)}</h3><p style="margin:4px 0 0">Debe <b>${usd(tot)}</b> · ${x.notas.length} nota${x.notas.length === 1 ? '' : 's'} · ${esc(diasTxt(Math.min(...x.notas.map((n) => n.dias))))}</p>${ya ? '<p class="pay-ok" style="margin:4px 0 0">✓ Ya se le envió hoy</p>' : ''}</div>
+        <div class="actions" style="flex-direction:column"><button class="btn btn-primary btn-block wq-go" data-wgo="1">📲 Enviar a ${esc(x.c.name)}</button>
+          <div class="row" style="gap:8px"><button class="btn grow" data-wskip="1">Saltar</button><button class="btn grow" data-close>Terminar</button></div></div>
+        <p class="muted" style="font-size:13px">Se abre WhatsApp con el mensaje ya escrito: toca <b>Enviar</b> y vuelve a la app para el siguiente.</p>`;
+    };
+    body.onclick = (e) => {
+      if (e.target.closest('[data-wgo]')) { const x = conTel[i]; openWA(x.c, x.notas); markSent(x.c.id); enviados.push(x.c.id); i++; draw(); return; }
+      if (e.target.closest('[data-wskip]')) { i++; draw(); }
+    };
+    sh.el.addEventListener('click', (e) => { if (e.target.closest('[data-close]') && onDone) setTimeout(onDone, 0); });
+    draw();
+  }
+
   /* ---------------- Nota de despacho completa ---------------- */
   function notaSheet(n) {
     const P = PV(), { esc, usd, bs, fmtDate, openSheet, S } = P, o = P.orderById(n.orderId), rate = +S.config.exchangeRate || 0;
@@ -204,7 +249,7 @@
       ${(n.tramos || []).length > 1 ? `<p class="muted" style="font-size:13px">${n.tramos.map((t) => `${t.days} días: ${usd(t.monto)} (vence ${fmtDate(t.vence)}${t.resta < 0.01 ? ' · pagado' : ' · resta ' + usd(t.resta)})`).join(' · ')}</p>` : ''}
       <div class="actions"><button class="btn btn-primary" id="nsWA">📲 Enviar por WhatsApp</button><button class="btn" id="nsPay">💵 Registrar pago</button><button class="btn btn-ok" id="nsCar">✅ Pago cargado al sistema</button></div>`);
     sh.el.querySelector('#nsWA').onclick = () => openWA(c, [n]);
-    sh.el.querySelector('#nsCar').onclick = () => { sh.close(); global.Pagos.cargadoForm({ sellerId: S.session.sellerId, orderId: n.orderId, nota: n.nota, monto: n.resta, clientName: c.name, vence: lastVence(n), onDone: () => renderSeller(true) }); };
+    sh.el.querySelector('#nsCar').onclick = () => { sh.close(); global.Pagos.cargadoForm({ sellerId: S.session.sellerId, orderId: n.orderId, nota: n.nota, monto: n.resta, clientName: c.name, vence: firstVence(n), onDone: () => renderSeller(true) }); };
     sh.el.querySelector('#nsPay').onclick = () => { sh.close(); global.Pagos.payForm({ sellerId: S.session.sellerId, clientId: n.clientId, notaKey: n.key, onSaved: () => renderSeller(true) }); };
   }
 
@@ -244,7 +289,7 @@
     const clientBlock = (list) => {
       const byC = new Map(); list.forEach((n) => (byC.get(n.clientId) || byC.set(n.clientId, []).get(n.clientId)).push(n));
       return [...byC.entries()].map(([cid, ns]) => { const c = P.clientById(cid) || { id: cid, name: ns[0].clientName }; return `<div class="card card-pad" style="margin-bottom:8px">
-        <div class="row wrap" style="gap:8px;align-items:center"><b class="grow">${(credOf(cid) && DOT[credOf(cid).semaforo]) || ''} ${esc(c.name)} · ${usd(ns.reduce((a, n) => a + n.resta, 0))}</b>
+        <div class="row wrap" style="gap:8px;align-items:center"><b class="grow">${(credOf(cid) && DOT[credOf(cid).semaforo]) || ''} ${esc(c.name)} · ${usd(ns.reduce((a, n) => a + n.resta, 0))}${sentSet().has(cid) ? ' <span class="pay-ok" style="font-size:12px">✓ WhatsApp enviado hoy</span>' : ''}</b>
           <button class="btn btn-sm btn-primary" data-wa="${esc(cid)}">📲 WhatsApp</button><button class="btn btn-sm" data-seg="${esc(cid)}">📋 Seguimiento</button><button class="btn btn-sm" data-pay="${esc(cid)}">💵 Pago</button></div>
         ${ns.map((n) => `<div class="row" style="gap:8px;align-items:center;margin-top:6px;cursor:pointer" data-nota="${esc(cid)}|${esc(n.key)}"><span class="grow">📄 <b>Nota ${esc(n.nota || '—')}</b> · ${usd(n.resta)} de ${usd(n.monto)} · <span class="${n.dias < 0 ? 'warn-txt' : n.dias <= 1 ? 'pay-rev' : 'muted'}">${esc(diasTxt(n.dias))}</span> (${esc(fmtDate(n.vence))})${partesHTML(n)}
           ${n.espera ? '<br><span class="pay-rev">💵 pago subido, esperando a cobranza</span>' : ''}${n.seg ? `<br><span class="muted">📋 ${esc(n.seg.texto)}${n.seg.comentario ? ' — ' + esc(n.seg.comentario) : ''}</span>` : ''}</span><span class="muted">›</span></div>`).join('')}
@@ -262,14 +307,24 @@
       const vis = filtrar(notas, f), groups = new Map();
       vis.forEach((n) => { const k = n.dias < 0 ? 'atr' : String(n.dias); (groups.get(k) || groups.set(k, []).get(k)).push(n); });
       const order = [...groups.keys()].filter((k) => k !== 'atr').sort((a, b) => +a - +b); if (groups.has('atr')) order.unshift('atr');
-      el.innerHTML = (f.q || f.dia ? `<p class="muted">${vis.length} nota${vis.length === 1 ? '' : 's'} · ${new Set(vis.map((n) => n.clientId)).size} cliente(s) · ${usd(vis.reduce((a, n) => a + n.resta, 0))}</p>` : '')
+      // Enviar a todos (un toque por cliente): los que vencen mañana, hoy, atrasados o lo que está a la vista
+      const cl = (arr) => { const m = new Map(); arr.forEach((n) => { const x = m.get(n.clientId) || { c: P.clientById(n.clientId) || { id: n.clientId, name: n.clientName }, notas: [] }; x.notas.push(n); m.set(n.clientId, x); }); return [...m.values()]; };
+      const grp = { man: cl(notas.filter((n) => n.dias === 1)), hoy: cl(notas.filter((n) => n.dias === 0)), atr: cl(notas.filter((n) => n.dias < 0)), vis: cl(vis) };
+      const allOf = (cid) => notas.filter((n) => n.clientId === cid); // el mensaje lleva TODO lo que debe el cliente
+      Object.values(grp).forEach((g) => g.forEach((x) => { x.notas = allOf(x.c.id); }));
+      waGroups = grp;
+      el.innerHTML = `<div class="wq-bar"><span>📲 Enviar recordatorio a todos:</span>${[['man', '📅 Vencen mañana'], ['hoy', '⏰ Vencen hoy'], ['atr', '🚩 Atrasados']].filter(([k]) => grp[k].length).map(([k, l]) => `<button type="button" class="btn btn-sm btn-primary" data-waall="${k}">${l} (${grp[k].length})</button>`).join('')}${(f.q || f.dia) && grp.vis.length ? `<button type="button" class="btn btn-sm" data-waall="vis">🔍 Los de la búsqueda (${grp.vis.length})</button>` : ''}</div>`
+        + (f.q || f.dia ? `<p class="muted">${vis.length} nota${vis.length === 1 ? '' : 's'} · ${new Set(vis.map((n) => n.clientId)).size} cliente(s) · ${usd(vis.reduce((a, n) => a + n.resta, 0))}</p>` : '')
         + (vis.length ? order.map((k) => `<h3>${title(k)} <span class="muted">(${new Set(groups.get(k).map((n) => n.clientId)).size})</span></h3>${clientBlock(groups.get(k))}`).join('') : '<p class="muted">Ninguna nota coincide con la búsqueda.</p>');
     };
+    let waGroups = null;
     if (notas.length) { wireFiltro(box, f, drawList); drawList(); }
     box.onclick = (e) => {
       const get = (cid) => notas.filter((n) => n.clientId === cid), cl = (cid) => P.clientById(cid) || { id: cid, name: (get(cid)[0] || {}).clientName };
+      const wall = e.target.closest('[data-waall]');
+      if (wall && waGroups) { const k = wall.dataset.waall; waQueue(waGroups[k], { man: 'Vencen mañana', hoy: 'Vencen hoy', atr: 'Atrasados', vis: 'Los de la búsqueda' }[k], () => renderSeller(false)); return; }
       const wa = e.target.closest('[data-wa]'), sg = e.target.closest('[data-seg]'), py = e.target.closest('[data-pay]'), nt = e.target.closest('[data-nota]');
-      if (wa) { openWA(cl(wa.dataset.wa), get(wa.dataset.wa)); return; }
+      if (wa) { openWA(cl(wa.dataset.wa), get(wa.dataset.wa)); markSent(wa.dataset.wa); return; }
       if (sg) { segSheet(cl(sg.dataset.seg), get(sg.dataset.seg), sid, () => renderSeller(true)); return; }
       if (py) { global.Pagos.payForm({ sellerId: sid, clientId: py.dataset.pay, onSaved: () => renderSeller(true) }); return; }
       if (nt) { const [cid, k] = nt.dataset.nota.split('|'); const n = get(cid).find((x) => x.key === k); if (n) notaSheet(n); }
@@ -339,7 +394,7 @@
         rows: notas.map((n) => [n.sellerName, n.clientName, n.nota, n.despacho, n.vence, n.dias, n.monto, n.resta, n.seg ? n.seg.texto + (n.seg.comentario ? ' — ' + n.seg.comentario : '') : '']) })]);
     };
     wireFiltro(out, f, draw); draw();
-    out.onclick = (e) => { const b = e.target.closest('[data-ocar]'); if (!b) return; const n = all.find((x) => x.orderId === b.dataset.ocar); if (n) global.Pagos.cargadoForm({ sellerId: n.sellerId, orderId: n.orderId, nota: n.nota, monto: n.resta, clientName: n.clientName, vence: lastVence(n), onDone: () => { sh.close(); officeSheet(); } }); };
+    out.onclick = (e) => { const b = e.target.closest('[data-ocar]'); if (!b) return; const n = all.find((x) => x.orderId === b.dataset.ocar); if (n) global.Pagos.cargadoForm({ sellerId: n.sellerId, orderId: n.orderId, nota: n.nota, monto: n.resta, clientName: n.clientName, vence: firstVence(n), onDone: () => { sh.close(); officeSheet(); } }); };
   }
 
   /* ---------------- Oficina: crédito de clientes (lo ajusta cobranza) ---------------- */
@@ -441,5 +496,5 @@
     };
   }
 
-  global.Cobranza = { load, refresh, hintFor, credOf, barNote, debtOf, afterSend, afterPay, officeChip, renderSeller, officeSheet, creditSheet, warmOffice, contadoOf, semOf, markOf, creditEdit, DOT, SEM, waText, phoneOf, diasTxt, SEG };
+  global.Cobranza = { load, refresh, hintFor, credOf, barNote, debtOf, afterSend, afterPay, officeChip, renderSeller, officeSheet, creditSheet, warmOffice, contadoOf, semOf, markOf, creditEdit, DOT, SEM, waText, phoneOf, diasTxt, waQueue, SEG };
 })(window);

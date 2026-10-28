@@ -425,7 +425,8 @@ export async function POST(req: NextRequest) {
       const cat = new Map(prows.map((p) => [p.id, String((JSON.parse(p.data) as { category?: string }).category || '')]));
       const start = vzDay(o.dispatchedAt || (d && d.at) || '') || String(o.routeDate || '');
       const tr = tramos(Object.entries(src).map(([pid, l]) => ({ category: cat.get(pid) || String(l.category || ''), monto: lineMoney(l) })).filter((l) => l.monto > 0), start, rulesAt(R, start), 0);
-      const vence = tr.length ? tr[tr.length - 1].vence : start, atraso = Math.max(0, diffDays(vence, fecha));
+      // El atraso se mide contra el PRIMER vencimiento (la categoría de menos días, p. ej. refrescos a 8 días)
+      const vence = tr.length ? tr[0].vence : start, atraso = Math.max(0, diffDays(vence, fecha));
       const v: Cargado = { fecha, by: actor || str(body.by, 80) || (isAdmin ? 'Oficina' : String(o.sellerName || 'Vendedor')), rol: isAdmin ? 'oficina' : isCob ? 'cobranzas' : 'vendedor', at: new Date().toISOString(), monto, nota, orderId: o.id, sellerId: String(o.sellerId || ''), clientName: String(o.clientName || ''), vence, atraso };
       await db.$executeRaw`INSERT INTO "DistSetting" ("name", "value") VALUES (${name}, ${JSON.stringify(v)}) ON CONFLICT ("name") DO UPDATE SET "value" = EXCLUDED."value"`;
       if (!isCob) { try { await sendPush('office', null, [{ title: '✅ Pago cargado al sistema', body: `${v.by} · ${v.clientName}${nota ? ' · nota ' + nota : ''} · $${monto.toFixed(2)} · ${fecha}${atraso ? ` · ${atraso} días de atraso` : ' · a tiempo'}`.slice(0, 300), tag: `car-${o.id}` }]); } catch (e) { console.warn('[push cargado]', e); } }

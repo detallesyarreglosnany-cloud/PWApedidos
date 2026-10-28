@@ -42,15 +42,15 @@ export const vzDay = (iso: unknown) => { const t = Date.parse(String(iso || ''))
 export const addDays = (day: string, n: number) => new Date(Date.parse(day + 'T12:00:00Z') + n * 86400000).toISOString().slice(0, 10);
 export const diffDays = (a: string, b: string) => Math.round((Date.parse(b + 'T12:00:00Z') - Date.parse(a + 'T12:00:00Z')) / 86400000);
 
-export type Tramo = { days: number; monto: number; resta: number; vence: string };
+export type Tramo = { days: number; monto: number; resta: number; vence: string; cats: string[] };
 /** Tramos de una nota por plazo (p. ej. refrescos a 8 días y el resto a 15) y lo pagado aplicado a lo que vence primero. */
 export function tramos(lines: { category: string; monto: number }[], start: string, R: CreditRules, pagado: number): Tramo[] {
-  const by = new Map<number, number>();
-  for (const l of lines) { const d = daysFor(l.category, R); by.set(d, r2((by.get(d) || 0) + l.monto)); }
+  const by = new Map<number, number>(), cats = new Map<number, Set<string>>();
+  for (const l of lines) { const d = daysFor(l.category, R); by.set(d, r2((by.get(d) || 0) + l.monto)); (cats.get(d) || cats.set(d, new Set()).get(d)!).add(String(l.category || '').toUpperCase() || 'OTROS'); }
   let left = pagado;
   return [...by.entries()].sort((a, b) => a[0] - b[0]).map(([days, monto]) => {
     const take = Math.min(left, monto); left = r2(left - take);
-    return { days, monto, resta: r2(monto - take), vence: addDays(start, days) };
+    return { days, monto, resta: r2(monto - take), vence: addDays(start, days), cats: [...(cats.get(days) || [])] };
   });
 }
 
@@ -63,13 +63,14 @@ export const SEGUIMIENTO: Record<string, string> = {
 export type CredSetting = { modo: 'auto' | 'credito' | 'contado'; limite: number; nota: string; by: string; at: string; hist?: { modo: string; limite: number; nota: string; by: string; at: string }[] };
 export type CredInfo = {
   modo: 'credito' | 'contado' | 'nuevo'; fijado: string; limite: number; base: string; sugerido: number; bajaPct: number;
-  deuda: number; vencido: number; atrasoMax: number; promAtraso: number | null; pagadas: number; aTiempo: number;
+  deuda: number; vencido: number; atrasoMax: number; atrasoTodo: number; promAtraso: number | null; pagadas: number; aTiempo: number;
   compras: number; nuevo: { n: number; need: number } | null; semaforo: 'verde' | 'amarillo' | 'rojo' | 'nuevo'; motivo: string; nota: string; by: string; at: string;
 };
 const round5 = (n: number) => Math.max(0, Math.round(n / 5) * 5);
 /** Récord y crédito de un cliente. Lo fija cobranza (oficina); el sistema solo sugiere. */
 export function credInfo(a: {
   R: CreditRules; set: CredSetting | null; nuevoCliente: boolean; compras: number[]; deuda: number; vencido: number; atrasoMax: number; atrasos: number[];
+  atrasoTodo?: number; // días desde que venció TODA una nota (todas sus categorías): desde ahí baja el límite
 }): CredInfo {
   const { R, set } = a, fijado = set ? set.modo : 'auto';
   const nuevo = a.nuevoCliente && R.nuevas > 0 && a.compras.length < R.nuevas && fijado !== 'credito';
@@ -77,14 +78,17 @@ export function credInfo(a: {
   let limite = 0, base = '';
   if (set && set.limite > 0) { limite = r2(set.limite); base = 'cobranza'; }
   else if (a.nuevoCliente && R.nuevas > 0 && a.compras.length >= R.nuevas) { const f = a.compras.slice(0, R.nuevas); limite = round5(f.reduce((x, y) => x + y, 0) / f.length); base = 'promedio'; }
-  const bajaPct = Math.min(100, Math.round(R.penal * a.atrasoMax));
+  // Una categoría vencida ya afecta el crédito (semáforo y récord); el límite empieza a bajar cuando vence todo
+  const todo = a.atrasoTodo === undefined ? a.atrasoMax : a.atrasoTodo;
+  const bajaPct = Math.min(100, Math.round(R.penal * todo));
   const sugerido = limite > 0 ? round5(limite * (1 - bajaPct / 100)) : 0;
   const last = a.atrasos.slice(-10), promAtraso = last.length ? Math.round((last.reduce((x, y) => x + y, 0) / last.length) * 10) / 10 : null;
   const aTiempo = last.filter((d) => d <= 0).length;
   const semaforo = nuevo ? 'nuevo' : a.atrasoMax > 7 || (promAtraso ?? 0) > 7 ? 'rojo' : a.atrasoMax > 0 || (promAtraso ?? 0) > 2 ? 'amarillo' : 'verde';
   const motivo = nuevo ? `Cliente nuevo: compra ${a.compras.length + 1} de ${R.nuevas} de contado`
-    : a.atrasoMax > 0 ? `${a.atrasoMax} día${a.atrasoMax === 1 ? '' : 's'} de atraso${limite > 0 && bajaPct > 0 ? `: el sistema sugiere bajar el límite ${bajaPct}% (a $${sugerido})` : ''}`
+    : a.atrasoMax > 0 && todo <= 0 ? `${a.atrasoMax} día${a.atrasoMax === 1 ? '' : 's'} de atraso en una categoría (afecta su crédito); el resto aún no vence`
+    : a.atrasoMax > 0 ? `${a.atrasoMax} día${a.atrasoMax === 1 ? '' : 's'} de atraso${limite > 0 && bajaPct > 0 ? `: venció todo, el sistema sugiere bajar el límite ${bajaPct}% (a $${sugerido})` : ''}`
     : last.length ? `Pagó ${aTiempo} de ${last.length} notas a tiempo` : '';
-  return { modo, fijado, limite, base, sugerido, bajaPct, deuda: r2(a.deuda), vencido: r2(a.vencido), atrasoMax: a.atrasoMax, promAtraso, pagadas: last.length, aTiempo,
+  return { modo, fijado, limite, base, sugerido, bajaPct, deuda: r2(a.deuda), vencido: r2(a.vencido), atrasoMax: a.atrasoMax, atrasoTodo: Math.max(0, todo), promAtraso, pagadas: last.length, aTiempo,
     compras: a.compras.length, nuevo: nuevo ? { n: a.compras.length, need: R.nuevas } : null, semaforo, motivo, nota: set ? set.nota : '', by: set ? set.by : '', at: set ? set.at : '' };
 }
