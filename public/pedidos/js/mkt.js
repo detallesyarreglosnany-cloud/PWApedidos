@@ -97,7 +97,7 @@
     else if (ord === 'nombre') hit.sort(byName);
     else if (ord === 'manual') hit.sort((a, b) => ((inc.indexOf(a.id) + 1) || 1e6) - ((inc.indexOf(b.id) + 1) || 1e6) || byName(a, b));
     else hit.sort((a, b) => (pop.get(b.id) || 0) - (pop.get(a.id) || 0) || byName(a, b));
-    return hit;
+    return hit.filter((p) => !p.agotado).concat(hit.filter((p) => p.agotado)); // los agotados, al final
   }
   /** Producto de un ingrediente de mezcla: el elegido, o el primero que coincide con sus palabras. */
   function itemProduct(it) {
@@ -136,7 +136,7 @@
   }
   const catPrices = (pid) => PV().productById(pid);
   /** Combo que el vendedor puede ofrecer hoy: autorizado por Gerencia, dentro de sus fechas y con todos sus productos. */
-  const comboLive = (c) => comboOk(c) && enFecha(c) && (c.items || []).every((it) => { const p = PV().productById(it.pid); return p && p.active !== false && !p.deleted; });
+  const comboLive = (c) => comboOk(c) && enFecha(c) && (c.items || []).every((it) => { const p = PV().productById(it.pid); return p && p.active !== false && !p.deleted && !p.agotado; });
   /** Reparte el descuento de los combos del pedido en sus líneas (line.cmb) con los precios de cada línea. */
   function applyCmb(o) {
     Object.values(o.lines || {}).forEach((l) => { delete l.cmb; });
@@ -161,6 +161,7 @@
       const l2 = o.lines[it.pid] || {};
       if (+it.unidades) { if (!P.applyQty(o, it.pid, 'unidades', Math.max(0, (+l2.unidades || 0) + delta * +it.unidades))) return; }
     }
+    if (delta > 0) (c.items || []).forEach((it) => P.markVt(o, it.pid));
     o.combos = { ...(o.combos || {}) };
     if (n) o.combos[id] = { n, nombre: c.nombre, precio: r2(+c.precio || 0), v: comboV(c) }; else delete o.combos[id];
     if (!Object.keys(o.combos).length) delete o.combos;
@@ -190,15 +191,44 @@
   }
 
   /* ---------------- Vendedor: la vitrina ---------------- */
+  /**
+   * Banner de una vitrina. v.banner (todo opcional): fondo 'tono' (color de la vitrina) | 'colores' (c1 → c2, ángulo) |
+   * 'imagen' (foto propia, con oscurecer 0–80 %), color de letras, alinear izq/centro/der, vertical arriba/centro/abajo,
+   * tamaño del título y si muestra el collage de productos.
+   */
+  const BN_DEF = { fondo: 'tono', c1: '#c62828', c2: '#4a0d0d', angulo: 135, oscurecer: 35, texto: '#ffffff', alinear: 'izq', vertical: 'centro', tam: 'normal', collage: true };
+  function bannerStyle(v) {
+    const b = { ...BN_DEF, ...(v.banner || {}) }, img = b.fondo === 'imagen' && b.img && PV().S.banners && PV().S.banners[b.img];
+    let bg = '';
+    if (b.fondo === 'colores') bg = `background:linear-gradient(${+b.angulo || 135}deg, ${b.c1}, ${b.c2});`;
+    else if (img && img.image) bg = `background:linear-gradient(rgba(0,0,0,${Math.min(0.8, Math.max(0, (+b.oscurecer || 0) / 100))}), rgba(0,0,0,${Math.min(0.8, Math.max(0, (+b.oscurecer || 0) / 100))})), url("${img.image}") center/cover;`;
+    return { b, css: `${bg}color:${/^#[0-9a-f]{6}$/i.test(b.texto) ? b.texto : '#fff'};` };
+  }
   function banner(v, ps) {
-    const P = PV(), { esc } = P, pics = ps.filter((p) => P.hasPhoto(p)).slice(0, 3);
-    return `<header class="vt-banner"><div class="vt-txt"><span class="vt-ico" aria-hidden="true">${esc(v.icono || '🛍')}</span><h2>${esc(v.nombre)}</h2>${v.frase ? `<p>${esc(v.frase)}</p>` : ''}
+    const P = PV(), { esc } = P, { b, css } = bannerStyle(v), pics = b.collage === false ? [] : ps.filter((p) => P.hasPhoto(p)).slice(0, 3);
+    return `<header class="vt-banner al-${esc(b.alinear)} va-${esc(b.vertical)} tam-${esc(b.tam)} ${b.fondo === 'imagen' ? 'con-img' : ''}" style="${esc(css)}"><div class="vt-txt"><span class="vt-ico" aria-hidden="true">${esc(v.icono || '🛍')}</span><h2>${esc(v.nombre)}</h2>${v.frase ? `<p>${esc(v.frase)}</p>` : ''}
       ${v.adultos ? '<span class="vt-18">🔞 Solo mayores de 18 · Consumo responsable</span>' : ''}</div>
-      <div class="vt-collage">${pics.map((p) => `<img src="${esc(P.imgSrc(p))}" alt="" loading="lazy">`).join('')}</div></header>`;
+      ${pics.length ? `<div class="vt-collage">${pics.map((p) => `<img src="${esc(P.imgSrc(p))}" alt="" loading="lazy">`).join('')}</div>` : ''}</header>`;
+  }
+  /** Foto de fondo del banner: JPEG liviano (máx. 1400 px y ~180 KB) para que viaje por la sincronización. */
+  function bannerImage(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file), img = new Image();
+      img.onload = () => {
+        const k = Math.min(1, 1400 / Math.max(img.width, img.height)), c = document.createElement('canvas');
+        c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+        const g = c.getContext('2d'); g.drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url);
+        let q = 0.78, out = c.toDataURL('image/jpeg', q);
+        while (out.length > 240000 && q > 0.35) { q -= 0.08; out = c.toDataURL('image/jpeg', q); }
+        resolve(out.length > 240000 ? null : out);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Imagen no válida')); };
+      img.src = url;
+    });
   }
   function mezclaHTML(x) {
     const P = PV(), { esc, usd } = P, its = (x.items || []).map((it) => ({ it, p: itemProduct(it) }));
-    if (!its.length || its.some((y) => !y.p)) return ''; // si falta un ingrediente en el catálogo, no se muestra
+    if (!its.length || its.some((y) => !y.p || y.p.agotado)) return ''; // si falta (o está agotado) un ingrediente, no se muestra
     const monto = its.reduce((a, { it, p }) => a + (+it.cajas || 0) * (+p.boxPrice || 0) + (+it.unidades || 0) * (+p.unitPrice || 0), 0);
     return `<article class="vt-mix"><div class="vt-mix-head"><span class="vt-ico" aria-hidden="true">${esc(x.icono || '🍹')}</span><div><h3>${esc(x.nombre)}</h3>${x.frase ? `<p>${esc(x.frase)}</p>` : ''}</div></div>
       <div class="vt-mix-items">${its.map(({ it, p }) => `<div class="vt-ing">${P.hasPhoto(p) ? `<img src="${esc(P.imgSrc(p))}" alt="" loading="lazy">` : `<span>${P.rubroIcon(p.category)}</span>`}<small>${esc(p.name)} ${esc(p.presentation || '')}<br><b>${[+it.cajas ? it.cajas + ' cj' : '', +it.unidades ? it.unidades + ' un' : ''].filter(Boolean).join(' + ')}</b></small></div>`).join('<span class="vt-plus">+</span>')}</div>
@@ -213,7 +243,7 @@
       if (x.deleted || x.id === o.id || x.clientId !== o.clientId || String(x.routeDate || '') < from) return;
       Object.entries(x.lines || {}).forEach(([pid, l]) => { const c = n.get(pid) || { k: 0, cajas: 0, unidades: 0, at: '' }; c.k++; if (String(x.routeDate) >= c.at) { c.at = String(x.routeDate); c.cajas = +l.cajas || 0; c.unidades = +l.unidades || 0; } n.set(pid, c); });
     });
-    return [...n.entries()].map(([pid, c]) => ({ p: P.productById(pid), ...c })).filter((x) => x.p && x.p.active !== false && !x.p.deleted && !(o.lines || {})[x.p.id])
+    return [...n.entries()].map(([pid, c]) => ({ p: P.productById(pid), ...c })).filter((x) => x.p && x.p.active !== false && !x.p.deleted && !x.p.agotado && !(o.lines || {})[x.p.id])
       .sort((a, b2) => b2.k - a.k || String(a.p.name).localeCompare(String(b2.p.name), 'es')).slice(0, 12);
   }
   /** 🤝 Combina con: lo que otros clientes llevan en el mismo pedido que este producto. */
@@ -289,7 +319,7 @@
     sh.el.addEventListener('click', async (e) => {
       const b = e.target.closest('button[data-act]'); if (!b) return;
       const pid = b.closest('[data-pid]').dataset.pid, o = P.activeOrder(), l = o && o.lines[pid];
-      await P.setQty(pid, b.dataset.kind, (l ? +l[b.dataset.kind] || 0 : 0) + (b.dataset.act === 'inc' ? 1 : -1));
+      await P.setQty(pid, b.dataset.kind, (l ? +l[b.dataset.kind] || 0 : 0) + (b.dataset.act === 'inc' ? 1 : -1), 'vt');
       sh.el.innerHTML = draw();
     });
   }
@@ -312,8 +342,8 @@
         const o = P.activeOrder(); if (!o) return;
         const list = siempreOf(o);
         for (const x of list) {
-          if (x.cajas && x.p.sellBy !== 'unidad') await P.setQty(x.p.id, 'cajas', x.cajas);
-          if (x.unidades && x.p.sellBy !== 'caja') await P.setQty(x.p.id, 'unidades', x.unidades);
+          if (x.cajas && x.p.sellBy !== 'unidad') await P.setQty(x.p.id, 'cajas', x.cajas, 'vt');
+          if (x.unidades && x.p.sellBy !== 'caja') await P.setQty(x.p.id, 'unidades', x.unidades, 'vt');
         }
         P.toast(`Lo de siempre de ${o.clientName}: ${list.length} productos agregados`, 'ok'); P.render();
       })();
@@ -327,8 +357,8 @@
       for (const it of x.items || []) {
         const p = itemProduct(it); if (!p) continue;
         const l = (P.activeOrder().lines || {})[p.id] || {};
-        if (+it.cajas && p.sellBy !== 'unidad') await P.setQty(p.id, 'cajas', (+l.cajas || 0) + +it.cajas);
-        if (+it.unidades && p.sellBy !== 'caja') await P.setQty(p.id, 'unidades', (+(P.activeOrder().lines[p.id] || {}).unidades || 0) + +it.unidades);
+        if (+it.cajas && p.sellBy !== 'unidad') await P.setQty(p.id, 'cajas', (+l.cajas || 0) + +it.cajas, 'vt');
+        if (+it.unidades && p.sellBy !== 'caja') await P.setQty(p.id, 'unidades', (+(P.activeOrder().lines[p.id] || {}).unidades || 0) + +it.unidades, 'vt');
       }
       P.toast(`${x.nombre}: ingredientes agregados al pedido`, 'ok');
       if (navigator.vibrate) navigator.vibrate(15);
@@ -341,7 +371,7 @@
   function render(root) {
     const P = PV(), S = P.S, { esc } = P, ui = (S.ui.mkt = S.ui.mkt || { tab: 'vitrinas' }), d = data();
     const tab = S.ui.mktTab || ui.tab || 'campana';
-    root.innerHTML = `<div class="toolbar"><div class="seg">${[['campana', '🎄 Campaña'], ['vitrinas', '🛍 Vitrinas'], ['mezclas', '🍹 Mezclas'], ['combos', '🎁 Combos'], ['resultados', '📊 Resultados']].map(([k, l]) => `<button type="button" class="${tab === k ? 'active' : ''}" data-mt="${k}">${l}</button>`).join('')}</div><span class="grow"></span>
+    root.innerHTML = `<div class="toolbar"><div class="seg">${[['campana', '🎄 Campaña'], ['vitrinas', '🛍 Vitrinas'], ['mezclas', '🍹 Mezclas'], ['combos', '🎁 Combos'], ['ganancia', '💰 Ganancia bodega'], ['impacto', '📈 Impacto vitrina'], ['resultados', '📊 Resultados']].map(([k, l]) => `<button type="button" class="${tab === k ? 'active' : ''}" data-mt="${k}">${l}</button>`).join('')}</div><span class="grow"></span>
         ${tab === 'vitrinas' ? '<button class="btn btn-primary" id="mkNew">＋ Nueva vitrina</button>' : tab === 'mezclas' ? '<button class="btn btn-primary" id="mkNewX">＋ Nueva mezcla</button>' : tab === 'combos' ? '<button class="btn btn-primary" id="mkNewC">＋ Nuevo combo</button>' : ''}</div>
       ${d.saved ? '' : '<div class="hint">✨ Estas son las <b>vitrinas sugeridas</b>. Edítalas a tu gusto: al guardar el primer cambio quedan como las de la empresa y les llegan a todos los vendedores.</div>'}
       <div id="mkBody"></div>`;
@@ -350,6 +380,8 @@
     else if (tab === 'mezclas') listMezclas(body);
     else if (tab === 'combos') listCombos(body);
     else if (tab === 'resultados') resultados(body);
+    else if (tab === 'ganancia') ganancia(body);
+    else if (tab === 'impacto') impacto(body);
     else campanaForm(body, () => render(root));
     root.onclick = (e) => {
       const t = e.target.closest('[data-mt]'); if (t) { S.ui.mktTab = t.dataset.mt; render(root); return; }
@@ -484,6 +516,135 @@
     if (del) del.onclick = async () => { if (!confirm(`¿Eliminar el combo «${c.nombre}»?`)) return; await save({ combos: data().combos.filter((x) => x.id !== c.id) }, `Eliminó el combo «${c.nombre}»`); sh.close(); done(); };
   }
 
+  /* ---------------- 💰 Ganancia de la bodega: precio de venta sugerido (PVP) y cuánto gana el bodeguero ---------------- */
+  // Costo para la bodega = lo que nos paga por unidad (precio de la caja ÷ unidades, o el precio por unidad).
+  // Ganancia % = (PVP − costo) ÷ costo. La vitrina y la ficha del producto se la muestran al cliente.
+  const costoU = (p) => (p.sellBy !== 'unidad' && +p.boxPrice > 0 ? +p.boxPrice / (+p.unitsPerBox || 1) : +p.unitPrice || 0);
+  function ganancia(body) {
+    const P = PV(), S = P.S, { esc, usd, toast } = P, ui = (S.ui.mktGan = S.ui.mktGan || { q: '', cat: '', sin: false });
+    const cats = [...new Set(active().map((p) => p.category).filter(Boolean))].sort();
+    const toks = P.norm(ui.q).split(' ').filter(Boolean);
+    const rows = active().filter((p) => (!ui.cat || p.category === ui.cat) && (!ui.sin || !(+p.pvp > 0)) && toks.every((t) => (P.norm(p.code + ' ' + (p.unitCode || '')) + ' ' + hayOf(p)).includes(t)))
+      .sort((a, b) => String(a.category).localeCompare(String(b.category), 'es') || String(a.name).localeCompare(String(b.name), 'es'));
+    const g = (p) => { const c = costoU(p), v = +p.pvp || 0; return v > 0 && c > 0 ? { u: r2(v - c), cj: r2((v - c) * (p.sellBy !== 'unidad' ? +p.unitsPerBox || 1 : 1)), pct: Math.round(((v - c) / c) * 100) } : null; };
+    const con = active().filter((p) => +p.pvp > 0), prom = con.length ? Math.round(con.reduce((a, p) => a + ((g(p) || { pct: 0 }).pct), 0) / con.length) : 0;
+    body.innerHTML = `<p class="muted">Carga el <b>precio de venta sugerido al público</b> (por unidad) y el sistema calcula cuánto gana el bodeguero. La vitrina y la ficha se lo muestran al cliente: «💰 Ganas $X por caja (+Y %)». Es el mejor argumento para venderle a una bodega.</p>
+      <div class="kpis big" style="margin:6px 0 10px"><span><b>${con.length}</b> de ${active().length} productos con precio sugerido</span><span><b>${prom}%</b> de ganancia promedio para la bodega</span></div>
+      <div class="row wrap" style="gap:8px;align-items:flex-end"><label class="field grow"><span>Buscar</span><input id="gnQ" class="input" value="${esc(ui.q)}"></label>
+        <label class="field"><span>Categoría</span><select id="gnC" class="select"><option value="">Todas</option>${cats.map((c) => `<option ${c === ui.cat ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></label>
+        <label class="chip-check"><input type="checkbox" id="gnS" ${ui.sin ? 'checked' : ''}> Solo sin precio</label>
+        <label class="field"><span>Sugerir con ganancia de</span><div class="row" style="gap:4px"><input id="gnP" class="input" inputmode="numeric" value="30" style="max-width:70px"><b style="align-self:center">%</b><button class="btn" id="gnApply" title="A los productos mostrados que aún no tienen precio">Aplicar</button></div></label>
+        <button class="btn" id="gnX">⇩ Excel</button></div>
+      <div class="card" style="overflow:auto;margin-top:8px"><table class="inv"><thead><tr><th>Producto</th><th>Categoría</th><th class="n">Precio caja</th><th class="n">Costo por unidad</th><th class="n">Precio sugerido (unidad)</th><th class="n">Gana por unidad</th><th class="n">Gana por caja</th><th class="n">Ganancia</th></tr></thead><tbody>
+        ${rows.slice(0, 500).map((p) => { const x = g(p); return `<tr data-gp="${esc(p.id)}"><td><b>${esc(p.name)}</b> <span class="muted">${esc(p.presentation || '')}${p.sellBy !== 'unidad' ? ' · caja x' + (+p.unitsPerBox || 1) : ''}</span></td><td>${esc(p.category)}</td>
+          <td class="n">${p.sellBy !== 'unidad' ? usd(p.boxPrice) : '—'}</td><td class="n">${usd(r2(costoU(p)))}</td>
+          <td class="n"><input class="input sm gn-in" inputmode="decimal" data-pvp="${esc(p.id)}" value="${+p.pvp ? String(p.pvp).replace('.', ',') : ''}" placeholder="—" style="max-width:100px"></td>
+          <td class="n">${x ? usd(x.u) : ''}</td><td class="n">${x && p.sellBy !== 'unidad' ? usd(x.cj) : ''}</td><td class="n ${x ? (x.pct >= 15 ? 'pay-ok' : 'warn-txt') : ''}"><b>${x ? '+' + x.pct + '%' : ''}</b></td></tr>`; }).join('')}</tbody></table></div>
+      ${rows.length > 500 ? '<p class="muted">Se muestran 500: usa el buscador.</p>' : ''}`;
+    const q = (x) => body.querySelector(x);
+    let tq; q('#gnQ').oninput = (e) => { clearTimeout(tq); tq = setTimeout(() => { ui.q = e.target.value; ganancia(body); const i = q('#gnQ'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 300); };
+    q('#gnC').onchange = (e) => { ui.cat = e.target.value; ganancia(body); };
+    q('#gnS').onchange = (e) => { ui.sin = e.target.checked; ganancia(body); };
+    body.onchange = async (e) => {
+      const inp = e.target.closest('[data-pvp]'); if (!inp) return;
+      const p = P.productById(inp.dataset.pvp); if (!p) return;
+      const v = Math.round((Number(String(inp.value).replace(/\./g, '').replace(',', '.')) || 0) * 100) / 100;
+      if (v < 0) { toast('El precio no puede ser negativo', 'err'); return; }
+      if (v && v <= costoU(p)) toast(`Ojo: a ${usd(v)} la bodega no gana (le cuesta ${usd(r2(costoU(p)))})`, 'err');
+      await P.saveDocs('products', { ...p, pvp: v }); P.runSync(false); ganancia(body);
+    };
+    q('#gnApply').onclick = async () => {
+      const pct = Number(q('#gnP').value); if (!(pct > 0 && pct <= 300)) { toast('Pon un % de 1 a 300', 'err'); return; }
+      const sinP = rows.filter((p) => !(+p.pvp > 0) && costoU(p) > 0);
+      if (!sinP.length) { toast('Todos los productos mostrados ya tienen precio sugerido', 'ok'); return; }
+      if (!confirm(`¿Poner precio sugerido con ${pct}% de ganancia a ${sinP.length} productos sin precio? (redondeado a 0,05)`)) return;
+      await P.saveDocs('products', sinP.map((p) => ({ ...p, pvp: Math.ceil((costoU(p) * (1 + pct / 100)) * 20) / 20 })));
+      P.logEvent('precios_sugeridos', `Precio sugerido con ${pct}% de ganancia para ${sinP.length} productos`); P.runSync(false);
+      toast(`Precio sugerido cargado a ${sinP.length} productos`, 'ok'); ganancia(body);
+    };
+    q('#gnX').onclick = () => global.Exporta.save(`precios_sugeridos_${P.today()}.xlsx`, [global.Exporta.table({ name: 'Precios sugeridos', title: 'PRECIO DE VENTA SUGERIDO Y GANANCIA DE LA BODEGA', subtitle: 'Al ' + P.today(),
+      cols: [{ h: 'PRODUCTO', w: 34 }, { h: 'PRESENTACIÓN', w: 14 }, { h: 'CATEGORÍA', w: 16 }, { h: 'PRECIO CAJA', k: 'money' }, { h: 'UND/CAJA', k: 'int' }, { h: 'COSTO UNIDAD', k: 'money' }, { h: 'PRECIO SUGERIDO', k: 'money' }, { h: 'GANA UNIDAD', k: 'money' }, { h: 'GANA CAJA', k: 'money' }, { h: 'GANANCIA %', k: 'int' }],
+      rows: rows.map((p) => { const x = g(p); return [p.name, p.presentation || '', p.category, p.sellBy !== 'unidad' ? +p.boxPrice : '', p.sellBy !== 'unidad' ? +p.unitsPerBox || 1 : '', r2(costoU(p)), +p.pvp || '', x ? x.u : '', x && p.sellBy !== 'unidad' ? x.cj : '', x ? x.pct : '']; }) })]);
+  }
+
+  /* ---------------- 📈 Impacto de la vitrina: ¿no compraban porque no querían o porque no se les ofrecía? ---------------- */
+  // Cada pedido recuerda qué productos se agregaron desde la vitrina (o.vt). Se compara: pedidos con y sin vitrina,
+  // productos que el cliente no compraba (90 días antes) y que llevó desde la vitrina, y un período contra otro.
+  function impacto(body) {
+    const P = PV(), S = P.S, { esc, usd } = P, ui = (S.ui.mktImp = S.ui.mktImp || {}), d = data(), hoy = P.today();
+    const addD = (day, n) => new Date(Date.parse(day + 'T12:00:00Z') + n * 86400000).toISOString().slice(0, 10);
+    const span = (a, b) => Math.max(1, Math.round((Date.parse(b + 'T12:00:00Z') - Date.parse(a + 'T12:00:00Z')) / 86400000) + 1);
+    const lz = d.lanzamiento && d.lanzamiento.lanzada ? String(d.lanzamiento.at).slice(0, 10) : '';
+    const pre = ui.pre || (lz ? 'lanz' : 'mes');
+    let A1, A2;
+    if (pre === 'lanz' && lz) { A1 = lz; A2 = hoy; } else if (pre === 'camp' && d.campana && d.campana.desde) { A1 = d.campana.desde; A2 = d.campana.hasta && d.campana.hasta < hoy ? d.campana.hasta : hoy; }
+    else if (pre === 'custom') { A1 = ui.a1 || addD(hoy, -29); A2 = ui.a2 || hoy; } else { A1 = addD(hoy, -29); A2 = hoy; }
+    const n = span(A1, A2), B1 = pre === 'custom' && ui.b1 ? ui.b1 : addD(A1, -n), B2 = pre === 'custom' && ui.b2 ? ui.b2 : addD(A1, -1);
+    const vivos = S.orders.filter((o) => !o.deleted && o.status !== 'abierto');
+    const inR = (o, a, b) => String(o.routeDate || '') >= a && String(o.routeDate || '') <= b;
+    const M = global.Matrix, monto = (o) => (o.delivery && o.delivery.at ? +o.delivery.monto || 0 : M.orderTotals(o).monto), skus = (o) => Object.values(o.lines || {}).filter((l) => (+l.cajas || 0) || (+l.unidades || 0)).length;
+    const stats = (os) => { const c = new Set(os.map((o) => o.clientId)), v = r2(os.reduce((a, o) => a + monto(o), 0)); return { n: os.length, v, cl: c.size, tk: os.length ? r2(v / os.length) : 0, sk: os.length ? Math.round((os.reduce((a, o) => a + skus(o), 0) / os.length) * 10) / 10 : 0 }; };
+    const A = vivos.filter((o) => inR(o, A1, A2)), B = vivos.filter((o) => inR(o, B1, B2));
+    const conV = A.filter((o) => o.vt && (o.vt.pids || []).length), sinV = A.filter((o) => !(o.vt && (o.vt.pids || []).length));
+    const sA = stats(A), sB = stats(B), sC = stats(conV), sS = stats(sinV);
+    // Venta que salió de la vitrina y productos «nuevos para el cliente» (no los compró en los 90 días anteriores)
+    const byClient = new Map(); vivos.forEach((o) => { const a = byClient.get(o.clientId) || []; a.push(o); byClient.set(o.clientId, a); });
+    let ventaVt = 0, nuevosN = 0, nuevosV = 0; const nuevosCl = new Set(), topNuevos = new Map();
+    conV.forEach((o) => {
+      const prev = (byClient.get(o.clientId) || []).filter((x) => x.id !== o.id && String(x.routeDate) < String(o.routeDate) && String(x.routeDate) >= addD(o.routeDate, -90));
+      o.vt.pids.forEach((pid) => {
+        const l = (o.lines || {})[pid]; if (!l) return;
+        const m = M.lineTotals(l).monto; ventaVt += m;
+        if (!prev.some((x) => (x.lines || {})[pid])) { nuevosN++; nuevosV += m; nuevosCl.add(o.clientId); const t = topNuevos.get(pid) || { name: `${l.name} ${l.presentation || ''}`, n: 0, v: 0 }; t.n++; t.v += m; topNuevos.set(pid, t); }
+      });
+    });
+    ventaVt = r2(ventaVt); nuevosV = r2(nuevosV);
+    const pct = (a, b) => (b > 0 ? Math.round(((a - b) / b) * 100) : null);
+    const arrow = (x) => (x === null ? '—' : `<b class="${x >= 0 ? 'pay-ok' : 'warn-txt'}">${x >= 0 ? '▲ +' : '▼ '}${x}%</b>`);
+    // Por vendedor
+    const vend = new Map(); A.forEach((o) => { const k = o.sellerName || o.sellerId || '—', x = vend.get(k) || { con: [], sin: [] }; (o.vt && (o.vt.pids || []).length ? x.con : x.sin).push(o); vend.set(k, x); });
+    const vrows = [...vend.entries()].map(([k, x]) => ({ k, n: x.con.length + x.sin.length, ad: Math.round((x.con.length / Math.max(1, x.con.length + x.sin.length)) * 100), tc: stats(x.con).tk, ts: stats(x.sin).tk, v: r2(stats(x.con).v + stats(x.sin).v) })).sort((a, b) => b.ad - a.ad || b.v - a.v);
+    // Conclusiones en palabras
+    const con = [];
+    const dTk = pct(sC.tk, sS.tk);
+    if (conV.length && sinV.length && dTk !== null) con.push(dTk >= 0 ? `🛍 Los pedidos tomados <b>con la vitrina son ${dTk}% más grandes</b> (${usd(sC.tk)} contra ${usd(sS.tk)} sin vitrina) y llevan ${sC.sk} productos distintos contra ${sS.sk}.` : `🛍 Los pedidos con vitrina son ${-dTk}% más pequeños (${usd(sC.tk)} contra ${usd(sS.tk)}): revisa cómo se está usando.`);
+    if (nuevosN) con.push(`💡 <b>${nuevosCl.size} cliente${nuevosCl.size === 1 ? '' : 's'} compraron ${nuevosN} producto${nuevosN === 1 ? '' : 's'} que no habían comprado en 90 días</b> (${usd(nuevosV)}). No es que no quisieran: no se los estaban ofreciendo.`);
+    if (ventaVt) con.push(`💵 Desde la vitrina salieron <b>${usd(ventaVt)}</b>, el ${sA.v ? Math.round((ventaVt / sA.v) * 100) : 0}% de la venta del período.`);
+    const dV = pct(sA.v, sB.v);
+    if (dV !== null) con.push(`📊 La venta ${dV >= 0 ? 'creció' : 'bajó'} <b>${Math.abs(dV)}%</b> frente al período anterior (${usd(sA.v)} contra ${usd(sB.v)}); el pedido promedio ${pct(sA.tk, sB.tk) >= 0 ? 'subió' : 'bajó'} ${Math.abs(pct(sA.tk, sB.tk) || 0)}%.`);
+    if (A.length) con.push(`📱 El <b>${Math.round((conV.length / A.length) * 100)}%</b> de los pedidos usó la vitrina${vrows.length > 1 ? `; quien más la usa: <b>${esc(vrows[0].k)}</b> (${vrows[0].ad}%)` : ''}.`);
+    if (!conV.length) con.push(d.lanzamiento && d.lanzamiento.lanzada ? 'Aún no hay pedidos tomados con la vitrina en este período.' : '🔒 La vitrina aún no está lanzada: estas métricas empiezan a llenarse desde el lanzamiento.');
+    const fd = (x) => esc(P.fmtDate(x));
+    body.innerHTML = `<div class="row wrap" style="gap:8px;align-items:flex-end">
+        <label class="field"><span>Comparar</span><select id="imPre" class="select">${[lz ? ['lanz', 'Desde el lanzamiento vs. antes'] : null, ['mes', 'Últimos 30 días vs. los 30 anteriores'], d.campana && d.campana.desde ? ['camp', 'Campaña vs. mismo número de días antes'] : null, ['custom', 'Personalizado']].filter(Boolean).map(([k, l]) => `<option value="${k}" ${k === pre ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        ${pre === 'custom' ? `<label class="field"><span>Período A desde</span><input id="imA1" type="date" class="input" value="${esc(A1)}"></label><label class="field"><span>hasta</span><input id="imA2" type="date" class="input" value="${esc(A2)}"></label>
+          <label class="field"><span>Contra B desde</span><input id="imB1" type="date" class="input" value="${esc(B1)}"></label><label class="field"><span>hasta</span><input id="imB2" type="date" class="input" value="${esc(B2)}"></label>` : ''}
+        <span class="grow"></span><button class="btn" id="imX">⇩ Excel</button></div>
+      <p class="muted">Período A: <b>${fd(A1)} – ${fd(A2)}</b> · contra B: ${fd(B1)} – ${fd(B2)}</p>
+      <div class="card card-pad mk-conc"><h3 style="margin-top:0">🧠 Conclusiones</h3>${con.map((x) => `<p>${x}</p>`).join('')}<p class="muted" style="font-size:12px">Las cifras muestran lo que pasó; también influyen la temporada, los precios y el inventario.</p></div>
+      <div class="mk-cards">
+        <div class="card card-pad"><h3>🛍 Con vitrina</h3><p><b>${sC.n}</b> pedidos · ticket <b>${usd(sC.tk)}</b> · ${sC.sk} productos por pedido</p></div>
+        <div class="card card-pad"><h3>📋 Sin vitrina</h3><p><b>${sS.n}</b> pedidos · ticket <b>${usd(sS.tk)}</b> · ${sS.sk} productos por pedido</p></div>
+        <div class="card card-pad"><h3>💡 Productos nuevos para el cliente</h3><p><b>${nuevosN}</b> en ${nuevosCl.size} clientes · ${usd(nuevosV)}</p></div></div>
+      <div class="section-title">Período A contra B</div>
+      <div class="card" style="overflow:auto"><table class="inv"><thead><tr><th></th><th class="n">A</th><th class="n">B</th><th class="n">Cambio</th></tr></thead><tbody>
+        ${[['Venta', usd(sA.v), usd(sB.v), pct(sA.v, sB.v)], ['Pedidos', sA.n, sB.n, pct(sA.n, sB.n)], ['Clientes que compraron', sA.cl, sB.cl, pct(sA.cl, sB.cl)], ['Pedido promedio', usd(sA.tk), usd(sB.tk), pct(sA.tk, sB.tk)], ['Productos distintos por pedido', sA.sk, sB.sk, pct(sA.sk, sB.sk)]].map(([k, a, b, x]) => `<tr><td>${k}</td><td class="n">${a}</td><td class="n">${b}</td><td class="n">${arrow(x)}</td></tr>`).join('')}</tbody></table></div>
+      ${topNuevos.size ? `<div class="section-title">💡 Lo que los clientes empezaron a comprar desde la vitrina</div><div class="card" style="overflow:auto"><table class="inv"><thead><tr><th>Producto</th><th class="n">Clientes nuevos</th><th class="n">Venta $</th></tr></thead><tbody>${[...topNuevos.values()].sort((a, b) => b.n - a.n).slice(0, 20).map((t) => `<tr><td>${esc(t.name)}</td><td class="n">${t.n}</td><td class="n">${usd(r2(t.v))}</td></tr>`).join('')}</tbody></table></div>` : ''}
+      <div class="section-title">Por vendedor (período A)</div>
+      <div class="card" style="overflow:auto"><table class="inv"><thead><tr><th>Vendedor</th><th class="n">Pedidos</th><th class="n">Usa la vitrina</th><th class="n">Ticket con vitrina</th><th class="n">Ticket sin vitrina</th><th class="n">Venta</th></tr></thead><tbody>
+        ${vrows.map((x) => `<tr><td>${esc(x.k)}</td><td class="n">${x.n}</td><td class="n"><b>${x.ad}%</b></td><td class="n">${x.tc ? usd(x.tc) : '—'}</td><td class="n">${x.ts ? usd(x.ts) : '—'}</td><td class="n">${usd(x.v)}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">Sin pedidos en el período.</td></tr>'}</tbody></table></div>`;
+    const q = (x) => body.querySelector(x);
+    q('#imPre').onchange = (e) => { ui.pre = e.target.value; impacto(body); };
+    ['imA1', 'imA2', 'imB1', 'imB2'].forEach((id) => { const el = q('#' + id); if (el) el.onchange = (e) => { ui[id.slice(2).toLowerCase()] = e.target.value; impacto(body); }; });
+    q('#imX').onclick = () => global.Exporta.save(`impacto_vitrina_${A1}_${A2}.xlsx`, [
+      global.Exporta.table({ name: 'Resumen', title: 'IMPACTO DE LA VITRINA', subtitle: `A: ${A1} a ${A2} · B: ${B1} a ${B2}`, cols: [{ h: 'INDICADOR', w: 36 }, { h: 'A', w: 14 }, { h: 'B', w: 14 }, { h: 'CAMBIO %', k: 'int' }],
+        rows: [['Venta $', sA.v, sB.v, pct(sA.v, sB.v) ?? ''], ['Pedidos', sA.n, sB.n, pct(sA.n, sB.n) ?? ''], ['Clientes', sA.cl, sB.cl, pct(sA.cl, sB.cl) ?? ''], ['Pedido promedio $', sA.tk, sB.tk, pct(sA.tk, sB.tk) ?? ''], ['Productos por pedido', sA.sk, sB.sk, pct(sA.sk, sB.sk) ?? ''],
+          ['Pedidos con vitrina', sC.n, '', ''], ['Ticket con vitrina $', sC.tk, '', ''], ['Ticket sin vitrina $', sS.tk, '', ''], ['Venta desde la vitrina $', ventaVt, '', ''], ['Productos nuevos para el cliente', nuevosN, '', ''], ['Clientes con productos nuevos', nuevosCl.size, '', '']] }),
+      global.Exporta.table({ name: 'Vendedores', title: 'USO DE LA VITRINA POR VENDEDOR', subtitle: `${A1} a ${A2}`, cols: [{ h: 'VENDEDOR', w: 24 }, { h: 'PEDIDOS', k: 'int' }, { h: 'USA LA VITRINA %', k: 'int' }, { h: 'TICKET CON $', k: 'money' }, { h: 'TICKET SIN $', k: 'money' }, { h: 'VENTA $', k: 'money', total: true }],
+        rows: vrows.map((x) => [x.k, x.n, x.ad, x.tc, x.ts, x.v]) }),
+    ]);
+  }
+
   /* ---------------- Resultados: ¿funcionó la campaña? ---------------- */
   // Con los pedidos que hay en este equipo (la oficina guarda 400 días): combos vendidos y ventas de cada vitrina en sus
   // fechas contra el mismo número de días justo antes (crecimiento). Pedidos eliminados no cuentan.
@@ -605,6 +766,20 @@
         <label class="field grow"><span>Nombre de la vitrina</span><input id="veN" class="input" maxlength="70" value="${esc(v.nombre)}" placeholder="Ej.: Arma la lonchera de los más pequeños"></label></div>
       <label class="field"><span>Frase de venta</span><input id="veF" class="input" maxlength="140" value="${esc(v.frase || '')}" placeholder="Ej.: Todos los sabores para el recreo"></label>
       <div class="field"><span>Color</span><div class="mk-pal">${PALETTE.map((h) => `<button type="button" class="mk-dot ${+v.hue === h ? 'on' : ''}" data-hue="${h}" style="--h:${h}" aria-label="Color ${h}"></button>`).join('')}</div></div>
+      <details class="mk-bn" open><summary><b>🎨 Banner</b> <span class="muted">fondo, colores, letras y posición</span></summary>
+        <div id="veBnPrev" class="vt" style="margin:8px 0"></div>
+        <div class="row wrap" style="gap:8px;align-items:flex-end">
+          <label class="field"><span>Fondo</span><select id="bnF" class="select"><option value="tono">Color de la vitrina</option><option value="colores">Dos colores</option><option value="imagen">Imagen propia</option></select></label>
+          <label class="field bn-col"><span>Color 1</span><input id="bnC1" type="color" class="input"></label><label class="field bn-col"><span>Color 2</span><input id="bnC2" type="color" class="input"></label>
+          <label class="field bn-col"><span>Ángulo</span><input id="bnA" type="range" min="0" max="360" step="15"></label>
+          <label class="field bn-img"><span>Imagen (se ajusta sola)</span><input id="bnI" type="file" accept="image/*" class="input"></label>
+          <label class="field bn-img"><span>Oscurecer la imagen</span><input id="bnO" type="range" min="0" max="80" step="5"></label></div>
+        <div class="row wrap" style="gap:8px;align-items:flex-end">
+          <label class="field"><span>Color de las letras</span><input id="bnT" type="color" class="input"></label>
+          <label class="field"><span>Letras</span><select id="bnAl" class="select"><option value="izq">A la izquierda</option><option value="centro">Al centro</option><option value="der">A la derecha</option></select></label>
+          <label class="field"><span>Altura</span><select id="bnV" class="select"><option value="arriba">Arriba</option><option value="centro">En medio</option><option value="abajo">Abajo</option></select></label>
+          <label class="field"><span>Título</span><select id="bnTam" class="select"><option value="normal">Normal</option><option value="grande">Grande</option><option value="enorme">Enorme</option></select></label>
+          <label class="chip-check"><input type="checkbox" id="bnCo"> Fotos de productos</label></div></details>
       <div class="row wrap" style="gap:8px"><label class="field grow"><span>Sello para sus 3 más pedidos</span><input id="veS" class="input" maxlength="40" value="${esc(v.sello || '')}" placeholder="Ej.: 💛 Lo más pedido por las mamás"></label>
         <label class="field"><span>Orden</span><select id="veO" class="select">${[['ventas', 'Más vendidos primero'], ['peso', 'Por peso / tamaño (120 g, 340 g, 500 g…)'], ['nombre', 'Por nombre'], ['manual', 'A mano (los agregados, en su orden)']].map(([k, l]) => `<option value="${k}" ${v.orden === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div>
       <label class="field"><span>Qué productos entran: palabras (marca, tipo, sabor…), separadas por coma</span><input id="veB" class="input" value="${esc((v.buscar || []).join(', '))}" placeholder="Ej.: salsa, quiero"></label>
@@ -616,6 +791,27 @@
       <div class="section-title">Vista previa · <span id="veCnt"></span></div><div id="veList" class="mk-prev"></div>
       <div class="actions">${isNew ? '' : '<button class="btn btn-danger" id="veDel">Eliminar</button>'}<span class="grow"></span><button class="btn btn-primary" id="veOk">Guardar vitrina</button></div>`, { wide: true });
     const q = (s) => sh.el.querySelector(s);
+    // Banner: valores en los controles y vista previa en vivo
+    v.banner = { ...BN_DEF, ...(v.banner || {}) };
+    let newImg = null;
+    const bset = () => { const b = v.banner; q('#bnF').value = b.fondo; q('#bnC1').value = b.c1; q('#bnC2').value = b.c2; q('#bnA').value = b.angulo; q('#bnO').value = b.oscurecer; q('#bnT').value = b.texto; q('#bnAl').value = b.alinear; q('#bnV').value = b.vertical; q('#bnTam').value = b.tam; q('#bnCo').checked = b.collage !== false; };
+    const bread = () => { Object.assign(v.banner, { fondo: q('#bnF').value, c1: q('#bnC1').value, c2: q('#bnC2').value, angulo: +q('#bnA').value, oscurecer: +q('#bnO').value, texto: q('#bnT').value, alinear: q('#bnAl').value, vertical: q('#bnV').value, tam: q('#bnTam').value, collage: q('#bnCo').checked }); };
+    const bprev = () => {
+      bread();
+      sh.el.querySelectorAll('.bn-col').forEach((x) => { x.style.display = v.banner.fondo === 'colores' ? '' : 'none'; });
+      sh.el.querySelectorAll('.bn-img').forEach((x) => { x.style.display = v.banner.fondo === 'imagen' ? '' : 'none'; });
+      const S = PV().S, keep = S.banners; if (newImg) S.banners = { ...(keep || {}), ['bn_' + v.id]: { image: newImg } };
+      const vv = { ...v, nombre: q('#veN').value.trim() || 'Nombre de la vitrina', frase: q('#veF').value.trim(), icono: q('#veI').value.trim(), banner: { ...v.banner, img: newImg ? 'bn_' + v.id : v.banner.img } };
+      q('#veBnPrev').style.setProperty('--h', +v.hue || 0);
+      q('#veBnPrev').innerHTML = banner(vv, productsOf(vv));
+      if (newImg) S.banners = keep;
+    };
+    bset();
+    q('#bnI').onchange = async (e) => { const f = e.target.files && e.target.files[0]; if (!f) return; try { newImg = await bannerImage(f); if (!newImg) toast('La imagen es muy pesada: prueba con otra más liviana', 'err'); } catch (err) { toast(err.message, 'err'); } bprev(); };
+    sh.el.addEventListener('input', (e) => { if (e.target.closest('.mk-bn') || ['veN', 'veF', 'veI'].includes(e.target.id)) bprev(); });
+    sh.el.addEventListener('change', (e) => { if (e.target.closest('.mk-bn')) bprev(); });
+    sh.el.addEventListener('click', (e) => { if (e.target.closest('[data-hue]')) setTimeout(bprev, 0); });
+    setTimeout(bprev, 0);
     const read = () => { v.icono = q('#veI').value.trim(); v.nombre = q('#veN').value.trim(); v.frase = q('#veF').value.trim(); v.sello = q('#veS').value.trim(); v.orden = q('#veO').value; v.adultos = q('#veA').checked; v.desde = q('#veD').value; v.hasta = q('#veH').value;
       v.buscar = q('#veB').value.split(',').map((w) => w.trim()).filter(Boolean); v.cats = [...sh.el.querySelectorAll('[data-cat]:checked')].map((x) => x.dataset.cat); };
     const prev = () => {
@@ -639,6 +835,9 @@
       if (!v.nombre) { toast('Ponle un nombre a la vitrina', 'err'); return; }
       if (v.desde && v.hasta && v.hasta < v.desde) { toast('La fecha «hasta» es antes de «desde»', 'err'); return; }
       if (!v.desde) delete v.desde; if (!v.hasta) delete v.hasta;
+      bread();
+      if (v.banner.fondo === 'imagen' && !newImg && !v.banner.img) { toast('Elige la imagen del banner (o cambia el fondo)', 'err'); return; }
+      if (newImg) { await P.saveDocs('config', { id: 'bn_' + v.id, image: newImg }); v.banner.img = 'bn_' + v.id; v.banner.imgAt = new Date().toISOString(); }
       const list = data().vitrinas.slice(), i = list.findIndex((x) => x.id === v.id);
       if (i >= 0) list[i] = v; else list.push(v);
       await save({ vitrinas: list }, `${isNew ? 'Creó' : 'Editó'} la vitrina «${v.nombre}»`);

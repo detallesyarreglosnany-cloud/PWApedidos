@@ -570,7 +570,7 @@ export async function POST(req: NextRequest) {
               }
             }
           }
-          if (kind === 'config' && isGer && doc.id !== 'mkt') {
+          if (kind === 'config' && isGer && doc.id !== 'mkt' && !String(doc.id).startsWith('bn_')) {
             if (!cur) { rejected.push({ kind, id: doc.id, reason: 'foreign' }); continue; }
             doc = { ...cur, rubros: Array.isArray((doc as Record<string, unknown>).rubros) ? (doc as Record<string, unknown>).rubros : cur.rubros, updatedAt: doc.updatedAt } as typeof doc;
           }
