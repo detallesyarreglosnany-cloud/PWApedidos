@@ -70,7 +70,7 @@
     const multiAlm = m.rows.some((r) => r.almName), almSpan = {};
     const d0 = headRow + 1;
     m.rows.forEach((row, i) => {
-      if (multiAlm && (i === 0 || m.rows[i - 1].alm !== row.alm)) rows.push([{ v: row.almName, s: S.tot }, { v: 'Lo que sale de este almacén', s: S.tot }]);
+      if (multiAlm && (i === 0 || m.rows[i - 1].alm !== row.alm)) rows.push([{ v: row.almName, s: S.tot }, { v: null, s: S.tot }]);
       const xr = rows.length + 1; // fila de Excel (1 = primera)
       if (multiAlm) { const a = (almSpan[row.alm] = almSpan[row.alm] || { name: row.almName, from: xr }); a.to = xr; }
       rows.push([cell({ v: row.code }), cell({ v: `${row.name}${row.presentation ? ' ' + row.presentation : ''}` }), cell({ v: row.um, align: 'center', b: true }),

@@ -426,7 +426,7 @@
     };
     const body = m.rows.map((r, ri) => {
       let head = '';
-      if (multiAlm && r.alm !== lastAlm) { lastAlm = r.alm; lastCat = null; head += `<tr class="alm-row"><td class="sticky-col">🏬 ${esc(r.almName)}</td><td colspan="${colspan - 1 + xN}">Lo que sale del ${esc(r.almName)}</td></tr>`; }
+      if (multiAlm && r.alm !== lastAlm) { lastAlm = r.alm; lastCat = null; head += `<tr class="alm-row"><td class="sticky-col">🏬 ${esc(r.almName)}</td><td colspan="${colspan - 1 + xN}"></td></tr>`; }
       if (r.category !== lastCat) { lastCat = r.category; head += `<tr class="cat-row"><td class="sticky-col">${esc(r.category)}</td><td colspan="${colspan - 2}"></td><td class="tot"></td>${xBlank}</tr>`; }
       const tail = multiAlm && (ri === m.rows.length - 1 || m.rows[ri + 1].alm !== r.alm) ? almTotal(r) : '';
       const kind = r.um === 'CJ' ? 'cajas' : 'unidades';

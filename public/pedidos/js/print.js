@@ -100,8 +100,47 @@
   // Área útil de carta horizontal con márgenes de 8 mm, en px CSS (96 por pulgada)
   const LETTER_LANDSCAPE = { w: Math.floor((279.4 - 16) / 25.4 * 96), h: Math.floor((215.9 - 16) / 25.4 * 96) };
 
+  /*
+   * Hoja de carga y liquidación: se elige la orientación (horizontal o vertical) y la escala que dejan la letra más
+   * grande, y la tabla ocupa todo el ancho. Con pocos clientes la hoja se agranda hasta llenar la página; con muchos
+   * productos se usa la hoja a lo largo (vertical) si así se lee mejor. Si aun así la letra quedaría muy chica, se
+   * permite una segunda página (el encabezado de la tabla se repite).
+   */
+  const FIT_AUTO = { auto: true, w: LETTER_LANDSCAPE.w };
+  const K_MAX = 1.8, K_MIN = 0.62;
+  function sheetSize(el, W, k) {
+    el.style.zoom = ''; el.style.width = (W / k).toFixed(1) + 'px';
+    const ts = [...el.querySelectorAll('table')];
+    return { w: Math.max(el.scrollWidth, ...ts.map((t) => t.scrollWidth)), h: el.scrollHeight, th: Math.max(0, ...ts.map((t) => (t.tHead ? t.tHead.offsetHeight : 0))) };
+  }
+  /** La escala más grande con la que la hoja cabe en W × H (px CSS) usando `pages` páginas (el encabezado se repite). */
+  function bestScale(el, W, H, pages) {
+    const ok = (k) => { const r = sheetSize(el, W, k); return r.w * k <= W + 0.5 && (r.h + (pages - 1) * r.th) * k <= H * pages * (pages > 1 ? 0.9 : 0.98); };
+    if (ok(K_MAX)) return K_MAX;
+    let lo = 0.15, hi = K_MAX;
+    for (let i = 0; i < 9; i++) { const mid = (lo + hi) / 2; if (ok(mid)) lo = mid; else hi = mid; }
+    return lo;
+  }
+  function fitAuto(d) {
+    const sheets = [...d.querySelectorAll('.sheet')]; if (!sheets.length) return;
+    d.body.classList.add('fitall');
+    const L = LETTER_LANDSCAPE, P = { w: L.h, h: L.w };
+    const plan = (pages) => [['landscape', L], ['portrait', P]].map(([o, a]) => ({ o, a, pages, ks: sheets.map((el) => bestScale(el, a.w * 0.99, a.h, pages)) }))
+      .map((x) => ({ ...x, k: Math.min(...x.ks) }));
+    // Horizontal salvo que vertical se lea claramente mejor
+    const pick = (xs) => (xs[1].k > xs[0].k * 1.05 ? xs[1] : xs[0]);
+    let best = pick(plan(1));
+    if (best.k < K_MIN) { const two = pick(plan(2)); if (two.k > best.k * 1.2) best = two; }
+    const st = d.createElement('style');
+    st.textContent = `@page{size:letter ${best.o};margin:8mm}`;
+    d.head.appendChild(st);
+    sheets.forEach((el, i) => { const k = Math.min(best.ks[i], K_MAX); sheetSize(el, best.a.w * 0.99, k); el.style.zoom = k.toFixed(3); });
+    d.body.dataset.fit = `${best.o} ${best.pages} ${best.k.toFixed(2)}`;
+  }
+
   // Si la hoja no cabe en una página, se reduce lo justo para que quepa en UNA
   function fitPages(d, fit) {
+    if (fit && fit.auto) return fitAuto(d);
     for (const el of d.querySelectorAll('.sheet')) {
       el.style.zoom = '';
       const w = Math.max(el.scrollWidth, ...[...el.querySelectorAll('table')].map((t) => t.scrollWidth));
@@ -147,7 +186,7 @@
     let lastCat = null, lastAlm = null;
     const rows = m.rows.map((r, i) => {
       let head = '';
-      if (multiAlm && r.alm !== lastAlm) { lastAlm = r.alm; lastCat = null; head = `<tr class="almh"><td colspan="${span}">${esc(r.almName)} · lo que sale de este almacén</td></tr>`; }
+      if (multiAlm && r.alm !== lastAlm) { lastAlm = r.alm; lastCat = null; head = `<tr class="almh"><td colspan="${span}">${esc(r.almName)}</td></tr>`; }
       const first = lastCat !== null && r.category !== lastCat;
       lastCat = r.category;
       const tail = multiAlm && (i === m.rows.length - 1 || m.rows[i + 1].alm !== r.alm) ? almTot(r) : '';
@@ -206,7 +245,7 @@
     .sheet,.sheet *{color:#000 !important;background:transparent !important;-webkit-print-color-adjust:economy;print-color-adjust:economy}
     .sheet .head{border-bottom:2px solid #000;padding-bottom:3px;margin-bottom:4px} .sheet .head img{height:40px} .sheet .doc{border-color:#000;padding:3px 8px}
     .sheet .meta{grid-template-columns:repeat(8,auto);gap:0 10px;margin-bottom:4px} .sheet .meta div{padding:1px 0}
-    table.load{width:auto} table.load.many{width:100%}
+    table.load{width:auto} table.load.many{width:100%} .fitall table.load{width:100%} .fitall .sheet{margin:0}
     table.load th,table.load td{font-size:12px;line-height:1.2;border:1px solid #000;padding:1px 4px}
     table.load th{font-weight:bold}
     th.cl{vertical-align:bottom;padding:3px 2px;min-width:22px}
@@ -231,7 +270,7 @@
     .sheet .foot{margin:3px 0 0;font-size:9px} .sheet .sign{margin-top:14px}`;
 
   function printLoadSheet(load, orders, ctx) {
-    printHTML('Hoja de carga ' + Loads.loadCode(load), LOAD_CSS, loadSheetHTML(load, orders, ctx), LETTER_LANDSCAPE);
+    printHTML('Hoja de carga ' + Loads.loadCode(load), LOAD_CSS, loadSheetHTML(load, orders, ctx), FIT_AUTO);
   }
 
   /* --------------------------- Liquidación --------------------------- */
@@ -296,10 +335,11 @@
     tr.nota th{font-size:9px;font-weight:bold;white-space:nowrap} tr.novd th{font-size:8px;line-height:1;white-space:normal;max-width:40px}
     tr.money td{font-weight:900} table.load.liq td.p{white-space:normal;min-width:120px;max-width:150px;line-height:1.05;overflow-wrap:anywhere;padding:1px 3px}
     table.load.liq td.p .um{white-space:nowrap} table.load.liq tfoot td:first-child{white-space:normal;max-width:150px;line-height:1.05}
-    table.load.liq th.cl div{height:175px} table.load.liq th.rt div{height:90px} table.load.liq tr.money td{font-size:10px;padding:1px 1px} table.load.liq tr.money td.usd{font-size:13px} tr.vacrow.k-DESPACHADOS td{border-top:2px solid #000} tr.vacrow.k-DEBEN td{font-weight:900} .sheet .novs{margin:4px 0 0;font-size:10px}`;
+    table.load.liq th.cl div{height:175px} table.load.liq th.rt div{height:90px} table.load.liq tr.money td{font-size:10px;padding:1px 1px} table.load.liq tr.money td.usd{font-size:13px} tr.vacrow.k-DESPACHADOS td{border-top:2px solid #000} tr.vacrow.k-DEBEN td{font-weight:900} .sheet .novs{margin:4px 0 0;font-size:10px}
+    .fitall table.load.liq td.p,.fitall table.load.liq tfoot td:first-child{white-space:nowrap;max-width:none}`;
 
   function printLiquidation(load, st, ctx) {
-    printHTML('Liquidación ' + Loads.loadCode(load), LIQ_CSS, liquidationHTML(load, st, ctx), LETTER_LANDSCAPE);
+    printHTML('Liquidación ' + Loads.loadCode(load), LIQ_CSS, liquidationHTML(load, st, ctx), FIT_AUTO);
   }
 
   /* ------------------------ Saldos de vacíos (E4) ------------------------ */

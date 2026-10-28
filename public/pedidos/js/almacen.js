@@ -1,33 +1,42 @@
 /**
- * Almacenes de despacho: la hoja de carga se separa por almacén (ALMACÉN 1, ALMACÉN 3…) para que cada uno sepa
+ * Almacenes de despacho: la hoja de carga se separa por almacén (ALMACÉN 1, ALMACÉN 2…) para que cada uno sepa
  * lo que sale de él y sus productos no se mezclen con los del otro.
  *
  * Cada categoría va a un almacén (config.almacenCat) y un producto puede ir a otro distinto al de su categoría
- * (config.almacenProd: ej. MALTAS en el 1, pero la Malta 207 y las latas en el 3). Mientras no se configure,
+ * (config.almacenProd: ej. MALTAS en el 1, pero la Malta 207 y las latas en el 2). Mientras no se configure,
  * se usa la sugerencia (ver suggest) para que la hoja ya salga separada.
  */
 (function (global) {
   'use strict';
-  const DEF = [{ id: '1', nombre: 'ALMACÉN 1' }, { id: '3', nombre: 'ALMACÉN 3' }];
+  const DEF = [{ id: '1', nombre: 'ALMACÉN 1' }, { id: '2', nombre: 'ALMACÉN 2' }];
   const SIN = { id: '', nombre: 'SIN ALMACÉN', orden: 99 };
   const fold = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 
-  const list = (cfg) => ((cfg && Array.isArray(cfg.almacenes) && cfg.almacenes.length) ? cfg.almacenes : DEF);
+  /** El segundo almacén se llamó primero «ALMACÉN 3»: lo guardado así pasa a ser el ALMACÉN 2. */
+  function norm(cfg) {
+    cfg = cfg || {};
+    const alms = Array.isArray(cfg.almacenes) && cfg.almacenes.length ? cfg.almacenes : DEF;
+    const old = alms.some((a) => String(a.id) === '3' && /^ALMAC[EÉ]N 3$/i.test(a.nombre || '')) && !alms.some((a) => String(a.id) === '2');
+    if (!old) return { almacenes: alms, almacenCat: cfg.almacenCat || {}, almacenProd: cfg.almacenProd || {} };
+    const fix = (m) => Object.fromEntries(Object.entries(m || {}).map(([k, v]) => [k, String(v) === '3' ? '2' : v]));
+    return { almacenes: alms.map((a) => (String(a.id) === '3' ? { ...a, id: '2', nombre: 'ALMACÉN 2' } : a)), almacenCat: fix(cfg.almacenCat), almacenProd: fix(cfg.almacenProd) };
+  }
+  const list = (cfg) => norm(cfg).almacenes;
   const configured = (cfg) => !!(cfg && (Object.keys(cfg.almacenCat || {}).length || Object.keys(cfg.almacenProd || {}).length));
 
   /**
    * Almacén sugerido para un producto (lista de Distribuidora Puerto Venado):
    * ALMACÉN 1: refrescos, aguas, jugos Del Valle, Malta 222, cerveza 222, Tóxica.
-   * ALMACÉN 3: lo demás (galletas, sardinas, confitería, salsas, arroz, pasta, néctar Kaito, latas, Malta 207,
+   * ALMACÉN 2: lo demás (galletas, sardinas, confitería, salsas, arroz, pasta, néctar Kaito, latas, Malta 207,
    * Chowy, surtido, papas fritas, gelatina, mermelada, whisky, ron, anís, vodka y licores).
    */
   function suggest(p) {
     const t = fold(`${p.category} ${p.name} ${p.presentation} ${p.brand || ''}`);
-    if (/\blatas?\b|\b207\b/.test(t)) return '3';
+    if (/\blatas?\b|\b207\b/.test(t)) return '2';
     if (/del valle/.test(t)) return '1';
-    if (/nectar|kaito|whisk|\bron\b|anis|vodka|licor|ginebra|tequila|vino|aguardiente/.test(t)) return '3';
+    if (/nectar|kaito|whisk|\bron\b|anis|vodka|licor|ginebra|tequila|vino|aguardiente/.test(t)) return '2';
     if (/refresco|gaseosa|\bagua|jugo|malta|cerveza|toxica/.test(t)) return '1';
-    return '3';
+    return '2';
   }
   /** Asignación sugerida para todo el catálogo: cada categoría al almacén de la mayoría y las excepciones por producto. */
   function suggestAll(products) {
@@ -47,7 +56,7 @@
   function resolver(cfg, products) {
     const alms = list(cfg), pById = new Map((products || []).map((p) => [p.id, p]));
     const auto = configured(cfg) ? null : suggestAll(products || []);
-    const catMap = auto ? auto.cat : (cfg.almacenCat || {}), prodMap = auto ? auto.prod : (cfg.almacenProd || {});
+    const n = norm(cfg), catMap = auto ? auto.cat : n.almacenCat, prodMap = auto ? auto.prod : n.almacenProd;
     const memo = new Map();
     return (pid, cat) => {
       const k = pid + '\u0001' + cat;
@@ -66,13 +75,14 @@
     const alms = list(cfg), prods = S.products.filter((p) => !p.deleted);
     const cats = [...new Set(P.rubros().concat(prods.map((p) => p.category)).filter((c) => c !== undefined))];
     const sug = suggestAll(prods);
-    let cat = { ...(configured(cfg) ? cfg.almacenCat || {} : sug.cat) }, prod = { ...(configured(cfg) ? cfg.almacenProd || {} : sug.prod) };
+    const n = norm(cfg);
+    let cat = { ...(configured(cfg) ? n.almacenCat : sug.cat) }, prod = { ...(configured(cfg) ? n.almacenProd : sug.prod) };
     const opt = (sel, none) => `${none ? `<option value="">${esc(none)}</option>` : ''}${alms.map((a) => `<option value="${esc(a.id)}" ${String(sel) === String(a.id) ? 'selected' : ''}>${esc(a.nombre)}</option>`).join('')}`;
     const sh = P.openSheet('<div id="almBox"></div>');
     const draw = () => {
       sh.el.querySelector('#almBox').innerHTML = `<div class="row"><h2 class="grow">🏬 Almacenes de la hoja de carga</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
         <p class="muted">La hoja de carga sale separada por almacén: cada almacén ve solo lo que sale de él. Elige el almacén de cada categoría; si un producto sale de otro almacén (ej. la Malta 207 o las latas), cámbialo abajo.</p>
-        ${configured(cfg) ? '' : '<div class="hint">Aún no se ha guardado: se muestra la <b>sugerencia</b> (refrescos, aguas, jugos Del Valle, Malta 222, cerveza 222 y Tóxica en el ALMACÉN 1; lo demás en el ALMACÉN 3). Revísala y toca «Guardar».</div>'}
+        ${configured(cfg) ? '' : '<div class="hint">Aún no se ha guardado: se muestra la <b>sugerencia</b> (refrescos, aguas, jugos Del Valle, Malta 222, cerveza 222 y Tóxica en el ALMACÉN 1; lo demás en el ALMACÉN 2). Revísala y toca «Guardar».</div>'}
         ${canEdit ? '<div class="toolbar"><button class="btn" id="almSug">✨ Sugerir de nuevo</button></div>' : ''}
         <table class="inv"><thead><tr><th>Categoría</th><th class="n">Productos</th><th>Almacén</th></tr></thead><tbody>
           ${cats.map((c) => `<tr><td>${P.rubroIcon(c)} <b>${esc(c || '(sin categoría)')}</b></td><td class="n">${prods.filter((p) => p.category === c).length}</td>

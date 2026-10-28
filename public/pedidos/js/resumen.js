@@ -114,6 +114,7 @@
       box.innerHTML = `
         ${st.err ? `<div class="hint warn">${esc(st.err)}</div>` : ''}
         ${st.stale && !st.err ? '<div class="hint">Actualizando…</div>' : ''}
+        <div id="rsGoals"></div>
         <div class="kpi-row" style="margin-top:10px">
           <div class="kpi"><small>Cajas liquidadas</small><b>${nf0.format(d.totals.cajas)}</b><small>${nf0.format(d.totals.unidades)} unidades sueltas · ${d.totals.clients} clientes</small></div>
           <div class="kpi"><small>En camino (sin liquidar)</small><b>${nf0.format(procTot)}</b><small>cajas · se suman al liquidar</small></div>
@@ -128,8 +129,7 @@
             ${rows.map((c) => { const x = cat.get(c) || { cajas: 0, unidades: 0 }, p = proc.get(c), ps = byProd(c); return `<tr><td><b>${esc(c)}</b>${ps.length ? `<details><summary class="muted" style="cursor:pointer">ver por producto</summary>${ps.map((q) => `<div class="muted" style="font-size:13px">${esc(q.code)} ${esc(q.name)} ${esc(q.presentation)} · <b>${nf0.format(q.cajas)}</b> cj${q.unidades ? ' + ' + nf0.format(q.unidades) + ' un' : ''}</div>`).join('')}</details>` : ''}</td>
               <td class="n" data-l="Cajas"><b>${nf0.format(x.cajas)}</b></td><td class="n" data-l="Unidades">${x.unidades ? nf0.format(x.unidades) : ''}</td><td class="n muted" data-l="En camino (cj)">${p ? nf0.format(p.cajas) : ''}</td></tr>`; }).join('')}
           </tbody><tfoot><tr><td>TOTAL MARCADAS</td><td class="n" data-l="Cajas">${nf0.format(sum.cajas)}</td><td class="n" data-l="Unidades">${nf0.format(sum.unidades)}</td><td class="n" data-l="En camino (cj)">${nf0.format(sum.proc)}</td></tr></tfoot></table></div>` : ''}
-        </div>
-        <div id="rsGoals"></div>`;
+        </div>`;
       const saveCats = () => lsSet('pv_res_cats', st.cats);
       const again = () => { saveCats(); paint(); };
       const cc = $('#rsCats'); if (cc) cc.onclick = (e) => { const b = e.target.closest('[data-c]'); if (!b) return; const c = b.dataset.c; st.cats = sel.has(c) ? st.cats.filter((x) => x !== c) : st.cats.concat(c); again(); };
