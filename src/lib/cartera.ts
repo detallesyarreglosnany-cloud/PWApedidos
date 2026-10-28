@@ -2,6 +2,7 @@
 import { db } from '@/lib/db';
 import { credInfo, diffDays, rulesAt, rulesOf, tramos, vzDay, type CredInfo, type CredSetting } from '@/lib/cobranza';
 import { abonoKey, allocate, noteKey, notaNum, noteStatus, r2, type Pago } from '@/lib/pagos';
+import { lineMoney } from '@/lib/money';
 
 const LIVE = ['espera', 'aprobado'];
 
@@ -24,7 +25,7 @@ type Ord = { id: string; deleted?: boolean; status?: string; clientId?: string; 
 type Cli = { id: string; name?: string; sellerId?: string; source?: string; createdAt?: string; deleted?: boolean };
 type Nota = ReturnType<typeof noteStatus> & { clientId: string; clientName: string; sellerId: string; sellerName: string; orderId: string; nota: string; key: string; monto: number; resta: number;
   pagado: number; espera: number; despacho: string; vence: string; dias: number; tramos: ReturnType<typeof tramos>; liquidado: boolean; seg: unknown };
-const money = (l: Line) => r2((Number(l.cajas) || 0) * (Number(l.boxPrice) || 0) + (Number(l.unidades) || 0) * (Number(l.unitPrice) || 0));
+const money = (l: Line) => lineMoney(l); // incluye el descuento de combo
 /** Cuentas por cobrar con vencimientos y el crédito de cada cliente (de un vendedor o de todos). */
 export async function cartera(sellerId: string) {
   const hoy = vzDay(new Date().toISOString());

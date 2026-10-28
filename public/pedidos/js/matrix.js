@@ -39,8 +39,18 @@
       cajas,
       unidades,
       totalUnidades: cajas * upb + unidades,
-      monto: r2(cajas * (+line.boxPrice || 0) + unidades * (+line.unitPrice || 0)),
+      monto: r2(cajas * (+line.boxPrice || 0) + unidades * (+line.unitPrice || 0) - lineDesc(line)),
     };
+  }
+  /**
+   * Descuento de combo de una línea (espejo de src/lib/money.ts): line.cmb = { cj, un, dcj, dun } dice cuántas cajas y
+   * unidades van en combo y cuánto se descuenta por cada una. Solo hasta esas cantidades; lo demás se cobra completo.
+   */
+  function lineDesc(l) {
+    const c = l && l.cmb; if (!c || typeof c !== 'object') return 0;
+    const cj = Math.max(0, +l.cajas || 0), un = Math.max(0, +l.unidades || 0);
+    const d = Math.min(cj, Math.max(0, +c.cj || 0)) * Math.max(0, +c.dcj || 0) + Math.min(un, Math.max(0, +c.un || 0)) * Math.max(0, +c.dun || 0);
+    return Math.min(d, cj * (+l.boxPrice || 0) + un * (+l.unitPrice || 0));
   }
 
   function orderTotals(order) {
@@ -193,5 +203,5 @@
     return encode(out, sep);
   }
 
-  global.Matrix = { build, toDelimited, toFlat, lineTotals, orderTotals, lineCode, unitCodeOf, r2 };
+  global.Matrix = { build, toDelimited, toFlat, lineTotals, orderTotals, lineDesc, lineCode, unitCodeOf, r2 };
 })(window);

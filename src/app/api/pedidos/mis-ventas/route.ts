@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { syncOk } from '@/lib/keys';
 import { sellerAccessOk } from '@/lib/pin';
+import { lineMoney } from '@/lib/money';
 
 // Resumen de ventas de UN vendedor (su pantalla «Mi quincena»): solo lectura, con la clave de sincronización
 // (igual que el kardex de vacíos del vendedor). Cuenta lo ENTREGADO en hojas con la liquidación CERRADA
@@ -23,7 +24,6 @@ type ProdDoc = { id: string; category?: string };
 const isDay = (s: unknown): s is string => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s);
 const num = (v: unknown) => Number(v) || 0;
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
-const lineMoney = (l: Line) => r2(num(l.cajas) * num(l.boxPrice) + num(l.unidades) * num(l.unitPrice));
 const loadDay = (l: LoadDoc) => (isDay(l.date) ? l.date : String(l.closedAt || '').slice(0, 10));
 const PROCESO = ['enviado', 'en_carga', 'en_espera', 'despachado'];
 

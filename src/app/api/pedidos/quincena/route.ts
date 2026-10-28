@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { requireReader } from '@/lib/keys';
+import { lineMoney } from '@/lib/money';
 
 // Reporte quincenal (Fase 2 · E5): solo cuenta lo ENTREGADO en hojas LIQUIDADAS
 // (liquidación cerrada; cada pedido trae lo entregado en ese cierre). Las hojas
@@ -30,7 +31,6 @@ const isDay = (s: unknown): s is string => typeof s === 'string' && /^\d{4}-\d{2
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 const num = (v: unknown) => Number(v) || 0;
 // Igual que la app (Matrix.lineTotals): cada línea se redondea a centavos antes de sumar
-const lineMoney = (l: Line) => r2(num(l.cajas) * num(l.boxPrice) + num(l.unidades) * num(l.unitPrice));
 const loadDay = (l: LoadDoc) => (isDay(l.date) ? l.date : String(l.closedAt || '').slice(0, 10));
 const loadCode = (l: LoadDoc) => (l.number ? 'C-' + String(l.number).padStart(5, '0') : '');
 

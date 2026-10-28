@@ -383,7 +383,7 @@
           <div><b>Hoja de carga</b>${esc(ctx.load ? Loads.loadCode(ctx.load) : '—')}</div>
         </div>
         <table><thead><tr><th>Código</th><th style="text-align:left">Descripción</th><th>Cajas</th><th>Unid.</th><th>P. caja $</th><th>P. unid. $</th><th>Subtotal $</th></tr></thead>
-          <tbody>${lines.map(({ l, x }) => `<tr><td>${esc(Matrix.lineCode({ ...l, ...x }))}</td><td>${esc(l.name)} ${esc(l.presentation)}${l.unitsPerBox > 1 ? ` <span class="muted">(x${l.unitsPerBox})</span>` : ''}</td>
+          <tbody>${lines.map(({ l, x }) => `<tr><td>${esc(Matrix.lineCode({ ...l, ...x }))}</td><td>${esc(l.name)} ${esc(l.presentation)}${l.unitsPerBox > 1 ? ` <span class="muted">(x${l.unitsPerBox})</span>` : ''}${Matrix.lineDesc({ ...l, ...x }) ? ` <b>· Desc. combo −${nf2.format(Matrix.lineDesc({ ...l, ...x }))}</b>` : ''}</td>
             <td class="num">${x.cajas || ''}</td><td class="num">${x.unidades || ''}</td>
             <td class="num">${l.boxPrice ? nf2.format(l.boxPrice) : '—'}</td><td class="num">${l.unitPrice ? nf2.format(l.unitPrice) : '—'}</td><td class="num">${nf2.format(x.monto)}</td></tr>`).join('')}</tbody>
           <tfoot><tr class="tot"><td colspan="2">TOTAL · ${t.items} renglones</td><td class="num">${t.cajas}</td><td class="num">${t.unidades}</td><td colspan="2" class="num">USD</td><td class="num">${nf2.format(t.monto)}</td></tr>
@@ -437,7 +437,7 @@
       ${row('Despachador:', load ? load.dispatcherName || '' : '')}
       <hr>
       ${lines.map(({ l, x }) => `<div class="ln"><div class="q">${esc(qty(x))}</div><div class="d">${esc(Matrix.lineCode({ ...l, ...x }))} ${esc(l.name)} ${esc(l.presentation || '')}</div></div>
-        ${opts.prices ? `<div class="pr">${[x.cajas ? `${x.cajas} × ${nf2.format(+l.boxPrice || 0)}` : '', x.unidades ? `${x.unidades} × ${nf2.format(+l.unitPrice || 0)}` : ''].filter(Boolean).join(' + ')} = <b>$ ${nf2.format(x.monto)}</b></div>` : ''}`).join('')}
+        ${opts.prices ? `<div class="pr">${[x.cajas ? `${x.cajas} × ${nf2.format(+l.boxPrice || 0)}` : '', x.unidades ? `${x.unidades} × ${nf2.format(+l.unitPrice || 0)}` : ''].filter(Boolean).join(' + ')}${Matrix.lineDesc({ ...l, ...x }) ? ` − combo ${nf2.format(Matrix.lineDesc({ ...l, ...x }))}` : ''} = <b>$ ${nf2.format(x.monto)}</b></div>` : ''}`).join('')}
       <hr>
       <div class="tot">${t.cajas} CJ + ${t.unidades} UN · ${t.bultos} bultos · ${t.items} renglones</div>
       ${opts.prices ? `<div class="tot big">TOTAL $ ${nf2.format(t.monto)}</div>${rate ? `<div class="tot">Bs ${nf2.format(t.monto * rate)} <span class="sm">(tasa ${nf2.format(rate)})</span></div>` : ''}` : ''}

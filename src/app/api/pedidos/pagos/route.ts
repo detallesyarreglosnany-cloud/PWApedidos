@@ -9,6 +9,7 @@ import { ROLES, userOf } from '@/lib/roles';
 import { sendPush } from '@/lib/push';
 import { createHash } from 'crypto';
 import { METHODS, REF_MIN, abonoKey, allocate, cleanPago, normRef, noteKey, notaNum, noteStatus, r2, type Pago } from '@/lib/pagos';
+import { lineMoney } from '@/lib/money';
 
 // Pagos de clientes (Fase 4 · cobranza).
 // POST /api/pedidos/pagos
@@ -201,7 +202,6 @@ export async function POST(req: NextRequest) {
       const loadIds = [...new Set(orows.flatMap((r) => { const o = JSON.parse(r.data) as { loadId?: string | null; delivery?: { loadId?: string } | null }; return [o.loadId, o.delivery && o.delivery.loadId].filter((x): x is string => !!x); }))];
       const lrows = loadIds.length ? await db.distDoc.findMany({ where: { kind: 'loads', id: { in: loadIds }, deleted: false }, select: { id: true, data: true } }) : [];
       const loadLabel = new Map(lrows.map((r) => { const l = JSON.parse(r.data) as { label?: string; number?: number }; return [r.id, `${l.label || ''}${l.number ? ' C-' + String(l.number).padStart(5, '0') : ''}`.trim()]; }));
-      const lineMoney = (l: Line) => r2((Number(l.cajas) || 0) * (Number(l.boxPrice) || 0) + (Number(l.unidades) || 0) * (Number(l.unitPrice) || 0));
       type Nota = { key: string; nota: string; orderId: string; date: string; monto: number; liquidado: boolean; hoja: string; manual: boolean };
       const notas = new Map<string, Nota>();
       for (const r of orows) {
@@ -272,7 +272,7 @@ export async function POST(req: NextRequest) {
         const o = oRow ? (JSON.parse(oRow.data) as { loadId?: string; deleted?: boolean; clientName?: string; lines?: Record<string, { cajas?: number; unidades?: number; boxPrice?: number; unitPrice?: number }> }) : null;
         if (!o || o.deleted || o.loadId !== loadId) return { error: 'Ese pedido ya no está en esta hoja: actualiza la pantalla', status: 409 };
         const now = new Date().toISOString(), prevAt = String(rows[0].updatedAt || l.updatedAt || '');
-        const monto = r2(Object.values(o.lines || {}).reduce((a, x) => a + r2((Number(x.cajas) || 0) * (Number(x.boxPrice) || 0) + (Number(x.unidades) || 0) * (Number(x.unitPrice) || 0)), 0));
+        const monto = r2(Object.values(o.lines || {}).reduce((a, x) => a + lineMoney(x), 0));
         const rev = { ...(l.cobRev || {}) };
         if (estado) rev[orderId] = { estado, nota, by: actor || 'Oficina', at: now, monto }; else delete rev[orderId];
         // Versión por campo: lo demás conserva su hora; cobRev queda con la de ahora (así gana al fusionar)
@@ -333,7 +333,7 @@ export async function POST(req: NextRequest) {
       const ab = allocate(pagos, canon), sobre: Item[] = [];
       for (const o of orders) {
         const d = o.delivery && o.delivery.at ? o.delivery : null; if (d && d.result === 'anulada') continue;
-        const monto = d ? r2(Number(d.monto) || 0) : r2(Object.values(o.lines || {}).reduce((a, l) => a + (Number(l.cajas) || 0) * (Number(l.boxPrice) || 0) + (Number(l.unidades) || 0) * (Number(l.unitPrice) || 0), 0));
+        const monto = d ? r2(Number(d.monto) || 0) : r2(Object.values(o.lines || {}).reduce((a, l) => a + lineMoney(l), 0));
         const a = ab.get(abonoKey(canon(String(o.clientId)), { nota: notaOf(o), orderId: o.id }));
         if (a && monto > 0 && a.pagado > monto + 0.01) { const p = pagos.find((x) => x.id === a.pagos[a.pagos.length - 1]); if (p) sobre.push({ ...item(p, `Nota ${notaOf(o) || '—'} de $${monto.toFixed(2)} tiene abonado $${a.pagado.toFixed(2)} (sobran $${(a.pagado - monto).toFixed(2)})`), clientName: String(o.clientName || p.clientName) }); }
       }
