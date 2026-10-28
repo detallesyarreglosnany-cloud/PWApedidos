@@ -121,6 +121,18 @@ export function allocate(pagos: Pago[], canon: (id: string) => string = (id) => 
   return out;
 }
 /** Estado de una nota según su monto y lo abonado. */
+/**
+ * «Pago cargado al sistema»: el vendedor, la oficina o cobranzas indican que la nota ya se pagó completa en el sistema
+ * de cobranzas de la empresa (sin detalles del pago). La nota sale de la deuda y cuenta como pagada a tiempo
+ * si la fecha del pago es hasta su vencimiento; si es después, cuenta esos días de atraso en su crédito (semáforo).
+ * Se guarda en DistSetting «cargado:<cliente>:<nota>».
+ */
+export type Cargado = { fecha: string; by: string; rol: string; at: string; monto: number; nota: string; orderId: string; sellerId: string; clientName: string; vence?: string; atraso?: number };
+export const cargadoName = (clientId: string, key: string) => `cargado:${clientId}:${key}`;
+export function cargadoStatus(c: Cargado) {
+  const at = Number(c.atraso) || 0;
+  return { estado: 'pagada', resta: 0, texto: `✅ Pago cargado al sistema el ${c.fecha.split('-').reverse().join('/')} · ${at > 0 ? `${at} día${at === 1 ? '' : 's'} de atraso` : 'a tiempo'}${c.by ? ' · ' + c.by : ''}`, cargado: c };
+}
 export function noteStatus(monto: number, a?: Abono | null) {
   const pagado = a ? a.pagado : 0, aprobado = a ? a.aprobado : 0, espera = a ? a.espera : 0;
   const resta = r2(Math.max(0, monto - pagado));

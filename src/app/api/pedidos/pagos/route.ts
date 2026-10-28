@@ -3,12 +3,12 @@ import { Prisma } from '@prisma/client';
 import { db } from '@/lib/db';
 import { isAdminReq, isSupervisorReq, requireAdmin, syncOk } from '@/lib/keys';
 import { sellerAccessOk } from '@/lib/pin';
-import { SEGUIMIENTO, type CredSetting } from '@/lib/cobranza';
+import { SEGUIMIENTO, diffDays, rulesAt, rulesOf, tramos, vzDay, type CredSetting } from '@/lib/cobranza';
 import { cartera, clientAliases } from '@/lib/cartera';
 import { ROLES, userOf } from '@/lib/roles';
 import { sendPush } from '@/lib/push';
 import { createHash } from 'crypto';
-import { METHODS, REF_MIN, abonoKey, allocate, cleanPago, normRef, noteKey, notaNum, noteStatus, r2, type Pago } from '@/lib/pagos';
+import { cargadoName, cargadoStatus, type Cargado, METHODS, REF_MIN, abonoKey, allocate, cleanPago, normRef, noteKey, notaNum, noteStatus, r2, type Pago } from '@/lib/pagos';
 import { lineMoney } from '@/lib/money';
 
 // Pagos de clientes (Fase 4 · cobranza).
@@ -228,7 +228,9 @@ export async function POST(req: NextRequest) {
       // Lo que vale de una nota a mano es lo que se dijo la primera vez (el mayor monto registrado)
       for (const p of pagos) for (const n of p.notas) { const x = notas.get(noteKey(n)); if (x && x.manual && n.monto > x.monto) x.monto = n.monto; }
       const ab = allocate(pagos, canon);
-      const list = [...notas.values()].map((n) => { const a = ab.get(`${canon(clientId)}|${n.key}`); return { ...n, pagado: a ? a.pagado : 0, aprobado: a ? a.aprobado : 0, espera: a ? a.espera : 0, ...noteStatus(n.monto, a) }; })
+      const carRows = await db.$queryRaw<{ name: string; value: string }[]>`SELECT "name", "value" FROM "DistSetting" WHERE "name" LIKE ${'cargado:' + canon(clientId).replace(/[\\%_]/g, '\\$&') + ':%'}`;
+      const car = new Map(carRows.map((r) => [r.name, JSON.parse(r.value) as Cargado]));
+      const list = [...notas.values()].map((n) => { const a = ab.get(`${canon(clientId)}|${n.key}`), c = car.get(cargadoName(canon(clientId), n.key)); return { ...n, pagado: a ? a.pagado : 0, aprobado: a ? a.aprobado : 0, espera: a ? a.espera : 0, ...(c ? cargadoStatus(c) : noteStatus(n.monto, a)) }; })
         .sort((a, b) => (a.estado === 'pagada' ? 1 : 0) - (b.estado === 'pagada' ? 1 : 0) || String(b.date).localeCompare(String(a.date)));
       return NextResponse.json({ notas: list, deuda: r2(list.reduce((a, n) => a + n.resta, 0)), enEspera: r2(list.reduce((a, n) => a + n.espera, 0)) }, { headers: NO_STORE });
     }
@@ -251,7 +253,10 @@ export async function POST(req: NextRequest) {
           AND EXISTS (SELECT 1 FROM jsonb_array_elements("data"::jsonb -> 'notas') n WHERE regexp_replace(regexp_replace(COALESCE(n ->> 'nota', ''), '\D', '', 'g'), '^0+(?=\d)', '') = ANY(${nums}) OR n ->> 'orderId' = ANY(${oids}))` : [];
       const ab = allocate(rows.map(parse), canon);
       const byKey: Record<string, unknown> = {}, byIdx: unknown[] = [];
-      for (const w of want) { const a = w.clientId ? ab.get(abonoKey(w.clientId, w)) : undefined; const x = { pagado: a ? a.pagado : 0, aprobado: a ? a.aprobado : 0, ...noteStatus(w.monto, a) }; byKey[noteKey(w)] = x; byIdx.push(x); }
+      const cnames = want.filter((w) => w.clientId).map((w) => cargadoName(w.clientId, noteKey(w)));
+      const crows = cnames.length ? await db.distSetting.findMany({ where: { name: { in: cnames } } }) : [];
+      const car = new Map(crows.map((r) => [r.name, JSON.parse(r.value) as Cargado]));
+      for (const w of want) { const a = w.clientId ? ab.get(abonoKey(w.clientId, w)) : undefined, c = w.clientId ? car.get(cargadoName(w.clientId, noteKey(w))) : undefined; const x = { pagado: a ? a.pagado : 0, aprobado: a ? a.aprobado : 0, ...(c ? cargadoStatus(c) : noteStatus(w.monto, a)) }; byKey[noteKey(w)] = x; byIdx.push(x); }
       return NextResponse.json({ byKey, byIdx }, { headers: NO_STORE });
     }
 
@@ -390,6 +395,41 @@ export async function POST(req: NextRequest) {
         try { await sendPush('seller', cl.sellerId, [{ title: '🚦 Crédito actualizado', body: `${cl.name || 'Cliente'}: ${txt}${v.nota ? ' — ' + v.nota : ''}`.slice(0, 300), tag: `cred-${clientId}` }]); } catch (e) { console.warn('[push credito]', e); }
       }
       return NextResponse.json({ ok: true, credito: v });
+    }
+
+    if (action === 'cargado') {
+      // «Pago cargado al sistema»: la nota ya se pagó completa en el sistema de cobranzas de la empresa (sin detalles).
+      // Sale de la deuda y no afecta el semáforo. Lo marcan el vendedor del cliente, la oficina o cobranzas; deshacer: oficina o cobranzas.
+      const orderId = str(body.orderId, 120), fecha = str(body.fecha, 10), deshacer = !!body.deshacer;
+      const row = orderId ? await db.distDoc.findUnique({ where: { kind_id: { kind: 'orders', id: orderId } }, select: { data: true } }) : null;
+      type L = Parameters<typeof lineMoney>[0] & { category?: string };
+      const o = row ? (JSON.parse(row.data) as { id: string; clientId?: string; clientName?: string; sellerId?: string; sellerName?: string; status?: string; deleted?: boolean; valeryNote?: string; routeDate?: string; dispatchedAt?: string; lines?: Record<string, L>; delivery?: { at?: string; monto?: number; result?: string; newValery?: string; lines?: Record<string, L> } | null }) : null;
+      if (!o || o.deleted) return NextResponse.json({ error: 'No existe esa nota' }, { status: 404 });
+      if (!isCob) {
+        if (String(o.sellerId || '') !== str(body.sellerId, 120)) return NextResponse.json({ error: 'Es una nota de otro vendedor' }, { status: 403 });
+        if (!(await sellerAccessOk(req, String(o.sellerId)))) return NextResponse.json({ error: 'PIN', pin: true }, { status: 401 });
+        if (deshacer) return NextResponse.json({ error: 'Para deshacerlo, pide a la oficina o a cobranzas' }, { status: 403 });
+      }
+      const d = o.delivery && o.delivery.at ? o.delivery : null;
+      if (!d && o.status !== 'despachado') return NextResponse.json({ error: 'La nota aún no está despachada' }, { status: 409 });
+      const { canon } = await clientAliases();
+      const nota = notaNum((d && d.newValery) || o.valeryNote), name = cargadoName(canon(String(o.clientId)), noteKey({ nota, orderId: o.id }));
+      if (deshacer) { await db.distSetting.deleteMany({ where: { name } }); return NextResponse.json({ ok: true }); }
+      const hoy = new Date(Date.now() - 4 * 3600000).toISOString().slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha) || fecha > hoy) return NextResponse.json({ error: 'Pon la fecha del pago (no puede ser futura)' }, { status: 400 });
+      const monto = d ? r2(Number(d.monto) || 0) : r2(Object.values(o.lines || {}).reduce((a, l) => a + lineMoney(l), 0));
+      // ¿Pagó dentro del plazo? Vencimiento con los mismos plazos de la cuenta por cobrar (por categoría, desde el despacho)
+      const cfgRow = await db.distDoc.findUnique({ where: { kind_id: { kind: 'config', id: 'main' } }, select: { data: true } });
+      const R = rulesOf(cfgRow ? JSON.parse(cfgRow.data) : null), src = (d && d.lines) || o.lines || {}, pids = Object.keys(src);
+      const prows = pids.length ? await db.distDoc.findMany({ where: { kind: 'products', id: { in: pids } }, select: { id: true, data: true } }) : [];
+      const cat = new Map(prows.map((p) => [p.id, String((JSON.parse(p.data) as { category?: string }).category || '')]));
+      const start = vzDay(o.dispatchedAt || (d && d.at) || '') || String(o.routeDate || '');
+      const tr = tramos(Object.entries(src).map(([pid, l]) => ({ category: cat.get(pid) || String(l.category || ''), monto: lineMoney(l) })).filter((l) => l.monto > 0), start, rulesAt(R, start), 0);
+      const vence = tr.length ? tr[tr.length - 1].vence : start, atraso = Math.max(0, diffDays(vence, fecha));
+      const v: Cargado = { fecha, by: actor || str(body.by, 80) || (isAdmin ? 'Oficina' : String(o.sellerName || 'Vendedor')), rol: isAdmin ? 'oficina' : isCob ? 'cobranzas' : 'vendedor', at: new Date().toISOString(), monto, nota, orderId: o.id, sellerId: String(o.sellerId || ''), clientName: String(o.clientName || ''), vence, atraso };
+      await db.$executeRaw`INSERT INTO "DistSetting" ("name", "value") VALUES (${name}, ${JSON.stringify(v)}) ON CONFLICT ("name") DO UPDATE SET "value" = EXCLUDED."value"`;
+      if (!isCob) { try { await sendPush('office', null, [{ title: '✅ Pago cargado al sistema', body: `${v.by} · ${v.clientName}${nota ? ' · nota ' + nota : ''} · $${monto.toFixed(2)} · ${fecha}${atraso ? ` · ${atraso} días de atraso` : ' · a tiempo'}`.slice(0, 300), tag: `car-${o.id}` }]); } catch (e) { console.warn('[push cargado]', e); } }
+      return NextResponse.json({ ok: true, cargado: v });
     }
 
     if (action === 'seguir') {

@@ -368,14 +368,88 @@
 
   /* ---------------- Oficina y Gerencia: Promoción y marketing ---------------- */
   const PALETTE = [356, 14, 28, 42, 95, 150, 175, 205, 230, 265, 300, 330];
+  /* ---------------- PIN de la sección: solo quien tiene el PIN la construye ---------------- */
+  const LOCK_MIN = 30; // sin usarla 30 minutos, se vuelve a pedir el PIN
+  const lsGet2 = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+  const lsSet2 = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* noop */ } };
+  function pinState(root) {
+    const P = PV(), S = P.S, st = (S.ui.mktPin = S.ui.mktPin || { has: null, ok: null, at: 0 });
+    if (S.settings.mktToken && Date.now() - (+lsGet2('pv_mktAt') || 0) > LOCK_MIN * 60000 && +lsGet2('pv_mktAt')) { P.saveSettings({ mktToken: '' }); st.ok = null; }
+    if (st.has !== null && Date.now() - st.at < 120000) return st;
+    const known = lsGet2('pv_mktPin');
+    if (st.has === null) { st.has = known === '1' ? true : known === '0' ? false : null; st.ok = st.has === false || !!S.settings.mktToken; }
+    global.Sync.mktCall({ action: 'estado' }).then(async (r) => {
+      if (!r.ok) { if (st.has === null) { st.has = !!S.settings.mktToken; st.ok = !!S.settings.mktToken; st.at = Date.now(); render(root); } return; }
+      const was = JSON.stringify([st.has, st.ok]);
+      st.has = r.data.hasPin; st.ok = r.data.ok; st.at = Date.now(); lsSet2('pv_mktPin', r.data.hasPin ? '1' : '0');
+      if (!r.data.ok && S.settings.mktToken) await P.saveSettings({ mktToken: '' });
+      if (was !== JSON.stringify([st.has, st.ok]) && root.isConnected) render(root);
+    });
+    return st;
+  }
+  function gate(root) {
+    const P = PV(), { esc, toast } = P, ger = esGerencia();
+    root.innerHTML = `<div class="card card-pad mk-gate"><h2 style="margin-top:0">🔒 Promoción y marketing</h2>
+        <p class="muted">Esta sección está protegida: solo quien tiene el PIN la construye (vitrinas, banners, combos, campaña y lanzamiento).</p>
+        <div class="row wrap" style="gap:8px;align-items:flex-end"><label class="field"><span>PIN</span><input id="mgPin" class="input" type="password" inputmode="numeric" maxlength="6" autocomplete="off" style="max-width:160px"></label>
+          <button class="btn btn-primary" id="mgGo">🔓 Entrar</button></div><p id="mgErr" class="warn-txt"></p></div>
+      ${ger ? '<div class="section-title">🎁 Combos por autorizar (Gerencia, sin PIN)</div><div id="mgCombos"></div>' : ''}`;
+    const q = (x) => root.querySelector(x);
+    const go = async () => {
+      q('#mgErr').textContent = '';
+      const r = await global.Sync.mktCall({ action: 'entrar', pin: q('#mgPin').value.trim() });
+      if (!r.ok) { q('#mgErr').textContent = r.error || 'No se pudo entrar'; return; }
+      await P.saveSettings({ mktToken: r.data.token }); lsSet2('pv_mktAt', String(Date.now()));
+      const st = P.S.ui.mktPin; st.ok = true; st.at = Date.now();
+      toast('🔓 Sección abierta', 'ok'); P.runSync(false); render(root);
+    };
+    q('#mgGo').onclick = go; q('#mgPin').onkeydown = (e) => { if (e.key === 'Enter') go(); };
+    if (ger) {
+      const box = q('#mgCombos'); listCombos(box, true);
+      box.onclick = (e) => { const ap = e.target.closest('[data-cap]'), rj = e.target.closest('[data-crj]'); if (ap) decideCombo(ap.dataset.cap, true).then(() => render(root)); if (rj) decideCombo(rj.dataset.crj, false).then(() => render(root)); };
+    }
+    setTimeout(() => { const i = q('#mgPin'); if (i) i.focus(); }, 60);
+  }
+  function pinBar(st) {
+    const P = PV(), adm = !!(P.S.settings && P.S.settings.adminKey && location.hash.startsWith('#/oficina'));
+    if (!st.has) return adm ? '<div class="hint warn">🔐 <b>Protege esta sección con tu PIN</b>: así solo tú construyes las vitrinas, banners, combos y el lanzamiento. <button class="btn btn-sm btn-primary" id="mpNew">Crear PIN</button></div>' : '';
+    return '<div class="row" style="justify-content:flex-end;gap:6px;margin-bottom:6px"><span class="muted" style="align-self:center">🔓 Abierta con tu PIN</span><button class="btn btn-sm" id="mpChg">Cambiar PIN</button><button class="btn btn-sm" id="mpLock">🔒 Cerrar sección</button></div>';
+  }
+  function pinBarWire(root) {
+    const P = PV(), { toast } = P, q = (x) => root.querySelector(x);
+    const ask = (title, cb) => {
+      const sh = P.openSheet(`<div class="row"><h2 class="grow">${title}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+        <label class="field"><span>PIN nuevo (4 a 6 números)</span><input id="mpA" class="input" type="password" inputmode="numeric" maxlength="6" autocomplete="off"></label>
+        <label class="field"><span>Repite el PIN</span><input id="mpB" class="input" type="password" inputmode="numeric" maxlength="6" autocomplete="off"></label>
+        <p class="muted" style="font-size:13px">Si lo olvidas, se restablece con la clave del desarrollador.</p><p id="mpE" class="warn-txt"></p>
+        <div class="actions"><button class="btn btn-primary" id="mpOk">Guardar PIN</button></div>`);
+      sh.el.querySelector('#mpOk').onclick = async () => {
+        const a = sh.el.querySelector('#mpA').value.trim(), b = sh.el.querySelector('#mpB').value.trim(), e = sh.el.querySelector('#mpE');
+        if (!/^\d{4,6}$/.test(a)) { e.textContent = 'El PIN es de 4 a 6 números'; return; }
+        if (a !== b) { e.textContent = 'Los dos PIN no coinciden'; return; }
+        const r = await cb(a); if (!r.ok) { e.textContent = r.error || 'No se pudo guardar'; return; }
+        await P.saveSettings({ mktToken: r.data.token }); lsSet2('pv_mktAt', String(Date.now())); lsSet2('pv_mktPin', '1');
+        const st = P.S.ui.mktPin; st.has = true; st.ok = true; st.at = Date.now();
+        sh.close(); toast('🔐 PIN guardado: solo tú construyes esta sección', 'ok'); P.logEvent('marketing', 'PIN de Promoción y marketing ' + (title.includes('Cambiar') ? 'cambiado' : 'creado')); render(root);
+      };
+    };
+    const nw = q('#mpNew'); if (nw) nw.onclick = () => ask('🔐 Crear PIN de la sección', (pin) => global.Sync.mktCall({ action: 'crear', pin }));
+    const ch = q('#mpChg'); if (ch) ch.onclick = () => ask('🔐 Cambiar PIN de la sección', (pin) => global.Sync.mktCall({ action: 'cambiar', pin }));
+    const lk = q('#mpLock'); if (lk) lk.onclick = async () => { await P.saveSettings({ mktToken: '' }); const st = P.S.ui.mktPin; st.ok = false; st.at = Date.now(); toast('🔒 Sección cerrada', 'ok'); render(root); };
+  }
+
   function render(root) {
     const P = PV(), S = P.S, { esc } = P, ui = (S.ui.mkt = S.ui.mkt || { tab: 'vitrinas' }), d = data();
+    const st = pinState(root);
+    if (st.has && !st.ok) return gate(root);
+    if (st.has) lsSet2('pv_mktAt', String(Date.now()));
     const tab = S.ui.mktTab || ui.tab || 'campana';
     root.innerHTML = `<div class="toolbar"><div class="seg">${[['campana', '🎄 Campaña'], ['vitrinas', '🛍 Vitrinas'], ['mezclas', '🍹 Mezclas'], ['combos', '🎁 Combos'], ['ganancia', '💰 Ganancia bodega'], ['impacto', '📈 Impacto vitrina'], ['resultados', '📊 Resultados']].map(([k, l]) => `<button type="button" class="${tab === k ? 'active' : ''}" data-mt="${k}">${l}</button>`).join('')}</div><span class="grow"></span>
         ${tab === 'vitrinas' ? '<button class="btn btn-primary" id="mkNew">＋ Nueva vitrina</button>' : tab === 'mezclas' ? '<button class="btn btn-primary" id="mkNewX">＋ Nueva mezcla</button>' : tab === 'combos' ? '<button class="btn btn-primary" id="mkNewC">＋ Nuevo combo</button>' : ''}</div>
-      ${d.saved ? '' : '<div class="hint">✨ Estas son las <b>vitrinas sugeridas</b>. Edítalas a tu gusto: al guardar el primer cambio quedan como las de la empresa y les llegan a todos los vendedores.</div>'}
+      ${pinBar(st)}${d.saved ? '' : '<div class="hint">✨ Estas son las <b>vitrinas sugeridas</b>. Edítalas a tu gusto: al guardar el primer cambio quedan como las de la empresa y les llegan a todos los vendedores.</div>'}
       <div id="mkBody"></div>`;
     const body = root.querySelector('#mkBody');
+    pinBarWire(root);
     if (tab === 'vitrinas') listVitrinas(body);
     else if (tab === 'mezclas') listMezclas(body);
     else if (tab === 'combos') listCombos(body);
@@ -429,14 +503,14 @@
     if (c.estado === 'rechazado') return `<span class="status over">❌ Rechazado${c.motivo ? ': ' + PV().esc(c.motivo) : ''}</span>`;
     return '<span class="status espera">⏳ Espera autorización de Gerencia</span>';
   }
-  function listCombos(body) {
-    const P = PV(), { esc, usd } = P, d = data(), ger = esGerencia();
+  function listCombos(body, soloAprobar) {
+    const P = PV(), { esc, usd } = P, d = data(), ger = esGerencia(); // soloAprobar: Gerencia sin PIN (sin editar)
     body.innerHTML = `<p class="muted">El combo se arma con productos reales y su precio. <b>Solo Gerencia lo autoriza</b>; si alguien cambia productos, cantidades, regalos o precio, vuelve a autorización. El vendedor solo ve los autorizados y dentro de sus fechas. El ahorro que se anuncia es real: el sistema lo calcula con los precios.</p>
       <div class="mk-list">${d.combos.map((c) => { const al = comboAlloc(c, catPrices), miss = (c.items || []).filter((it) => !P.productById(it.pid));
         return `<div class="mk-card"><div class="mk-sw">${esc(c.icono || '🎁')}</div><div class="grow"><b>${esc(c.nombre)}</b> ${estadoCombo(c)}${c.desde || c.hasta ? ` <span class="status ${enFecha(c) ? 'en_carga' : 'espera'}">📅 ${c.desde ? esc(P.fmtDate(c.desde)) : ''} – ${c.hasta ? esc(P.fmtDate(c.hasta)) : ''}</span>` : ''}
           <div class="muted">${(c.items || []).map((it) => { const p = P.productById(it.pid); return `${[+it.cajas ? it.cajas + ' cj' : '', +it.unidades ? it.unidades + ' un' : ''].filter(Boolean).join(' + ')} ${p ? esc(p.name + ' ' + (p.presentation || '')) : `<span class="warn-txt">«${esc(it.q || '?')}» sin producto</span>`}${it.regalo ? ' 🎁' : ''}`; }).join(' + ')}</div>
           <small>${al ? `Por separado ${usd(al.S)} · <b>combo ${usd(+c.precio || 0)}</b>${al.D > 0 ? ` · ahorra ${usd(al.D)} (${Math.round((al.D / al.S) * 100)}%)` : ''}` : '<span class="warn-txt">Falta elegir productos o el precio</span>'}${c.incluye ? ' · ✨ ' + esc(c.incluye) : ''}</small>${miss.length ? '<br><small class="warn-txt">Elige los productos que faltan antes de autorizar</small>' : ''}</div>
-          <div class="row" style="gap:4px">${ger && !comboOk(c) && al && !miss.length ? `<button class="btn btn-sm btn-ok" data-cap="${esc(c.id)}">✅ Autorizar</button><button class="btn btn-sm btn-danger" data-crj="${esc(c.id)}">❌ Rechazar</button>` : ''}${ger && comboOk(c) ? `<button class="btn btn-sm btn-danger" data-crj="${esc(c.id)}">⏸ Retirar</button>` : ''}<button class="btn btn-sm btn-primary" data-ec="${esc(c.id)}">✎ Editar</button></div></div>`; }).join('') || '<p class="muted">Sin combos. Crea uno o carga la campaña navideña en «🎄 Campaña».</p>'}</div>`;
+          <div class="row" style="gap:4px">${ger && !comboOk(c) && al && !miss.length ? `<button class="btn btn-sm btn-ok" data-cap="${esc(c.id)}">✅ Autorizar</button><button class="btn btn-sm btn-danger" data-crj="${esc(c.id)}">❌ Rechazar</button>` : ''}${ger && comboOk(c) ? `<button class="btn btn-sm btn-danger" data-crj="${esc(c.id)}">⏸ Retirar</button>` : ''}${soloAprobar ? '' : `<button class="btn btn-sm btn-primary" data-ec="${esc(c.id)}">✎ Editar</button>`}</div></div>`; }).join('') || '<p class="muted">Sin combos. Crea uno o carga la campaña navideña en «🎄 Campaña».</p>'}</div>`;
   }
   async function decideCombo(id, ok) {
     const P = PV(), c = data().combos.find((x) => x.id === id); if (!c) return;

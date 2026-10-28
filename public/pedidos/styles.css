@@ -756,3 +756,11 @@ tr.agotado-row td { opacity: .65; }
 .mk-conc p { margin: 6px 0; line-height: 1.45; }
 .mk-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin: 10px 0; }
 .mk-cards h3 { margin: 0 0 4px; }
+.mk-gate { max-width: 560px; }
+
+/* Búsqueda rápida de cobros */
+.cb-filtro { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; }
+.cb-filtro > .input { font-size: 17px; }
+.cb-chips { flex-wrap: wrap; overflow: visible; }
+.cb-date { display: inline-flex; align-items: center; gap: 6px; }
+.cb-date input { background: transparent; border: 0; color: inherit; font: inherit; max-width: 150px; }

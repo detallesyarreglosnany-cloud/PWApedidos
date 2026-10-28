@@ -232,6 +232,7 @@
     if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
     if (cfg.adminKey) headers['x-admin-key'] = cfg.adminKey;
     if (cfg.supervisorKey) headers['x-supervisor-key'] = cfg.supervisorKey;
+    if (cfg.mktToken) headers['x-mkt-token'] = cfg.mktToken; // permiso del PIN de Promoción y marketing
     await withUser(headers, cfg);
 
     // Vercel rechaza cuerpos de más de 4,5 MB en ambos sentidos: la subida va
@@ -465,6 +466,16 @@
     return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/' + name), headers, body || {});
   }
   /** Suscripción a avisos push (/api/pedidos/push). La oficina se identifica con su clave admin. */
+  /** PIN de Promoción y marketing (/api/pedidos/marketing). */
+  async function mktCall(body) {
+    if (!navigator.onLine) return { ok: false, offline: true, error: 'Sin internet' };
+    const cfg = await settings();
+    if (!cfg.syncKey) return { ok: false, error: 'Falta la clave de sincronización' };
+    const headers = { 'Content-Type': 'application/json', 'x-sync-key': cfg.syncKey };
+    if (cfg.adminKey) headers['x-admin-key'] = cfg.adminKey;
+    if (cfg.mktToken) headers['x-mkt-token'] = cfg.mktToken;
+    return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/marketing'), headers, { ...body, deviceId: await deviceId() });
+  }
   async function pushCall(body, asOffice) {
     const cfg = await settings();
     if (!cfg.syncKey) return { ok: false, error: 'Falta la clave de sincronización' };
@@ -659,5 +670,5 @@
     return n;
   }
 
-  global.Sync = { KINDS, OFFICE_ORDER_FIELDS, OFFICE_ORDER_STATUS, isLocked, syncNow, pruneLocal, usersCall, pendingCount, diagnose, forceUpload, redownload, hasCursor, reserveNumbers, adminCall, readerCall, report, pushCall, keysCall, myVacios, myVentas, metas, actividad, pinCall, sellerToken, pagosCall, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
+  global.Sync = { KINDS, OFFICE_ORDER_FIELDS, OFFICE_ORDER_STATUS, isLocked, syncNow, pruneLocal, usersCall, pendingCount, diagnose, forceUpload, redownload, hasCursor, reserveNumbers, adminCall, readerCall, report, pushCall, mktCall, keysCall, myVacios, myVentas, metas, actividad, pinCall, sellerToken, pagosCall, serverBackup, exportBundle, importBundle, deviceId, DEFAULT_SYNC_URL };
 })(window);
