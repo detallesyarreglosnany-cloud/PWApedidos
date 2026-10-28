@@ -564,7 +564,7 @@ export async function POST(req: NextRequest) {
               const p = prev.get(c.id), nom = String(c.nombre || 'Combo'), pr = `$${Number(c.precio || 0).toFixed(2)}`;
               if (comboOk(c) && !(p && comboOk(p))) {
                 extraNotices.push({ id: doc.id, n: { to: 'office', sellerId: '', msg: { title: '✅ Gerencia autorizó un combo', body: `${nom} · ${pr}`, tag: `cmb-${c.id}` } } });
-                extraNotices.push({ id: doc.id, n: { to: 'seller', sellerId: '*', msg: { title: '🎁 Nuevo combo para ofrecer', body: `${nom} · combo ${pr}. Míralo en 🛍 Vitrina.`, tag: `cmb-${c.id}` } } });
+                if (((doc as Rec).lanzamiento as Rec | undefined)?.lanzada) extraNotices.push({ id: doc.id, n: { to: 'seller', sellerId: '*', msg: { title: '🎁 Nuevo combo para ofrecer', body: `${nom} · combo ${pr}. Míralo en 🛍 Vitrina.`, tag: `cmb-${c.id}` } } });
               } else if (!comboOk(c) && c.estado === 'pendiente' && (!p || comboV(p) !== comboV(c) || comboOk(p) || p.estado !== 'pendiente')) {
                 extraNotices.push({ id: doc.id, n: { to: 'gerencia', sellerId: '', msg: { title: '🎁 Combo por autorizar', body: `${nom} · ${pr}`, tag: `cmb-${c.id}` } } });
               }
