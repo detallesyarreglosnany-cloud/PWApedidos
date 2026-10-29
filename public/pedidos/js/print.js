@@ -160,7 +160,7 @@
   function loadSheetHTML(load, orders, ctx) {
     const cfg = ctx.config;
     // Separada por almacén (cada almacén ve lo que sale de él) y cada categoría de mayor a menor tamaño
-    const m = Matrix.build(orders, 'bultos', { keepOrder: true, money: false, rubros: cfg.rubros, productRank: ctx.productRank, almacen: ctx.almacen });
+    const m = Matrix.build(orders, 'bultos', { keepOrder: true, money: false, rubros: cfg.rubros, productRank: ctx.productRank, almacen: ctx.almacen, sizeOrder: ctx.sizeOrder });
     const u = ctx.usage;
     // DEVOLUCIÓN: lo que el camión trae de la última liquidación del despachador; A CARGAR = TOTAL − DEVOLUCIÓN
     const devRows = (ctx.carry && ctx.carry.rows) || {}, devOf = (r) => +devRows[r.productId + '|' + r.um] || 0;

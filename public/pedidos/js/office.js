@@ -24,6 +24,7 @@
 
   const productRank = () => Object.fromEntries(S.products.map((p) => [p.id, +p.sort || 9999]));
   const almRes = () => (window.Almacen ? Almacen.resolver(S.config, S.products) : undefined); // hoja separada por almacén
+  const sizeOrd = () => (window.Almacen ? Almacen.sizeOrder(S.config) : undefined); // orden de presentaciones (2 L, 1,5 L, 1 L, 1,25 L…)
   const byIdMap = (arr) => new Map(arr.map((x) => [x.id, x]));
 
   /* ============================== Shell ============================== */
@@ -292,6 +293,7 @@
         <button class="btn btn-primary" id="lOrder">➕ Nuevo pedido</button>
         <button class="btn" id="lNew">＋ Nueva hoja</button>
         <button class="btn" id="lSync">⟳ Actualizar</button>
+        ${roGer() ? '' : '<button class="btn" id="lAudit" title="Revisa hojas, liquidaciones, notas y envases (no cambia nada)">🔎 Auditoría</button>'}
       </div>
       ${S.sellers.filter(pausedUntil).map((x) => `<div class="hint warn">⏸ <b>${esc(x.name)}</b> en pausa de pedidos hasta ${esc(fmtPause(pausedUntil(x)))} · ${pendingOf(x.id).clients} clientes / ${nf0.format(pendingOf(x.id).cajas)} cajas por despachar <button type="button" class="btn btn-sm btn-ok" data-resume="${esc(x.id)}">▶ Reactivar</button></div>`).join('')}
       ${sid && !pausedUntil(sellerById(sid)) ? `<div class="row" style="justify-content:flex-end"><button type="button" class="btn btn-sm" data-pause="${esc(sid)}">⏸ Suspender pedidos de ${esc((sellerById(sid) || {}).name || '')}</button></div>` : ''}
@@ -314,6 +316,7 @@
 
     $('#lSeller').onchange = (e) => { U().loadSeller = e.target.value; renderLoads(root); };
     $('#lSync').onclick = () => PV.runSync(true);
+    const la = $('#lAudit'); if (la) la.onclick = () => Auditoria.sheet();
     $('#lNew').onclick = () => newLoadDialog(root);
     $('#lOrder').onclick = () => officeOrderDialog(() => renderLoads(root));
     root.onclick = async (e) => {
@@ -406,7 +409,7 @@
     const closed = Loads.isClosed(load);
     const editableLoad = !st.locked && !closed && !roGer();
     const edit = editableLoad && U().editQty;
-    const m = Matrix.build(os, 'bultos', { keepOrder: true, money: false, rubros: rubros(), productRank: productRank(), almacen: almRes() });
+    const m = Matrix.build(os, 'bultos', { keepOrder: true, money: false, rubros: rubros(), productRank: productRank(), almacen: almRes(), sizeOrder: sizeOrd() });
     // Devolución: lo que el camión trae de la ÚLTIMA liquidación de este despachador; se puede restar del total a cargar
     const carry = Liq.carryFor(load, S.loads), devRows = (carry && carry.rows) || {};
     const devOf = (r) => +devRows[r.productId + '|' + r.um] || 0;
@@ -526,7 +529,7 @@
       if (closed && !location.hash.includes('archivo')) location.hash = baseHash() + '/archivo'; else PV.render();
     };
     const ctx = () => ({ config: S.config, products: S.products, usage: Loads.usage(cur(), byIdMap(S.orders), S.config), draft: !cur().number, clientsById: byIdMap(S.clients),
-      load: cur(), productRank: productRank(), statusName: stName(cur()), almacen: almRes(), carry: Liq.carryFor(cur(), S.loads) });
+      load: cur(), productRank: productRank(), statusName: stName(cur()), almacen: almRes(), sizeOrder: sizeOrd(), carry: Liq.carryFor(cur(), S.loads) });
     $('#dPrint').onclick = () => Print.printLoadSheet(cur(), Loads.loadOrders(cur(), byIdMap(S.orders)), ctx());
     const tctx = () => ({ config: S.config, clientsById: byIdMap(S.clients), productsById: byIdMap(S.products), load: cur() });
     $('#dTicket').onclick = () => Print.printTickets(Loads.loadOrders(cur(), byIdMap(S.orders)), tctx(), S.settings.ticket);
@@ -685,7 +688,7 @@
         <div class="actions" style="flex-direction:column">
           <button class="btn btn-primary" id="pSheet">🖨 Imprimir hoja de carga</button>
           <button class="btn" data-close>Listo</button></div>`);
-      const ctx = { config: S.config, products: S.products, usage: Loads.usage(r.load, byIdMap(S.orders), S.config), clientsById: byIdMap(S.clients), load: r.load, productRank: productRank(), statusName: st.name, almacen: almRes(), carry: Liq.carryFor(r.load, S.loads) };
+      const ctx = { config: S.config, products: S.products, usage: Loads.usage(r.load, byIdMap(S.orders), S.config), clientsById: byIdMap(S.clients), load: r.load, productRank: productRank(), statusName: st.name, almacen: almRes(), sizeOrder: sizeOrd(), carry: Liq.carryFor(r.load, S.loads) };
       $('#pSheet', sh.el).onclick = () => Print.printLoadSheet(r.load, r.orders, ctx);
     } else back();
     PV.runSync(false);
@@ -1239,7 +1242,7 @@
   /* ============================ LIQUIDACIÓN ============================ */
   // Fase 2 · E3. Se abre desde el Archivo o desde una hoja cerrada. Todo viene
   // prellenado como «entregado»: la oficina solo marca las novedades.
-  const liqOpts = () => ({ rubros: rubros(), productRank: productRank(), productsById: byIdMap(S.products), almacen: almRes() });
+  const liqOpts = () => ({ rubros: rubros(), productRank: productRank(), productsById: byIdMap(S.products), almacen: almRes(), sizeOrder: sizeOrd() });
   const blankLiq = () => ({ status: 'borrador', startedAt: DB.now(), orders: {}, truck: {} });
   const RESULT_TXT = Object.fromEntries(Liq.RESULTS);
 
