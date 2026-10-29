@@ -1583,7 +1583,8 @@
         return tokens.every((t) => h.includes(t));
       });
       // Coincidencia exacta primero (la nota completa), luego las parecidas; dentro, lo más reciente
-      const exact = (o) => isNum && notesOf(o).some((n) => String(n).replace(/\D/g, '').replace(/^0+(?=\d)/, '') === digits.replace(/^0+(?=\d)/, ''));
+      const d0 = digits.replace(/^0+(?=\d)/, '');
+      const exact = (o) => isNum && notesOf(o).some((n) => String(n).replace(/\D/g, '').replace(/^0+(?=\d)/, '') === d0 || (String(n).match(/\d+/g) || []).some((x) => x.replace(/^0+(?=\d)/, '') === d0));
       res.sort((a, b) => (exact(b) - exact(a)) || String(b.routeDate).localeCompare(String(a.routeDate)) || String(b.sentAt || b.createdAt).localeCompare(String(a.sentAt || a.createdAt)));
       res.splice(40);
       // Hojas que coinciden (oficina): por nombre o código de hoja, ruta, despachador, vendedor o fecha
@@ -1929,7 +1930,7 @@
     const d = o.delivery && o.delivery.at ? o.delivery : null;
     if (o.deleted || (!d && o.status !== 'despachado') || (d && d.result === 'anulada')) return '';
     const monto = d ? +d.monto || 0 : Matrix.orderTotals(o).monto; if (!(monto > 0)) return '';
-    const nota = String((d && d.newValery) || o.valeryNote || '').replace(/\D/g, '');
+    const nota = (String((d && d.newValery) || o.valeryNote || '').match(/\d+/g) || []).join('-'); // varias notas: «85643-85644»
     return `<div class="pay-st muted" data-paynota="${esc(nota)}" data-payoid="${esc(o.id)}" data-paycid="${esc(o.clientId || '')}" data-paymonto="${monto}">💵 ${nota ? 'Nota ' + esc(nota) + ' · ' : ''}${navigator.onLine ? 'consultando el pago…' : 'estado del pago: sin internet'}</div>`;
   }
   function myOrderSheet(o) {

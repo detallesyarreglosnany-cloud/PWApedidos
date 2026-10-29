@@ -17,12 +17,13 @@ type Delivery = { newValery?: string; retiroNote?: string; loadId?: string };
 type OrderDoc = { id: string; deleted?: boolean; clientName?: string; sellerName?: string; routeDate?: string; loadId?: string | null; valeryNote?: string; pendingFrom?: string; delivery?: Delivery | null };
 type LoadDoc = { id: string; label?: string; number?: number; date?: string; closedAt?: string; liq?: { status?: string } | null; deleted?: boolean };
 
-const normNote = (v: unknown) => String(v ?? '').replace(/\D/g, '').replace(/^0+(?=\d)/, '');
+// Un pedido puede llevar varias notas («85643-85644»): cada número cuenta por separado
+const noteParts = (v: unknown) => [...new Set((String(v ?? '').match(/\d+/g) || []).map((x) => x.replace(/^0+(?=\d)/, '')))];
 const isDay = (s: unknown): s is string => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s);
 
 function notesOf(o: OrderDoc) {
   const out: { note: string; field: string }[] = [];
-  const add = (v: unknown, field: string) => { const n = normNote(v); if (n && !out.some((x) => x.note === n)) out.push({ note: n, field }); };
+  const add = (v: unknown, field: string) => { for (const n of noteParts(v)) if (!out.some((x) => x.note === n)) out.push({ note: n, field }); };
   add(o.valeryNote, 'nota');
   if (o.delivery) { add(o.delivery.newValery, 'nota nueva'); add(o.delivery.retiroNote, 'retiro'); }
   return out;
@@ -44,18 +45,20 @@ export async function POST(req: NextRequest) {
     const card = (o: OrderDoc, field: string) => ({ orderId: o.id, clientName: o.clientName || '', sellerName: o.sellerName || '', routeDate: o.routeDate || '', field, ...loadInfo(o) });
 
     if (body.action === 'check') {
-      const note = normNote(body.note), orderId = String(body.orderId || ''), pendingFrom = String(body.pendingFrom || '');
-      if (!note) return NextResponse.json({ conflicts: [] });
-      // Filtro grueso en la base (el número aparece en el texto) y luego la comparación exacta
-      const rows = await db.distDoc.findMany({ where: { kind: 'orders', deleted: false, data: { contains: note } }, select: { data: true } });
-      const conflicts: ReturnType<typeof card>[] = [];
-      for (const r of rows) {
-        const o = JSON.parse(r.data) as OrderDoc;
-        if (o.deleted || o.id === orderId) continue;
-        // Misma cadena de «se entrega después»: puede llevar la misma nota
-        if ((pendingFrom && (o.id === pendingFrom || o.pendingFrom === pendingFrom)) || o.pendingFrom === orderId) continue;
-        const hit = notesOf(o).find((x) => x.note === note);
-        if (hit) conflicts.push(card(o, hit.field));
+      const notes = noteParts(body.note).slice(0, 10), orderId = String(body.orderId || ''), pendingFrom = String(body.pendingFrom || '');
+      if (!notes.length) return NextResponse.json({ conflicts: [] });
+      const conflicts: (ReturnType<typeof card> & { note: string })[] = [];
+      for (const note of notes) {
+        // Filtro grueso en la base (el número aparece en el texto) y luego la comparación exacta
+        const rows = await db.distDoc.findMany({ where: { kind: 'orders', deleted: false, data: { contains: note } }, select: { data: true } });
+        for (const r of rows) {
+          const o = JSON.parse(r.data) as OrderDoc;
+          if (o.deleted || o.id === orderId) continue;
+          // Misma cadena de «se entrega después»: puede llevar la misma nota
+          if ((pendingFrom && (o.id === pendingFrom || o.pendingFrom === pendingFrom)) || o.pendingFrom === orderId) continue;
+          const hit = notesOf(o).find((x) => x.note === note);
+          if (hit) conflicts.push({ ...card(o, hit.field), note });
+        }
       }
       return NextResponse.json({ conflicts }, { headers: { 'Cache-Control': 'no-store' } });
     }

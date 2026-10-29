@@ -46,7 +46,7 @@ export function cleanPago(raw: Record<string, unknown>): Pago | string {
   const rate = num(raw.rate) || 0, copRate = num(raw.copRate) || 0;
   const notas: PagoNota[] = (Array.isArray(raw.notas) ? raw.notas : []).slice(0, 20).map((n) => {
     const x = (n && typeof n === 'object' ? n : {}) as Record<string, unknown>;
-    return { orderId: str(x.orderId, 120), nota: String(x.nota ?? '').replace(/\D/g, '').slice(0, 20), monto: r2(Math.max(0, num(x.monto) || 0)) };
+    return { orderId: str(x.orderId, 120), nota: notaTxt(x.nota).slice(0, 40), monto: r2(Math.max(0, num(x.monto) || 0)) };
   }).filter((n) => n.orderId);
   if (!notas.length) return 'Elige la nota (o notas) que paga';
   const origen = str(raw.origen, 20) || 'app';
@@ -97,6 +97,13 @@ export function cleanPago(raw: Record<string, unknown>): Pago | string {
 /* ---------------- Estado de pago de cada nota ---------------- */
 // Una nota se reconoce por su número (sin ceros a la izquierda); si aún no tiene número, por el pedido.
 export const notaNum = (v: unknown) => String(v ?? '').replace(/\D/g, '').replace(/^0+(?=\d)/, '');
+/**
+ * Un pedido puede llevar varias notas Valery: «85643-85644». Para MOSTRAR se respetan los guiones (notaTxt);
+ * la clave de cobro sigue siendo notaNum (todos los números juntos), igual que antes: notaNum(notaTxt(x)) === notaNum(x),
+ * así ningún pago ni abono ya registrado cambia de nota. Para buscar y para no repetir, cada número cuenta solo (notaParts).
+ */
+export const notaTxt = (v: unknown) => (String(v ?? '').match(/\d+/g) || []).join('-').replace(/^0+(?=\d)/, '');
+export const notaParts = (v: unknown) => [...new Set((String(v ?? '').match(/\d+/g) || []).map((x) => x.replace(/^0+(?=\d)/, '')))];
 export const noteKey = (n: { nota?: string; orderId?: string }) => (notaNum(n.nota) ? 'n:' + notaNum(n.nota) : 'o:' + String(n.orderId || ''));
 
 export type Abono = { pagado: number; aprobado: number; espera: number; pagos: string[] };
