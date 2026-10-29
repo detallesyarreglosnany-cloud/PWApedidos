@@ -208,7 +208,7 @@
    */
   function truckRows(orders, liq, carry, opts) {
     const keyOf = (r) => r.productId + '|' + r.um;
-    const ped = Matrix.build(orders, 'bultos', { keepOrder: true, money: false, rubros: opts.rubros, productRank: opts.productRank, almacen: opts.almacen });
+    const ped = Matrix.build(orders, 'bultos', { keepOrder: true, money: false, rubros: opts.rubros, productRank: opts.productRank, almacen: opts.almacen, sizeOrder: opts.sizeOrder });
     const del = Matrix.build(orders.map((o) => delivered(o, liq)), 'bultos', { keepOrder: true, money: false });
     const delBy = new Map(del.rows.map((r) => [keyOf(r), r.total]));
     const rows = ped.rows.map((r) => ({ key: keyOf(r), productId: r.productId, um: r.um, code: r.code, name: r.name, presentation: r.presentation, category: r.category, pedido: r.total }));
@@ -256,7 +256,7 @@
         const asg0 = r.assign ? Envases.assignedOf(o, pid) : null;
         const asg = r.assign ? (v.asg !== undefined && v.asg !== '' && v.asg !== null ? Math.min(boxes, n0(v.asg)) : (asg0 === null ? null : Math.min(boxes, asg0))) : null;
         const recv = v.recv !== undefined && v.recv !== '' ? Math.min(boxes, n0(v.recv)) : Math.max(0, boxes - (asg || 0));
-        out.push({ orderId: o.id, client: o.clientName, pid, code: l.code, name: l.name, regime: r.regime, assign: r.assign, type: r.type,
+        out.push({ orderId: o.id, client: o.clientName, pid, code: l.code, name: l.name, regime: r.regime, assign: r.assign, type: r.type || String(l.code || pid), aparte: !r.type,
           boxes, recv, asg, pending: Math.max(0, boxes - recv - (asg || 0)), motivo: v.motivo || '' });
       });
     });
@@ -334,7 +334,9 @@
     const vacRowsOut = [];
     types.forEach((ty) => {
       const of = (c, f) => vac.filter((v) => v.type === ty && v.orderId === c.order.id).reduce((a, v) => (v[f] === null ? a : (a || 0) + v[f]), null);
-      const mk = (key, label, f) => { const cells = cols.map((c) => of(c, f)); return { key, type: ty, label: `${label} ${ty}`, cells, total: cells.reduce((a, x) => a + (x || 0), 0) }; };
+      // Retornable «aparte»: su grupo es su código; se muestra con el nombre para no confundirlo con un tipo de envase
+      const ap = vac.find((v) => v.type === ty && v.aparte), tl = ap ? `${ty} (${ap.name || ''})` : ty;
+      const mk = (key, label, f) => { const cells = cols.map((c) => of(c, f)); return { key, type: ty, label: `${label} ${tl}`, cells, total: cells.reduce((a, x) => a + (x || 0), 0) }; };
       vacRowsOut.push(mk('DESPACHADOS', 'VACÍOS DESPACHADOS', 'boxes'), mk('RECIBIDOS', 'VACÍOS RECIBIDOS', 'recv'), mk('ASIGNADOS', 'ASIGNADOS', 'asg'), mk('DEBEN', 'QUEDAN DEBIENDO', 'pending'));
       const pv = prev.filter((p) => p.type === ty);
       if (!pv.length) return;
@@ -342,8 +344,8 @@
       const recvRow = vacRowsOut[vacRowsOut.length - 3];
       const inCells = cols.map((c, i) => (recvRow.cells[i] === null && prevCells[i] === null ? null : (recvRow.cells[i] || 0) + (prevCells[i] || 0)));
       const sum = (cells) => cells.reduce((a, x) => a + (x || 0), 0);
-      vacRowsOut.push({ key: 'PREV', type: ty, label: `VAC. ANTERIORES ${ty}`, cells: prevCells, total: sum(prevCells) },
-        { key: 'ENTRAN', type: ty, label: `VACÍOS QUE ENTRAN ${ty}`, cells: inCells, total: sum(inCells) });
+      vacRowsOut.push({ key: 'PREV', type: ty, label: `VAC. ANTERIORES ${tl}`, cells: prevCells, total: sum(prevCells) },
+        { key: 'ENTRAN', type: ty, label: `VACÍOS QUE ENTRAN ${tl}`, cells: inCells, total: sum(inCells) });
     });
     return { cols, rows: mrows, vac: vacRowsOut,
       totals: { bultos: cols.map((c) => c.bultos), monto: cols.map((c) => c.monto), usd: Matrix.r2(cols.reduce((a, c) => a + c.monto, 0)) } };

@@ -69,6 +69,14 @@
     };
   }
 
+  /**
+   * Orden de presentaciones de la hoja de carga y la liquidación (ml/g, de arriba hacia abajo). Por omisión el de
+   * Puerto Venado: 2 L, 1,5 L, 1 L, 1,25 L y luego el resto de mayor a menor (350 ml…).
+   */
+  const SIZE_DEF = [2000, 1500, 1000, 1250];
+  const sizeOrder = (cfg) => (cfg && Array.isArray(cfg.ordenTamanos) ? cfg.ordenTamanos.map(Number).filter((x) => x > 0) : SIZE_DEF);
+  const sizeTxt = (n) => (n >= 1000 ? String(n / 1000).replace('.', ',') + ' L' : n + ' ml');
+
   /** Pantalla de Inventario → 🏬 Almacenes: almacén de cada categoría y excepciones por producto. */
   function sheet(canEdit) {
     const P = global.PV, { S, esc, toast } = P, cfg = S.config || {};
@@ -77,6 +85,11 @@
     const sug = suggestAll(prods);
     const n = norm(cfg);
     let cat = { ...(configured(cfg) ? n.almacenCat : sug.cat) }, prod = { ...(configured(cfg) ? n.almacenProd : sug.prod) };
+    const almName = (id) => (alms.find((a) => String(a.id) === String(id)) || {}).nombre || 'sin almacén';
+    const byCat = (c) => `Por su categoría (${almName(cat[c] || '')})`;
+    let sizes = sizeOrder(cfg).map(sizeTxt).join(', ');
+    // Productos de la hoja sin tamaño en la presentación (van al final de su categoría)
+    const sinTam = prods.filter((p) => !global.Matrix.sizeOf(p) && /refresc|agua|jugo|malta|cerveza|nectar|néctar/i.test(p.category || ''));
     const opt = (sel, none) => `${none ? `<option value="">${esc(none)}</option>` : ''}${alms.map((a) => `<option value="${esc(a.id)}" ${String(sel) === String(a.id) ? 'selected' : ''}>${esc(a.nombre)}</option>`).join('')}`;
     const sh = P.openSheet('<div id="almBox"></div>');
     const draw = () => {
@@ -87,22 +100,33 @@
         <table class="inv"><thead><tr><th>Categoría</th><th class="n">Productos</th><th>Almacén</th></tr></thead><tbody>
           ${cats.map((c) => `<tr><td>${P.rubroIcon(c)} <b>${esc(c || '(sin categoría)')}</b></td><td class="n">${prods.filter((p) => p.category === c).length}</td>
             <td><select class="select sm" data-almc="${esc(c)}" ${canEdit ? '' : 'disabled'}>${opt(cat[c] || '', 'Sin almacén')}</select></td></tr>`).join('')}</tbody></table>
-        <div class="section-title">Productos que salen de otro almacén</div>
+        <div class="section-title">Orden de presentaciones en la hoja</div>
+        <label class="field"><span>De arriba hacia abajo (lo que no esté aquí va de mayor a menor)</span><input id="almSizes" class="input" value="${esc(sizes)}" placeholder="2 L, 1,5 L, 1 L, 1,25 L" ${canEdit ? '' : 'disabled'}></label>
+        ${sinTam.length ? `<div class="hint warn">Sin tamaño en la presentación (van al final de su categoría): ${sinTam.map((p) => `<b>${esc(p.code)}</b> ${esc(p.name)}`).join(' · ')}. Escribe el tamaño en «Presentación» (ej. 1,25 L, 350 ml).</div>` : ''}
+        <div class="section-title">Almacén de cada producto</div>
         <label class="field"><span>Buscar producto</span><input id="almQ" class="input" placeholder="Nombre o código"></label>
         <table class="inv" id="almProds"><thead><tr><th>Producto</th><th>Categoría</th><th>Almacén</th></tr></thead><tbody>
           ${prods.slice().sort((a, b) => (+!prod[a.id]) - (+!prod[b.id]) || String(a.category).localeCompare(String(b.category), 'es') || a.name.localeCompare(b.name, 'es')).map((p) => `<tr data-q="${esc(fold(p.code + ' ' + p.name + ' ' + p.presentation))}" ${prod[p.id] ? 'class="alm-exc"' : ''}>
             <td><span class="mono muted">${esc(p.code)}</span> ${esc(p.name)} <b>${esc(p.presentation || '')}</b></td><td>${esc(p.category)}</td>
-            <td><select class="select sm" data-almp="${esc(p.id)}" ${canEdit ? '' : 'disabled'}>${opt(prod[p.id] || '', 'Como su categoría')}</select></td></tr>`).join('')}</tbody></table>
+            <td><select class="select sm" data-almp="${esc(p.id)}" ${canEdit ? '' : 'disabled'}>${opt(prod[p.id] || '', byCat(p.category))}</select></td></tr>`).join('')}</tbody></table>
         ${canEdit ? '<div class="actions"><button class="btn btn-primary" id="almOk">Guardar almacenes</button></div>' : '<p class="muted">Solo consulta.</p>'}`;
       const q = sh.el.querySelector('#almQ');
       q.oninput = () => { const f = fold(q.value.trim()); sh.el.querySelectorAll('#almProds tbody tr').forEach((tr) => { tr.hidden = !!f && !tr.dataset.q.includes(f); }); };
-      const sg = sh.el.querySelector('#almSug'); if (sg) sg.onclick = () => { cat = { ...sug.cat }; prod = { ...sug.prod }; draw(); toast('Sugerencia cargada: revisa y guarda', 'ok'); };
+      // Al cambiar el almacén de una categoría, sus productos muestran el nuevo
+      sh.el.querySelectorAll('[data-almc]').forEach((sel) => { sel.onchange = () => { cat[sel.dataset.almc] = sel.value;
+        sh.el.querySelectorAll('[data-almp]').forEach((ps) => { const pr = prods.find((x) => x.id === ps.dataset.almp); if (pr && pr.category === sel.dataset.almc) ps.options[0].textContent = byCat(pr.category); }); }; });
+      sh.el.querySelectorAll('[data-almp]').forEach((ps) => { ps.onchange = () => { prod[ps.dataset.almp] = ps.value; }; });
+      const sg = sh.el.querySelector('#almSug'); if (sg) sg.onclick = () => { cat = { ...sug.cat }; prod = { ...sug.prod }; sizes = sh.el.querySelector('#almSizes').value; draw(); toast('Sugerencia cargada: revisa y guarda', 'ok'); };
       const ok = sh.el.querySelector('#almOk'); if (!ok) return;
       ok.onclick = async () => {
         const c2 = {}, p2 = {};
         sh.el.querySelectorAll('[data-almc]').forEach((s) => { if (s.value) c2[s.dataset.almc] = s.value; });
-        sh.el.querySelectorAll('[data-almp]').forEach((s) => { if (s.value && s.value !== c2[prods.find((p) => p.id === s.dataset.almp).category]) p2[s.dataset.almp] = s.value; });
-        await P.saveDocs('config', { ...S.config, almacenes: alms, almacenCat: c2, almacenProd: p2 });
+        // Todo producto con almacén elegido se guarda tal cual (aunque sea el mismo de su categoría)
+        sh.el.querySelectorAll('[data-almp]').forEach((s) => { if (s.value) p2[s.dataset.almp] = s.value; });
+        const parts = sh.el.querySelector('#almSizes').value.split(/[;,](?!\d)|\s*\/\s*/).map((x) => x.trim()).filter(Boolean);
+        const ord = [];
+        for (const x of parts) { const n = global.Matrix.sizeOf({ presentation: x }); if (!n) { toast(`No entiendo el tamaño «${x}» (escribe por ejemplo 1,25 L o 350 ml)`, 'err'); return; } if (!ord.includes(n)) ord.push(n); }
+        await P.saveDocs('config', { ...S.config, almacenes: alms, almacenCat: c2, almacenProd: p2, ordenTamanos: ord });
         P.logEvent('ajustes', `Almacenes: ${alms.map((a) => `${a.nombre}: ${Object.keys(c2).filter((c) => c2[c] === a.id).join(', ') || '—'}`).join(' · ')}${Object.keys(p2).length ? ` · ${Object.keys(p2).length} producto(s) en otro almacén` : ''}`);
         sh.close(); toast('Almacenes guardados: la hoja de carga sale separada por almacén', 'ok'); P.runSync(false);
       };
@@ -110,5 +134,5 @@
     draw();
   }
 
-  global.Almacen = { DEF, list, configured, suggest, suggestAll, resolver, sheet };
+  global.Almacen = { DEF, SIZE_DEF, list, configured, suggest, suggestAll, resolver, sizeOrder, sheet };
 })(window);

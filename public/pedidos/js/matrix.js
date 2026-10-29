@@ -42,6 +42,18 @@
     return big ? n * 1000 : n;
   }
 
+  /**
+   * Posición de un tamaño según el orden de presentaciones de la hoja (lista de ml/g, de arriba hacia abajo).
+   * Lo que no está en la lista va donde le toca de mayor a menor entre los de la lista. Sin lista: mayor a menor.
+   */
+  function sizeRank(size, order) {
+    if (!order || !order.length) return -size;
+    const i = order.indexOf(size);
+    if (i >= 0) return i;
+    const j = order.findIndex((x) => x < size);
+    return (j < 0 ? order.length : j) - 0.5 - (size ? size / 1e9 : -0.4);
+  }
+
   /** Totales de una línea de pedido (usa el precio congelado en la línea). */
   function lineTotals(line) {
     const cajas = +line.cajas || 0;
@@ -137,7 +149,7 @@
       ((a.almOrd ?? 0) - (b.almOrd ?? 0)) ||
       rank(a.category) - rank(b.category) ||
       a.category.localeCompare(b.category, 'es') ||
-      sizeOf(b) - sizeOf(a) ||
+      sizeRank(sizeOf(a), opts.sizeOrder) - sizeRank(sizeOf(b), opts.sizeOrder) ||
       (prank[a.productId] || 9999) - (prank[b.productId] || 9999) ||
       a.name.localeCompare(b.name, 'es') ||
       String(a.code).localeCompare(String(b.code), 'es', { numeric: true }) ||
@@ -219,5 +231,5 @@
     return encode(out, sep);
   }
 
-  global.Matrix = { build, toDelimited, toFlat, lineTotals, orderTotals, lineDesc, lineCode, unitCodeOf, sizeOf, r2 };
+  global.Matrix = { build, toDelimited, toFlat, lineTotals, orderTotals, lineDesc, lineCode, unitCodeOf, sizeOf, sizeRank, r2 };
 })(window);

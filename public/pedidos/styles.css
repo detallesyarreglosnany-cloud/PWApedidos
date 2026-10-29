@@ -778,3 +778,5 @@ tr.agotado-row td { opacity: .65; }
 .wq-prog i { display: block; height: 100%; background: #25d366; transition: width .3s; }
 .wq-go { font-size: 18px; min-height: 60px; background: #25d366 !important; border-color: #25d366 !important; color: #06290f !important; }
 .alm-exc td { background: rgba(255, 180, 0, .08); }
+.au-sec { margin-top: 8px; } .au-sec summary { cursor: pointer; }
+.au-row { padding: 5px 0; border-top: 1px solid var(--line); font-size: 14px; } .au-row.au-error { color: var(--danger, #ff6b6b); } .au-row.au-info { color: var(--ink-2); font-size: 13px; }
