@@ -8,7 +8,7 @@ import { cartera, clientAliases } from '@/lib/cartera';
 import { ROLES, userOf } from '@/lib/roles';
 import { sendPush } from '@/lib/push';
 import { createHash } from 'crypto';
-import { cargadoName, cargadoStatus, type Cargado, METHODS, REF_MIN, abonoKey, allocate, cleanPago, normRef, noteKey, notaNum, noteStatus, r2, type Pago } from '@/lib/pagos';
+import { cargadoName, cargadoStatus, type Cargado, METHODS, REF_MIN, abonoKey, allocate, cleanPago, normRef, noteKey, notaNum, notaParts, notaTxt, noteStatus, r2, type Pago } from '@/lib/pagos';
 import { lineMoney } from '@/lib/money';
 
 // Pagos de clientes (Fase 4 · cobranza).
@@ -74,12 +74,15 @@ type OrdLite = { id: string; deleted?: boolean; clientId?: string; clientName?: 
 const normName = (v: unknown) => String(v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 const isRealOrder = (id: string) => !!id && !id.startsWith('manual:') && !id.startsWith('fm:');
 /** Pedidos de la plataforma con alguno de esos números de nota (Valery o la nota nueva de la liquidación). */
-async function ordersByNota(nums: string[]) {
-  if (!nums.length) return [] as OrdLite[];
+async function ordersByNota(nums: string[], parts: string[] = []) {
+  if (!nums.length && !parts.length) return [] as OrdLite[];
+  // También por cada número de un pedido con varias notas («85643-85644» se encuentra con 85643)
   const rows = await db.$queryRaw<{ data: string }[]>`
     SELECT "data" FROM "DistDoc" WHERE "kind" = 'orders' AND "deleted" = false
-      AND (regexp_replace(regexp_replace(COALESCE("data"::jsonb ->> 'valeryNote', ''), '\D', '', 'g'), '^0+(?=\d)', '') = ANY(${nums})
-        OR regexp_replace(regexp_replace(COALESCE("data"::jsonb -> 'delivery' ->> 'newValery', ''), '\D', '', 'g'), '^0+(?=\d)', '') = ANY(${nums}))`;
+      AND (regexp_replace(regexp_replace(COALESCE("data"::jsonb ->> 'valeryNote', ''), '\\D', '', 'g'), '^0+(?=\\d)', '') = ANY(${nums})
+        OR regexp_replace(regexp_replace(COALESCE("data"::jsonb -> 'delivery' ->> 'newValery', ''), '\\D', '', 'g'), '^0+(?=\\d)', '') = ANY(${nums})
+        OR EXISTS (SELECT 1 FROM regexp_split_to_table(COALESCE("data"::jsonb ->> 'valeryNote', '') || '-' || COALESCE("data"::jsonb -> 'delivery' ->> 'newValery', ''), '\\D+') p
+          WHERE p <> '' AND regexp_replace(p, '^0+(?=\\d)', '') = ANY(${parts})))`;
   return rows.map((r) => JSON.parse(r.data) as OrdLite);
 }
 const notaOf = (o: OrdLite) => notaNum((o.delivery && o.delivery.newValery) || o.valeryNote);
@@ -101,8 +104,9 @@ async function checkPago(p: { clientId: string; clientName: string; sellerId: st
     if (!o || o.deleted) return `La nota ${n.nota || ''} ya no existe en la plataforma (pedido eliminado). Actualiza la app y vuelve a elegirla.`;
     if (!same(o)) return otherMsg(n.nota || notaOf(o), o, p.clientName);
   }
-  const nums = [...new Set(p.notas.filter((n) => !isRealOrder(n.orderId)).map((n) => notaNum(n.nota)).filter(Boolean))];
-  for (const o of await ordersByNota(nums)) if (!same(o)) return otherMsg(notaOf(o), o, p.clientName);
+  const manual = p.notas.filter((n) => !isRealOrder(n.orderId));
+  const nums = [...new Set(manual.map((n) => notaNum(n.nota)).filter(Boolean))], parts = [...new Set(manual.flatMap((n) => notaParts(n.nota)))];
+  for (const o of await ordersByNota(nums, parts)) if (!same(o)) return otherMsg(notaOf(o), o, p.clientName);
   if (!isAdmin) {
     const cRow = await db.distDoc.findUnique({ where: { kind_id: { kind: 'clients', id: p.clientId } }, select: { data: true } });
     const c = cRow ? (JSON.parse(cRow.data) as { sellerId?: string; name?: string }) : null;
@@ -212,7 +216,7 @@ export async function POST(req: NextRequest) {
         if (d && d.result === 'anulada') continue;
         const monto = d ? r2(Number(d.monto) || 0) : r2(Object.values(o.lines || {}).reduce((a, l) => a + lineMoney(l), 0));
         if (!(monto > 0)) continue;
-        const nota = notaNum((d && d.newValery) || o.valeryNote);
+        const nota = notaTxt((d && d.newValery) || o.valeryNote); // se muestra con guiones; la clave es la misma de siempre
         const n: Nota = { key: noteKey({ nota, orderId: o.id }), nota, orderId: o.id, date: String((d && d.date) || o.routeDate || ''), monto, liquidado: !!d, hoja: loadLabel.get(String((d && d.loadId) || o.loadId || '')) || '', manual: false };
         notas.set(n.key, n);
       }
@@ -223,7 +227,7 @@ export async function POST(req: NextRequest) {
       // Notas agregadas a mano (de antes de la plataforma): quedan en la cuenta del cliente
       for (const p of pagos) for (const n of p.notas) {
         const k = noteKey(n);
-        if (!notas.has(k)) notas.set(k, { key: k, nota: notaNum(n.nota), orderId: n.orderId, date: p.date, monto: n.monto, liquidado: false, hoja: '', manual: true });
+        if (!notas.has(k)) notas.set(k, { key: k, nota: notaTxt(n.nota), orderId: n.orderId, date: p.date, monto: n.monto, liquidado: false, hoja: '', manual: true });
       }
       // Lo que vale de una nota a mano es lo que se dijo la primera vez (el mayor monto registrado)
       for (const p of pagos) for (const n of p.notas) { const x = notas.get(noteKey(n)); if (x && x.manual && n.monto > x.monto) x.monto = n.monto; }
@@ -250,7 +254,7 @@ export async function POST(req: NextRequest) {
       const nums = want.map((w) => w.nota).filter(Boolean), oids = want.map((w) => w.orderId).filter(Boolean), cids = [...new Set(want.map((w) => w.clientId).filter(Boolean).flatMap(aliasesOf))];
       const rows = cids.length ? await db.$queryRaw<{ data: string }[]>`
         SELECT "data" FROM "DistPago" WHERE "status" IN ('espera', 'aprobado') AND "clientId" = ANY(${cids})
-          AND EXISTS (SELECT 1 FROM jsonb_array_elements("data"::jsonb -> 'notas') n WHERE regexp_replace(regexp_replace(COALESCE(n ->> 'nota', ''), '\D', '', 'g'), '^0+(?=\d)', '') = ANY(${nums}) OR n ->> 'orderId' = ANY(${oids}))` : [];
+          AND EXISTS (SELECT 1 FROM jsonb_array_elements("data"::jsonb -> 'notas') n WHERE regexp_replace(regexp_replace(COALESCE(n ->> 'nota', ''), '\\D', '', 'g'), '^0+(?=\\d)', '') = ANY(${nums}) OR n ->> 'orderId' = ANY(${oids}))` : [];
       const ab = allocate(rows.map(parse), canon);
       const byKey: Record<string, unknown> = {}, byIdx: unknown[] = [];
       const cnames = want.filter((w) => w.clientId).map((w) => cargadoName(w.clientId, noteKey(w)));
@@ -437,7 +441,7 @@ export async function POST(req: NextRequest) {
       const sellerId = str(body.sellerId, 120), clientId = str(body.clientId, 120), key = str(body.key, 140), estado = str(body.estado, 30);
       if (!clientId || !key || !SEGUIMIENTO[estado]) return NextResponse.json({ error: 'Datos inválidos' }, { status: 400 });
       if (!isAdmin && !(await sellerAccessOk(req, sellerId))) return NextResponse.json({ error: 'PIN', pin: true }, { status: 401 });
-      const v = { estado, texto: SEGUIMIENTO[estado], comentario: str(body.comentario, 300), at: new Date().toISOString(), by: str(body.by, 80), nota: notaNum(body.nota), clientName: str(body.clientName, 120) };
+      const v = { estado, texto: SEGUIMIENTO[estado], comentario: str(body.comentario, 300), at: new Date().toISOString(), by: str(body.by, 80), nota: notaTxt(body.nota), clientName: str(body.clientName, 120) };
       const name = `seg:${clientId}:${key}`, value = JSON.stringify(v);
       await db.$executeRaw`INSERT INTO "DistSetting" ("name", "value") VALUES (${name}, ${value}) ON CONFLICT ("name") DO UPDATE SET "value" = EXCLUDED."value"`;
       if (!isAdmin) {
@@ -484,8 +488,12 @@ export async function POST(req: NextRequest) {
         const rows = (Array.isArray(body.rows) ? body.rows : []).slice(0, 2000);
         // Dueño de cada número de nota (una sola consulta para todo el archivo)
         const owners = new Map<string, OrdLite[]>(), { canon } = await clientAliases();
-        for (const o of await ordersByNota([...new Set(rows.map((x) => notaNum((x as Record<string, unknown> | null)?.nota)).filter(Boolean))])) {
+        const rowNotas = rows.map((x) => (x as Record<string, unknown> | null)?.nota);
+        for (const o of await ordersByNota([...new Set(rowNotas.map(notaNum).filter(Boolean))], [...new Set(rowNotas.flatMap((v) => notaParts(v)))])) {
           const k = notaOf(o); owners.set(k, (owners.get(k) || []).concat(o));
+          // Pedido con varias notas: cada número también lleva a su pedido
+          const ps = notaParts((o.delivery && o.delivery.newValery) || o.valeryNote);
+          if (ps.length > 1) ps.forEach((p) => owners.set('p:' + p, (owners.get('p:' + p) || []).concat(o)));
         }
         for (const raw of rows) {
           const x = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
@@ -496,7 +504,10 @@ export async function POST(req: NextRequest) {
           const id = 'fm' + createHash('sha1').update([date, clientId, nota, usd.toFixed(2), ref, str(x.key, 200)].join('|')).digest('hex').slice(0, 24);
           if (await db.distPago.findUnique({ where: { id } })) { res.repetidos++; continue; }
           // La nota tiene que ser de ese cliente (si existe en la plataforma)
-          if (nota) { const ajeno = (owners.get(nota) || []).find((o) => canon(String(o.clientId)) !== canon(clientId)); if (ajeno) { res.errores.push(`Fila ${fila}: ${otherMsg(nota, ajeno, clientName)}`); continue; } }
+          const owns = nota ? (owners.get(nota) || owners.get('p:' + nota) || []) : [];
+          if (nota) { const ajeno = owns.find((o) => canon(String(o.clientId)) !== canon(clientId)); if (ajeno) { res.errores.push(`Fila ${fila}: ${otherMsg(nota, ajeno, clientName)}`); continue; } }
+          // La nota es UNA de las notas de un pedido de este cliente («85643» de «85643-85644»): el pago va a ese pedido
+          const multi = !owners.get(nota) && owns.length === 1 && (!str(x.orderId, 120) || str(x.orderId, 120) === owns[0].id) ? owns[0] : null;
           if (ref && ref.length >= REF_MIN) {
             const used = await db.distPagoRef.findUnique({ where: { ref } });
             if (used) {
@@ -520,7 +531,7 @@ export async function POST(req: NextRequest) {
           const method = METHODS[str(x.method, 30)] && str(x.method, 30) !== 'anterior' ? str(x.method, 30) : 'anterior';
           const amount = r2(Number(x.amount) || usd), currency = METHODS[method].currency;
           const p: Pago = {
-            id, date, sellerId, sellerName: str(x.sellerName, 80), clientId, clientName, notas: [{ orderId: str(x.orderId, 120) || (nota ? 'manual:' + nota : 'fm:' + id), nota, monto: montoNota > 0 ? montoNota : usd }],
+            id, date, sellerId, sellerName: str(x.sellerName, 80), clientId, clientName, notas: [{ orderId: multi ? multi.id : str(x.orderId, 120) || (nota ? 'manual:' + nota : 'fm:' + id), nota: multi ? notaTxt((multi.delivery && multi.delivery.newValery) || multi.valeryNote) : nota, monto: montoNota > 0 ? montoNota : usd }],
             rate: r2(Number(x.rate) || 0), copRate: 0, lines: [{ method, bank: str(x.bank, 80), ref: ref.length >= REF_MIN ? ref : '', currency, amount: currency === 'USD' ? usd : amount, usd }], adjusts: [],
             debe: montoNota > 0 ? montoNota : usd, pagado: usd, ajustes: 0, diferencia: r2((montoNota > 0 ? montoNota : usd) - usd), comment: str(x.comment, 300), origen: 'filemaker', info: str(x.info, 200),
             status: 'aprobado', by: 'FileMaker', createdAt: new Date().toISOString(), review: { by: 'FileMaker', at: new Date().toISOString(), motivo: 'Importado de FileMaker' },

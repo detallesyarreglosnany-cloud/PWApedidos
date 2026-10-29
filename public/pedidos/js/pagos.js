@@ -89,7 +89,7 @@
         const d = o.delivery && o.delivery.at ? o.delivery : null;
         if (d && d.result === 'anulada') return null;
         const monto = d ? r2(+d.monto || 0) : r2(Matrix.orderTotals(o).monto);
-        return monto > 0 ? { orderId: o.id, nota: String((d && d.newValery) || o.valeryNote || '').replace(/\D/g, ''), monto, date: (d && d.date) || o.routeDate, liquidado: !!d } : null;
+        return monto > 0 ? { orderId: o.id, nota: noteFmt((d && d.newValery) || o.valeryNote), monto, date: (d && d.date) || o.routeDate, liquidado: !!d } : null;
       }).filter(Boolean).sort((a, b) => String(b.date).localeCompare(String(a.date)));
   }
 
@@ -97,6 +97,9 @@
   const banksFor = () => { const a = [...new Set(accounts().map((x) => x.bank))]; return a.length ? a : BANKS; };
 
   /* ---------------- Búsqueda de cliente (por nombre, negocio, RIF, dirección o N° de nota) ---------------- */
+  // Varias notas en un pedido: «85643-85644» (se muestra así; la clave de cobro son todos los números juntos, como siempre)
+  const noteFmt = (v) => (String(v == null ? '' : v).match(/\d+/g) || []).join('-');
+  const noteParts = (v) => (String(v == null ? '' : v).match(/\d+/g) || []).map((x) => x.replace(/^0+(?=\d)/, ''));
   const nkey = (nota, orderId) => { const n = String(nota || '').replace(/\D/g, '').replace(/^0+(?=\d)/, ''); return n ? 'n:' + n : 'o:' + orderId; };
   function clientsOf(sid) { return PV().S.clients.filter((c) => !c.deleted && c.active !== false && (!sid || c.sellerId === sid)).sort((a, b) => a.name.localeCompare(b.name, 'es')); }
   function searchHits(q, sid) {
@@ -278,9 +281,10 @@
       if (t.dataset.rma) { p.adjusts.splice(+t.dataset.rma, 1); draw(); return; }
       if (t.dataset.rmnota) { p.notas = p.notas.filter((x) => x.orderId !== t.dataset.rmnota); draw(); return; }
       if (t.id === 'pfMAdd') {
-        const nn = String(body.querySelector('#pfMN').value).replace(/\D/g, ''), mm = r2(dec(body.querySelector('#pfMM').value));
+        const nn = noteFmt(body.querySelector('#pfMN').value), mm = r2(dec(body.querySelector('#pfMM').value));
         if (!nn || !(mm > 0)) { toast('Escribe el número de nota y su monto', 'err'); return; }
-        const known = (cuenta || []).find((x) => x.key === nkey(nn, ''));
+        // También si es UNA de las notas de un pedido con varias («85643» de «85643-85644»)
+        const known = (cuenta || []).find((x) => x.key === nkey(nn, '')) || (noteParts(nn).length === 1 ? (cuenta || []).find((x) => noteParts(x.nota).length > 1 && noteParts(x.nota).includes(noteParts(nn)[0])) : null);
         if (known) { if (known.resta > 0.01) { addNota(known); toast(`La nota ${nn} ya está en la cuenta del cliente: quedó marcada`, 'ok'); } else toast(`La nota ${nn} ya está pagada (${known.texto})`, 'err'); draw(); return; }
         if (p.notas.some((x) => nkey(x.nota, x.orderId) === nkey(nn, ''))) { toast('Esa nota ya está en este pago', 'err'); return; }
         p.notas.push({ orderId: 'manual:' + nn, nota: nn, monto: mm }); draw(); return;
@@ -761,7 +765,7 @@
     const clients = S.clients.filter((c) => !c.deleted);
     const byRif = new Map(), byName = new Map(), byCode = new Map();
     clients.forEach((c) => { const r = String(c.rif || '').replace(/\D/g, ''); if (r) byRif.set(r, (byRif.get(r) || []).concat(c)); const n = nrm(c.name); byName.set(n, (byName.get(n) || []).concat(c)); if (c.code) byCode.set(nrm(c.code), (byCode.get(nrm(c.code)) || []).concat(c)); });
-    const notaIdx = new Map(); S.orders.forEach((o) => { if (o.deleted) return; [o.valeryNote, o.delivery && o.delivery.newValery].forEach((n) => { const k = String(n || '').replace(/\D/g, '').replace(/^0+(?=\d)/, ''); if (k) notaIdx.set(k, o); }); });
+    const notaIdx = new Map(); S.orders.forEach((o) => { if (o.deleted) return; [o.valeryNote, o.delivery && o.delivery.newValery].forEach((n) => { const k = String(n || '').replace(/\D/g, '').replace(/^0+(?=\d)/, ''); if (k) notaIdx.set(k, o); const ps = noteParts(n); if (ps.length > 1) ps.forEach((x) => { if (!notaIdx.has(x)) notaIdx.set(x, o); }); }); });
     function analyze() {
       const g = (r, f) => (map[f] >= 0 ? String(r[map[f]] || '').trim() : '');
       const rate0 = decRate(sh.el.querySelector('#imRate').value);

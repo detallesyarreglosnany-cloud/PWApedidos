@@ -516,7 +516,7 @@
             ${o.notes ? `<div class="muted">📝 ${esc(o.notes)}</div>` : ''}${(o.officeMsgs || []).length ? `<div class="muted">💬 ${o.officeMsgs.length} mensaje${o.officeMsgs.length > 1 ? 's' : ''} de oficina</div>` : ''}${(o.sellerMsgs || []).length ? `<div class="muted">↩ ${o.sellerMsgs.length} respuesta${o.sellerMsgs.length > 1 ? 's' : ''} del vendedor</div>` : ''}</td>
           <td><span class="tag">${esc(Loads.initials(o.sellerName))}</span></td>
           <td class="n" data-l="Bultos">${t.bultos}</td><td class="n" data-l="Unid.">${t.totalUnidades}</td><td class="n" data-l="Monto">${usd(t.monto)}</td>
-          <td data-l="Nota Valery"><input class="input sm mono valery-in" inputmode="numeric" maxlength="20" data-oid="${esc(o.id)}" value="${esc(o.valeryNote || '')}" placeholder="N°" aria-label="Nota Valery de ${esc(o.clientName)}"></td>
+          <td data-l="Nota Valery"><input class="input sm mono valery-in" inputmode="tel" maxlength="40" data-oid="${esc(o.id)}" value="${esc(o.valeryNote || '')}" placeholder="N° (varias: 85643-85644)" title="Si el pedido lleva varias notas, sepáralas con «-»" aria-label="Nota Valery de ${esc(o.clientName)}"></td>
           <td style="white-space:nowrap"><button class="btn btn-sm" data-ticket="${esc(o.id)}" title="Nota de despacho (ticket)" aria-label="Ticket de ${esc(o.clientName)}">🧾</button> <button class="btn btn-sm" data-edit="${esc(o.id)}">${editableLoad ? 'Editar' : 'Ver'}</button>
             ${editableLoad ? `<button class="btn btn-sm" data-move="${esc(o.id)}">⇄ Mover</button>
             <button class="btn btn-sm" data-hold="${esc(o.id)}" title="Dejar para otra carga">⏸ Espera</button>` : ''}</td></tr>`; }).join('')}</tbody></table></div>`;
@@ -589,7 +589,7 @@
     root.onchange = async (e) => {
       const vi = e.target.closest('.valery-in');
       if (vi) {
-        const o = orderById(vi.dataset.oid), v = digitsOnly(vi.value);
+        const o = orderById(vi.dataset.oid), v = noteFmt(vi.value);
         if (!o || (o.valeryNote || '') === v) { if (o) vi.value = o.valeryNote || ''; return; }
         if (v && !(await noteFree(o, v))) { vi.value = o.valeryNote || ''; return; }
         await saveOrder({ ...orderById(o.id), valeryNote: v });
@@ -1320,7 +1320,7 @@
           return `<tr data-oid="${esc(o.id)}" class="${e.result !== 'entregada' ? 'liq-mark' : ''}">
             <td>${i + 1}</td>
             <td><b>${esc(o.clientName)}</b> <span class="tag">${esc(Loads.initials(o.sellerName))}</span></td>
-            <td data-l="Nota Valery"><input class="input sm mono valery-in" inputmode="numeric" maxlength="20" data-oid="${esc(o.id)}" value="${esc(o.valeryNote || '')}" placeholder="N°" ${dis}></td>
+            <td data-l="Nota Valery"><input class="input sm mono valery-in" inputmode="tel" maxlength="40" data-oid="${esc(o.id)}" value="${esc(o.valeryNote || '')}" placeholder="N° (varias: 85643-85644)" title="Si el pedido lleva varias notas, sepáralas con «-»" ${dis}></td>
             <td data-l="Resultado"><select class="select sm" data-q="result" ${dis}>${opt(Liq.RESULTS, e.result)}</select></td>
             <td data-l="Nota nueva">${e.result === 'parcial' ? `<input class="input sm mono" data-q="newValery" inputmode="numeric" maxlength="20" value="${esc(e.newValery || '')}" placeholder="N° nueva" ${dis}>` : (e.result === 'anulada' ? '<span class="muted">anulada</span>' : e.result === 'retiro' ? `<input class="input sm mono" data-q="retiroNote" inputmode="numeric" maxlength="20" value="${esc(e.retiroNote || '')}" placeholder="misma nota" title="Nota con la que retiró en la oficina (vacío = la misma del camión)" ${dis}>` : '')}</td>
             <td data-l="Motivo">${e.result !== 'entregada' ? motivoSel(e.motivo || '', 'data-q="motivo"') : ''}</td>
@@ -1454,7 +1454,7 @@
       const t = e.target;
       const vi = t.closest('.valery-in');
       if (vi) {
-        const o = orderById(vi.dataset.oid), v = digitsOnly(vi.value);
+        const o = orderById(vi.dataset.oid), v = noteFmt(vi.value);
         if (!o) return;
         if ((o.valeryNote || '') === v) { vi.value = o.valeryNote || ''; return; }
         if (v && !(await noteFree(o, v))) { vi.value = o.valeryNote || ''; return; }
@@ -2627,11 +2627,13 @@
   /* ============ Notas Valery: secuenciales, ningún número se repite ============ */
   const normNote = (v) => String(v == null ? '' : v).replace(/\D/g, '').replace(/^0+(?=\d)/, '');
   const digitsOnly = (v) => String(v == null ? '' : v).replace(/\D/g, '');
+  // Un pedido puede llevar varias notas: «85643-85644» (solo números separados por «-»). Cada número cuenta solo.
+  const noteFmt = (v) => (String(v == null ? '' : v).match(/\d+/g) || []).join('-');
+  const noteParts = (v) => [...new Set((String(v == null ? '' : v).match(/\d+/g) || []).map((x) => x.replace(/^0+(?=\d)/, '')))];
   /** Números de nota que usa un pedido (su nota, la nota nueva de una devolución y la del retiro), ya liquidado o en borrador. */
   function notesOfOrder(o) {
-    const out = new Set([normNote(o.valeryNote)]);
-    if (o.delivery) { out.add(normNote(o.delivery.newValery)); out.add(normNote(o.delivery.retiroNote)); }
-    out.delete('');
+    const out = new Set(noteParts(o.valeryNote));
+    if (o.delivery) { noteParts(o.delivery.newValery).forEach((n) => out.add(n)); noteParts(o.delivery.retiroNote).forEach((n) => out.add(n)); }
     return out;
   }
   /** «Se entrega después» puede llevar la misma nota del pedido que la originó. */
@@ -2641,18 +2643,20 @@
    * y, con internet, todo el servidor. Si ya lo tiene otro, muestra cuál y no deja guardarlo.
    */
   async function noteFree(o, v, label) {
-    const n = normNote(v); if (!n) return true;
+    const ns = noteParts(v); if (!ns.length) return true;
+    let n = ns[0];
     const lab = (lid) => { const l = lid && S.loads.find((y) => y.id === lid); return l ? `${Loads.labelOf(l)}${l.number ? ' ' + Loads.loadCode(l) : ''}` : ''; };
     const hits = [];
-    S.orders.forEach((x) => { if (!x.deleted && x.id !== o.id && !sameChain(o, x) && notesOfOrder(x).has(n)) hits.push({ orderId: x.id, clientName: x.clientName, sellerName: x.sellerName, loadId: (x.delivery && x.delivery.loadId) || x.loadId || '', loadLabel: lab((x.delivery && x.delivery.loadId) || x.loadId) }); });
+    S.orders.forEach((x) => { const hn = !x.deleted && x.id !== o.id && !sameChain(o, x) && ns.find((y) => notesOfOrder(x).has(y)); if (hn) { n = hn; hits.push({ orderId: x.id, clientName: x.clientName, sellerName: x.sellerName, loadId: (x.delivery && x.delivery.loadId) || x.loadId || '', loadLabel: lab((x.delivery && x.delivery.loadId) || x.loadId) }); } });
     // Liquidaciones en borrador: nota nueva de devolución o nota de retiro todavía sin cerrar
     S.loads.forEach((l) => Object.entries((l.liq && l.liq.orders) || {}).forEach(([oid, en]) => {
       if (oid === o.id || !en || hits.some((h) => h.orderId === oid)) return;
-      if (normNote(en.newValery) === n || normNote(en.retiroNote) === n) { const x = orderById(oid); if (x && !x.deleted && !sameChain(o, x)) hits.push({ orderId: oid, clientName: x.clientName, sellerName: x.sellerName, loadId: l.id, loadLabel: lab(l.id) }); }
+      const hn = ns.find((y) => noteParts(en.newValery).includes(y) || noteParts(en.retiroNote).includes(y));
+      if (hn) { n = hn; const x = orderById(oid); if (x && !x.deleted && !sameChain(o, x)) hits.push({ orderId: oid, clientName: x.clientName, sellerName: x.sellerName, loadId: l.id, loadLabel: lab(l.id) }); }
     }));
     if (!hits.length && navigator.onLine) {
-      const r = await Sync.readerCall('notas', { action: 'check', note: n, orderId: o.id, pendingFrom: o.pendingFrom || '' });
-      if (r.ok && r.data && Array.isArray(r.data.conflicts)) hits.push(...r.data.conflicts);
+      const r = await Sync.readerCall('notas', { action: 'check', note: ns.join('-'), orderId: o.id, pendingFrom: o.pendingFrom || '' });
+      if (r.ok && r.data && Array.isArray(r.data.conflicts)) { hits.push(...r.data.conflicts); if (hits[0] && hits[0].note) n = hits[0].note; }
     }
     if (!hits.length) return true;
     const sh = openSheet(`<div class="row"><h2 class="grow">⛔ La nota ${esc(n)} ya existe</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>

@@ -1,7 +1,7 @@
 // Cuentas por cobrar y crédito por cliente (Fases 5 y 6). Lo usan /api/pedidos/pagos y el aviso diario (cron).
 import { db } from '@/lib/db';
 import { credInfo, diffDays, rulesAt, rulesOf, tramos, vzDay, type CredInfo, type CredSetting } from '@/lib/cobranza';
-import { cargadoName, abonoKey, allocate, noteKey, notaNum, noteStatus, r2, type Pago } from '@/lib/pagos';
+import { cargadoName, abonoKey, allocate, noteKey, notaNum, notaTxt, noteStatus, r2, type Pago } from '@/lib/pagos';
 import { lineMoney } from '@/lib/money';
 
 const LIVE = ['espera', 'aprobado'];
@@ -81,7 +81,7 @@ export async function cartera(sellerId: string) {
     // ¿Venció TODO lo que falta de la nota (todas sus categorías)? Desde ahí baja el límite y se avisa al vendedor
     const pend = tr.filter((t) => t.resta > 0.01), todo = pend.length && pend.every((t) => t.vence < hoy) ? diffDays(pend[pend.length - 1].vence, hoy) : 0;
     if (todo > 0) x.atrasoTodo = Math.max(x.atrasoTodo, todo);
-    notas.push({ ...noteStatus(monto, a), clientId: String(o.clientId), clientName: String(o.clientName || ''), sellerId: String(o.sellerId || ''), sellerName: String(o.sellerName || ''), orderId: o.id, nota, key, monto, resta,
+    notas.push({ ...noteStatus(monto, a), clientId: String(o.clientId), clientName: String(o.clientName || ''), sellerId: String(o.sellerId || ''), sellerName: String(o.sellerName || ''), orderId: o.id, nota: notaTxt((d && d.newValery) || o.valeryNote), key, monto, resta,
       pagado: a ? a.pagado : 0, espera: a ? a.espera : 0, despacho: start, vence: next.vence, dias, diasTodo: todo, tramos: tr, liquidado: !!d, seg: seg.get(`${o.clientId}:${key}`) || null });
   }
   notas.sort((x, y) => x.dias - y.dias);
