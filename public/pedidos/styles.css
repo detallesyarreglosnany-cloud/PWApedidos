@@ -780,3 +780,9 @@ tr.agotado-row td { opacity: .65; }
 .alm-exc td { background: rgba(255, 180, 0, .08); }
 .au-sec { margin-top: 8px; } .au-sec summary { cursor: pointer; }
 .au-row { padding: 5px 0; border-top: 1px solid var(--line); font-size: 14px; } .au-row.au-error { color: var(--danger, #ff6b6b); } .au-row.au-info { color: var(--ink-2); font-size: 13px; }
+.rq-box table.rq td { vertical-align: top; } .rq-box .rq-cj { font-size: 15px; } .rq-box .rq-usd { font-size: 12px; color: var(--ink-2); }
+.rq-box td.rq-tot .rq-cj, .rq-box tr.rq-foot .rq-cj { font-size: 18px; } .rq-box td.rq-tot .rq-usd, .rq-box tr.rq-foot .rq-usd { font-size: 14px; font-weight: 800; color: var(--ink); }
+.rq-box tr.rq-foot td { border-top: 2px solid var(--line); font-weight: 800; } .rq-box .rq-h { margin: 14px 0 4px; }
+.rq-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; margin: 8px 0; } .rq-kpis div { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+.rq-kpis small { display: block; color: var(--ink-2); font-size: 11px; text-transform: uppercase; } .rq-kpis b { font-size: 22px; }
+.rq-ok { color: var(--ok, #3ecf8e); font-weight: 700; } .rq-bad { color: var(--danger); font-weight: 700; }

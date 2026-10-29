@@ -88,7 +88,13 @@
     rets.forEach((p) => {
       const r = Envases.info(p), sameCode = r.type && codes.get(Envases.normCode(r.type));
       add('Envases retornables', 'info', `${p.code} ${p.name} ${p.presentation || ''} · ${r.type ? 'tipo ' + r.type : 'aparte (se cuenta con su código)'} · ${r.regime === 'contraentrega' ? 'contraentrega' : 'préstamo'}${r.assign ? ' · asignables' : ''}`);
-      if (sameCode && sameCode.id !== p.id) add('Envases retornables', 'revisar', `El tipo de envase «${r.type}» de ${p.code} ${p.name} es igual al código de otro producto (${sameCode.code} ${sameCode.name}). Para no confundirlos, déjalo «aparte» o cambia el nombre del tipo`);
+      if (sameCode && sameCode.id !== p.id) {
+        // Solo se mezclan las cuentas si el otro producto también es retornable «aparte» (se cuenta con su código)
+        const o = Envases.info(sameCode), mezcla = !!o && !o.type;
+        add('Envases retornables', mezcla ? 'error' : 'info', mezcla
+          ? `Los vacíos de ${sameCode.code} ${sameCode.name} (aparte, se cuentan con su código) se MEZCLAN con el tipo de envase «${r.type}» de ${p.code} ${p.name}. Avísale a soporte antes de cambiar nada (cambiar el tipo separa los saldos ya registrados)`
+          : `Ojo: «${r.type}» es el TIPO de envase de ${p.code} ${p.name}, no el código ${sameCode.code} (${sameCode.name}, que no es retornable). No se mezclan cuentas; no cambies el tipo (separaría los saldos de vacíos ya registrados)`);
+      }
     });
     const byType = new Map();
     rets.forEach((p) => { const t = Envases.info(p).type; if (t) (byType.get(t) || byType.set(t, []).get(t)).push(p); });

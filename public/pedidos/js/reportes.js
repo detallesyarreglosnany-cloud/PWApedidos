@@ -390,6 +390,7 @@
         ${(d.integridad || []).length ? `<div class="hint warn">⚠ <b>${d.integridad.length} hoja(s) liquidada(s) con el total INCOMPLETO en el servidor</b> — el reporte estaría subestimado en ${usd(d.integridad.reduce((a, x) => a + x.falta, 0))}. Abre esa hoja en un equipo que tenga los datos y pulsa Sincronizar:
           <div class="muted" style="margin-top:4px">${d.integridad.map((x) => `${esc(fmtDate(x.date))} · ${esc(x.label || x.code)} · ${esc(x.dispatcherName || 'sin despachador')} · declara ${usd(x.declarado)} · servidor ${usd(x.servidor)}`).join('<br>')}</div></div>` : ''}
         ${d.sinFoto ? `<div class="hint">${d.sinFoto} hoja(s) se liquidaron antes de esta versión: no tienen el detalle de diferencias del camión.</div>` : ''}
+        <div class="card card-pad no-print rq-box" id="rqBox" style="margin-bottom:12px"></div>
         <div class="card card-pad no-print" id="xcBox" style="margin-bottom:12px"></div>
         <div id="tlBox"></div>
         <div class="card card-pad no-print" id="csBox" style="margin-bottom:12px"></div>
@@ -426,6 +427,8 @@
         ${tbl('Novedades de las notas', [{ t: 'Fecha' }, { t: 'Cliente' }, { t: 'Vendedor' }, { t: 'Resultado' }, { t: 'Nota' }, { t: 'Nota nueva' }, { t: 'Motivo' }, N('Pedido'), N('Entregado')],
           d.novedades.map((x) => `<tr><td>${esc(fmtDate(x.date))}</td><td><b>${esc(x.clientName)}</b></td><td>${esc(x.sellerName)}</td><td>${esc(RES[x.result] || x.result)}</td><td class="mono">${esc(x.valeryNote)}</td><td class="mono">${esc(x.newValery)}</td><td>${esc(x.motivo)}</td><td class="n">${usd(x.pedido)}</td><td class="n">${usd(x.entregado)}</td></tr>`).join(''))}
         <p class="muted">${d.detail.length} clientes entregados en el período. El detalle completo va en el Excel.</p>`;
+      // Resumen de quincena listo para pagos (y la comparación con el período anterior, que se pide aparte)
+      if (global.ResumenQ) global.ResumenQ.mount($('#rqBox'), d, { title: titleOf(f2), loadPrev: (r) => global.Sync.readerCall('quincena', r).then((x) => (x.ok ? x.data : null)) });
       renderCatSel($('#csBox'), d, st, f2);
       renderCompare($('#xcBox'), d, st);
       renderLedger($('#tlBox'), d.from, d.to);

@@ -425,6 +425,23 @@
     printHTML('Liquidado por categorías', '@page{size:letter portrait;margin:10mm} table.rep th{font-size:10px} table.rep td{font-size:11px} table.rep tr.tot td{font-weight:bold;background:#f3e3e3}', body);
   }
 
+  /* ------------------- Resumen de quincena (para pagos) ------------------- */
+  function printResumenQ(tables, ctx) {
+    const body = `<section class="sheet">${header(ctx.config, 'RESUMEN DE QUINCENA · ' + (ctx.title || ''), fdate(ctx.from + 'T12:00:00') + ' al ' + fdate(ctx.to + 'T12:00:00'))}
+      ${tables}
+      <p class="muted">Solo lo liquidado (sin devoluciones ni notas anuladas). Vacíos devueltos = recibidos al entregar + devueltos de entregas anteriores. Las ventas retiradas por oficina van a nombre del despachador de retiros (depósito).</p>
+      <div class="sign" style="grid-template-columns:repeat(3,1fr)"><div>Elaborado (oficina)</div><div>Revisado</div><div>Aprobado (gerencia)</div></div></section>`;
+    printHTML('Resumen de quincena', RQ_CSS, body, FIT_AUTO);
+  }
+  const RQ_CSS = `@page{size:letter landscape;margin:8mm}
+    table.rq{width:100%;margin:4px 0 8px} table.rq th{font-size:10px;text-align:center} table.rq td{font-size:11px;vertical-align:top}
+    table.rq .rq-cj{font-size:12px} table.rq .rq-usd{font-size:10px;color:#333} table.rq td.rq-tot,table.rq th.rq-tot{border-left:2px solid #000;border-right:2px solid #000}
+    table.rq td.rq-tot .rq-cj{font-size:14px} table.rq td.rq-tot .rq-usd{font-size:12px;font-weight:bold;color:#000}
+    table.rq tr.rq-foot td{background:#f3e3e3;font-weight:bold;border-top:2px solid #000} table.rq tr.rq-foot .rq-cj{font-size:14px} table.rq tr.rq-foot .rq-usd{font-size:12px;font-weight:bold;color:#000}
+    .rq-h{font-size:13px;color:#730101;margin:10px 0 2px} .rq-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:6px 0}
+    .rq-kpis div{border:1px solid #999;border-radius:6px;padding:4px 8px} .rq-kpis small{display:block;font-size:9px;text-transform:uppercase;color:#555} .rq-kpis b{font-size:18px}
+    .rq-ok{font-weight:bold;margin:4px 0} .rq-bad{font-weight:bold;color:#b00020;margin:4px 0} .rq-line{margin:2px 0 4px;font-size:12px} .warn-txt{color:#b00020}`;
+
   /* ------------------------- Notas de entrega ------------------------- */
   function noteHTML(order, ctx, copy) {
     const cfg = ctx.config, client = ctx.clientsById.get(order.clientId) || {};
@@ -579,5 +596,5 @@
   }
 
   global.AlignCols = alignCols;
-  global.Print = { printTruckLedger, printLoadSheet, loadSheetHTML, printNotes, printLiquidation, printKardex, printQuincena, printCatSel, printPagos, printTickets, printTestTicket };
+  global.Print = { printTruckLedger, printLoadSheet, loadSheetHTML, printNotes, printLiquidation, printKardex, printQuincena, printCatSel, printResumenQ, printPagos, printTickets, printTestTicket };
 })(window);
