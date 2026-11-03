@@ -394,7 +394,7 @@
         <div class="card card-pad no-print" id="xcBox" style="margin-bottom:12px"></div>
         <div id="tlBox"></div>
         <div class="card card-pad no-print" id="csBox" style="margin-bottom:12px"></div>
-        <div class="toolbar no-print"><button class="btn" id="qzPrint">🖨 Imprimir reporte</button><button class="btn" id="qzCsv">⇩ Excel</button></div>
+        <div class="toolbar no-print"><button class="btn" id="qzPrint">🖨 Imprimir reporte</button><button class="btn" id="qzCmp" title="Qué hojas entraron o cambiaron después de imprimir un reporte (no cambia nada)">🕒 Comparar con un reporte anterior</button><button class="btn" id="qzCsv">⇩ Excel</button></div>
         <div class="kpi-row">
           <div class="kpi"><small>Venta liquidada</small><b>${usd(t.monto)}</b><small>${nf0.format(t.clients)} clientes · ${t.hojas} hojas · lo que paga el cliente</small></div>
           <div class="kpi"><small>Venta en proceso</small><b>${usd(d.enProceso.monto)}</b><small>${nf0.format(d.enProceso.clients)} pedidos · aún no cuenta</small></div>
@@ -432,6 +432,7 @@
       renderCatSel($('#csBox'), d, st, f2);
       renderCompare($('#xcBox'), d, st);
       renderLedger($('#tlBox'), d.from, d.to);
+      $('#qzCmp').onclick = () => global.CuadreQ.sheet(d);
       $('#qzPrint').onclick = () => global.Print.printQuincena(d, { config: S.config, title: titleOf(f2), RES });
       $('#qzCsv').onclick = () => global.Exporta.save(`reporte_${d.from}_a_${d.to}.xlsx`, reportSheets(d, titleOf(f2), S.config.rubros));
     }
