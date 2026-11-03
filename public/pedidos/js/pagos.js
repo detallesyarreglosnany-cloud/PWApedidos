@@ -338,33 +338,49 @@
    */
   function cargadoForm(o) {
     const P = PV(), { esc, usd, toast } = P;
+    // Una nota (o.orderId) o varias del mismo cliente (o.notas): todas con la misma fecha de pago
+    const list = Array.isArray(o.notas) && o.notas.length ? o.notas : [{ orderId: o.orderId, nota: o.nota, monto: o.monto, vence: o.vence, sellerId: o.sellerId }];
+    const multi = list.length > 1;
     const sh = P.openSheet(`<div class="row"><h2 class="grow">✅ Pago cargado al sistema</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
-      <p><b>${esc(o.clientName || '')}</b>${o.nota ? ` · nota <b>${esc(o.nota)}</b>` : ''}${o.monto ? ` · ${usd(o.monto)}` : ''}</p>
+      <p><b>${esc(o.clientName || '')}</b>${multi ? ` · ${list.length} notas · ${usd(list.reduce((a, n) => a + (+n.monto || 0), 0))}` : `${o.nota ? ` · nota <b>${esc(o.nota)}</b>` : ''}${o.monto ? ` · ${usd(o.monto)}` : ''}`}</p>
+      ${multi ? `<div class="card card-pad" style="margin-bottom:8px"><b>¿Qué notas pagó?</b> <span class="muted">Marca solo las que ya están pagadas en el sistema de la empresa.</span>${list.map((n, i) => `<label class="row" style="gap:8px;margin-top:6px"><input type="checkbox" data-cgn="${i}" style="width:22px;height:22px"><span>Nota <b>${esc(n.nota || '—')}</b> · ${usd(+n.monto || 0)}${n.vence ? ` · vence ${esc(P.fmtDate(n.vence))}` : ''}</span></label>`).join('')}</div>` : ''}
       <p class="muted">Úsalo cuando el pago <b>ya está cargado en el sistema de cobranzas de la empresa</b>. No hace falta subir el detalle: la nota queda pagada completa y sale de la lista de deudores. Con la <b>fecha del pago</b> el sistema calcula si pagó dentro del plazo o con atraso (el atraso afecta su crédito).</p>
       <label class="field"><span>Fecha del pago</span><input id="cgF" type="date" class="input" value="${esc(P.today())}" max="${esc(P.today())}"></label>
       <div id="cgV"></div><p id="cgE" class="warn-txt"></p>
       <div class="actions"><button class="btn" data-close>Cancelar</button><button class="btn btn-primary" id="cgOk">Marcar como pagada</button></div>`);
     // Vista previa: ¿dentro del plazo? (con el vencimiento de la nota, si lo tenemos; si no, lo calcula el servidor)
     const dd = (a, b) => Math.round((Date.parse(b + 'T12:00:00Z') - Date.parse(a + 'T12:00:00Z')) / 86400000);
+    const chosen = () => list.filter((n, i) => !multi || sh.el.querySelector(`[data-cgn="${i}"]`).checked);
     const prev = () => {
       const f = sh.el.querySelector('#cgF').value, box = sh.el.querySelector('#cgV');
-      if (!o.vence || !f) { box.innerHTML = ''; return; }
-      const at = dd(o.vence, f);
-      box.innerHTML = at > 0 ? `<div class="hint warn">⚠ Venció el ${esc(P.fmtDate(o.vence))}: pagó <b>${at} día${at === 1 ? '' : 's'} tarde</b>. Cuenta como atraso y afecta su crédito.</div>`
-        : `<div class="hint">✅ Dentro del plazo (vencía el ${esc(P.fmtDate(o.vence))}): no afecta su crédito.</div>`;
+      const ns = chosen().filter((n) => n.vence);
+      if (!ns.length || !f) { box.innerHTML = ''; return; }
+      const late = ns.map((n) => ({ n, at: dd(n.vence, f) })).filter((x) => x.at > 0);
+      if (!multi) { const v = ns[0].vence, at = dd(v, f);
+        box.innerHTML = at > 0 ? `<div class="hint warn">⚠ Venció el ${esc(P.fmtDate(v))}: pagó <b>${at} día${at === 1 ? '' : 's'} tarde</b>. Cuenta como atraso y afecta su crédito.</div>`
+          : `<div class="hint">✅ Dentro del plazo (vencía el ${esc(P.fmtDate(v))}): no afecta su crédito.</div>`; return; }
+      box.innerHTML = late.length ? `<div class="hint warn">⚠ Con esa fecha, ${late.map((x) => `la nota ${esc(x.n.nota || '—')} se pagó <b>${x.at} día${x.at === 1 ? '' : 's'} tarde</b>`).join(' · ')}. Cuenta como atraso y afecta su crédito.</div>`
+        : '<div class="hint">✅ Todas dentro del plazo: no afecta su crédito.</div>';
     };
-    sh.el.querySelector('#cgF').addEventListener('input', prev); prev();
+    sh.el.querySelector('#cgF').addEventListener('input', prev); sh.el.querySelectorAll('[data-cgn]').forEach((c) => c.addEventListener('change', prev)); prev();
     sh.el.querySelector('#cgOk').onclick = async () => {
       const fecha = sh.el.querySelector('#cgF').value, err = sh.el.querySelector('#cgE');
       if (!fecha || fecha > P.today()) { err.textContent = 'Pon la fecha del pago (no puede ser futura)'; return; }
+      const ns = chosen(); if (!ns.length) { err.textContent = 'Marca al menos una nota'; return; }
       const b = sh.el.querySelector('#cgOk'); b.disabled = true;
-      const r = await global.Sync.pagosCall({ action: 'cargado', sellerId: o.sellerId || '', orderId: o.orderId, fecha, by: (P.S.config && P.S.config.adminName) || '' });
+      // Una por una (cada nota guarda su fecha y su atraso); si una falla, las demás quedan guardadas y se avisa cuál
+      let atMax = 0, done = 0; const fallas = [];
+      for (const n of ns) {
+        const r = await global.Sync.pagosCall({ action: 'cargado', sellerId: n.sellerId || o.sellerId || '', orderId: n.orderId, fecha, by: (P.S.config && P.S.config.adminName) || '' });
+        if (!r.ok) { fallas.push(`${n.nota || 'nota'}: ${r.error || 'sin internet'}`); continue; }
+        done++; atMax = Math.max(atMax, (r.data.cargado && +r.data.cargado.atraso) || 0);
+        P.logEvent('pago_cargado', `Pago cargado al sistema: ${o.clientName}${n.nota ? ' · nota ' + n.nota : ''} · ${fecha}`, { orderId: n.orderId, clientName: o.clientName });
+      }
       b.disabled = false;
-      if (!r.ok) { err.textContent = r.error || 'No se pudo guardar (hace falta internet)'; return; }
-      P.logEvent('pago_cargado', `Pago cargado al sistema: ${o.clientName}${o.nota ? ' · nota ' + o.nota : ''} · ${fecha}`, { orderId: o.orderId, clientName: o.clientName });
-      try { Object.keys(localStorage).filter((k) => k.startsWith('pv_cart:')).forEach((k) => localStorage.removeItem(k)); } catch (e) { /* noop */ }
-      const at = r.data.cargado && +r.data.cargado.atraso || 0;
-      sh.close(); toast(at ? `✅ Nota pagada · ${at} día${at === 1 ? '' : 's'} de atraso (cuenta en su crédito)` : '✅ Nota pagada a tiempo', at ? 'err' : 'ok'); if (o.onDone) o.onDone();
+      if (done) { try { Object.keys(localStorage).filter((k) => k.startsWith('pv_cart:')).forEach((k) => localStorage.removeItem(k)); } catch (e) { /* noop */ } }
+      if (fallas.length) { err.textContent = `${done ? `Se guardaron ${done}. ` : ''}No se pudo guardar: ${fallas.join(' · ')}`; if (done && o.onDone) o.onDone(); return; }
+      const what = multi ? `${done} notas pagadas` : 'Nota pagada';
+      sh.close(); toast(atMax ? `✅ ${what} · ${atMax} día${atMax === 1 ? '' : 's'} de atraso (cuenta en su crédito)` : `✅ ${what} a tiempo`, atMax ? 'err' : 'ok'); if (o.onDone) o.onDone();
     };
   }
   async function cargadoUndo(o) {
