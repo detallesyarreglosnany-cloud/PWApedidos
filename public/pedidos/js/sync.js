@@ -71,6 +71,9 @@
           }
         }
       }
+      // Teléfono del vendedor: la oficina le pasó este pedido a otro vendedor. Gana la versión del servidor
+      // (el servidor ya no aceptaría un cambio de este teléfono) y deja de quedar pendiente.
+      if (l && l.dirty && store === 'orders' && !isAdmin && r.sellerId && l.sellerId && r.sellerId !== l.sellerId) { toPut.push({ ...r, dirty: false }); return; }
       if (l && l.dirty) {
         if (store === 'orders' || store === 'loads') {
           const frozen = store === 'orders' && isLocked(r) && !isAdmin;
@@ -233,6 +236,7 @@
     if (cfg.adminKey) headers['x-admin-key'] = cfg.adminKey;
     if (cfg.supervisorKey) headers['x-supervisor-key'] = cfg.supervisorKey;
     if (cfg.mktToken) headers['x-mkt-token'] = cfg.mktToken; // permiso del PIN de Promoción y marketing
+    withOwner(headers, cfg); // permiso del PIN de seguridad (cambio silencioso)
     await withUser(headers, cfg);
 
     // Vercel rechaza cuerpos de más de 4,5 MB en ambos sentidos: la subida va
@@ -428,6 +432,10 @@
     for (const m of await DB.getAll('meta')) if (/^syncCursor/.test(m.key)) await DB.remove('meta', m.key);
   }
 
+  /** Oficina con el permiso del PIN de seguridad (solo en esta pestaña). */
+  function withOwner(headers, cfg) {
+    try { const t = sessionStorage.getItem('pvOwnerTok'); if (t && cfg.adminKey) headers['x-owner-token'] = t; } catch (e) { /* noop */ }
+  }
   /** Usuario con rol (Gerencia, Cobranzas): su permiso de este equipo va en cada llamada. */
   async function withUser(headers, cfg) {
     if (cfg.userToken && cfg.userId) { headers['x-user-id'] = cfg.userId; headers['x-user-token'] = cfg.userToken; headers['x-device-id'] = await deviceId(); }
@@ -450,6 +458,7 @@
     if (!cfg.adminKey) return { ok: false, error: 'Falta la clave admin en Ajustes' };
     const headers = { 'Content-Type': 'application/json', 'x-admin-key': cfg.adminKey };
     if (cfg.syncKey) headers['x-sync-key'] = cfg.syncKey;
+    withOwner(headers, cfg);
     return post((cfg.syncUrl || DEFAULT_SYNC_URL).replace(/\/sync$/, '/' + name), headers, body || {});
   }
 

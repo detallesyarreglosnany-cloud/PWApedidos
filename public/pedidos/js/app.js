@@ -228,6 +228,8 @@
     const prevs = byField ? await Promise.all(docs.map((d) => DB.get(kind, d.id))) : [];
     const SELLER_ST = ['abierto', 'enviado'];
     const skipOf = (prev, d) => (kind === 'orders' && !isOffice() && !(prev && SELLER_ST.includes(prev.status) && SELLER_ST.includes(d.status)) ? DB.FV_GROUPS.orders : null);
+    // Cambio silencioso: el servidor no avisa de este guardado (requiere el permiso del PIN de seguridad)
+    if (byField && silentOn()) { const q = DB.now(); docs.forEach((d) => { d.quietAt = q; }); }
     docs.forEach((d, i) => { DB.touch(d); if (byField) DB.stampFields(prevs[i], d, skipOf(prevs[i], d)); });
     await DB.putMany(kind, docs);
     if (kind === 'config') { docs.forEach((d) => { if (d.id === 'mkt') S.mkt = d; else if (String(d.id).startsWith('bn_')) S.banners = { ...(S.banners || {}), [d.id]: d }; else S.config = d; }); }
@@ -259,11 +261,37 @@
     if (sess && sess.sellerId) DB.setCookie('pv_seller', sess.sellerId);
   }
 
+  /* ============ PIN de seguridad y cambio silencioso (solo oficina) ============ */
+  // El permiso del PIN (lo valida el servidor) vive solo en esta pestaña. Con el «cambio silencioso»
+  // activo, lo que se guarda en pedidos y hojas no genera avisos ni queda en el Historial.
+  const ssGet = (k) => { try { return sessionStorage.getItem(k) || ''; } catch (e) { return ''; } };
+  const ssSet = (k, v) => { try { if (v) sessionStorage.setItem(k, v); else sessionStorage.removeItem(k); } catch (e) { /* noop */ } };
+  const ownerToken = () => ssGet('pvOwnerTok');
+  const setOwnerToken = (t) => { ssSet('pvOwnerTok', t || ''); if (!t) ssSet('pvSilentUntil', ''); };
+  const silentUntil = () => +ssGet('pvSilentUntil') || 0;
+  const silentOn = () => isOffice() && !!ownerToken() && silentUntil() > Date.now();
+  const setSilent = (min) => ssSet('pvSilentUntil', min ? String(Date.now() + min * 60000) : '');
+  /** Quién imprime / descarga / cambia (para el sello y el historial). */
+  function actorName() {
+    if (isOffice()) return (S.config && S.config.adminName) || 'Oficina';
+    const s = S.session && S.session.sellerId && sellerById(S.session.sellerId);
+    return s ? s.name : 'Equipo';
+  }
+  const stampTime = (iso) => new Date(iso || Date.now()).toLocaleString('es-VE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  /** Sello de impresión / descarga: «Impreso el 05/11/2026 10:42 · por Daniela». */
+  const stampText = (verb, extra) => [`${verb} el ${stampTime()} · por ${actorName()}`].concat(extra ? [extra] : []).join(' · ');
+  /** Una hoja impresa o descargada queda en el Historial (con su hoja, si la tiene). */
+  function docOut(kind, title, meta) {
+    const imp = kind === 'print';
+    return logEvent(imp ? 'impresion' : 'descarga', `${imp ? 'Imprimió' : 'Descargó'}: ${String(title || '').slice(0, 200)}`, meta || {}, { onceKey: kind + '|' + title, everyMin: 1 });
+  }
+
   /* ====================== Historial de actividad ====================== */
-  // Cada acción queda con hora, quién y equipo. Solo se agrega: nadie la edita.
+  // Cada acción queda con hora, quién y equipo. Solo se agrega: nadie la edita (con el PIN de seguridad se puede ocultar un registro).
   const lastLogged = new Map();
   async function logEvent(type, text, extra, opts) {
     try {
+      if (silentOn()) return; // cambio silencioso: no queda en el Historial
       const office = isOffice();
       const sid = office ? 'oficina' : (S.session && S.session.sellerId);
       if (!sid) return;
@@ -2140,5 +2168,6 @@
     notifSheet, refreshPush,
     gerMode, productById, sellerById, orderById, clientById, rubros, orderLinesHTML, groupLines, groupedRows, productHTML, setQty, applyQty, markVt, activeOrder, popularity, gainOf, isNewProduct,
     boot, localNotif,
+    ownerToken, setOwnerToken, silentOn, silentUntil, setSilent, actorName, stampText, stampTime, docOut,
   };
 })();

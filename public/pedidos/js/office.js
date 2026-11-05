@@ -27,6 +27,105 @@
   const sizeOrd = () => (window.Almacen ? Almacen.sizeOrder(S.config) : undefined); // orden de presentaciones (2 L, 1,5 L, 1 L, 1,25 L…)
   const byIdMap = (arr) => new Map(arr.map((x) => [x.id, x]));
 
+  /* ====== PIN de seguridad · cambio silencioso · registros ocultos del Historial ====== */
+  // El PIN lo valida el SERVIDOR (/api/pedidos/historial): la clave admin sola no alcanza.
+  const ownerCall = async (body) => Sync.adminCall('historial', { deviceId: await Sync.deviceId(), ...body });
+  const hm = (ms) => new Date(ms).toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit' });
+  /** Pide un PIN de 4 a 6 números (dos veces si twice). onPin(pin) devuelve '' si salió bien o el error a mostrar. */
+  function pinSheet({ title, text, twice, label, onPin }) {
+    return new Promise((resolve) => {
+      const sh = openSheet(`<div class="row"><h2 class="grow">${esc(title)}</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+        ${text ? `<p class="muted">${text}</p>` : ''}
+        <form id="owF"><label class="field"><span>${twice ? 'PIN nuevo (4 a 6 números)' : 'PIN'}</span><input id="owP" class="input" type="password" inputmode="numeric" maxlength="6" autocomplete="off"></label>
+          ${twice ? '<label class="field"><span>Repetir PIN</span><input id="owP2" class="input" type="password" inputmode="numeric" maxlength="6" autocomplete="off"></label>' : ''}
+          <p id="owE" style="color:#b00020;margin:6px 0 0;min-height:1em"></p>
+          <div class="actions"><button type="button" class="btn" data-close>Cancelar</button><button class="btn btn-primary" type="submit">${esc(label || 'Entrar')}</button></div></form>`);
+      let done = false;
+      const iv = setInterval(() => { if (!sh.el.isConnected) end(false); }, 400);
+      function end(v) { if (done) return; done = true; clearInterval(iv); resolve(v); }
+      const inp = $('#owP', sh.el), err = $('#owE', sh.el), btn = sh.el.querySelector('button[type=submit]');
+      setTimeout(() => inp.focus(), 50);
+      $('#owF', sh.el).onsubmit = async (e) => {
+        e.preventDefault();
+        const pin = inp.value.trim();
+        if (!/^\d{4,6}$/.test(pin)) { err.textContent = 'El PIN es de 4 a 6 números'; return; }
+        if (twice && pin !== $('#owP2', sh.el).value.trim()) { err.textContent = 'Los PIN no coinciden'; return; }
+        btn.disabled = true; err.textContent = 'Validando…';
+        const why = await onPin(pin);
+        btn.disabled = false;
+        if (why) { err.textContent = why; inp.select(); return; }
+        end(true); sh.close();
+      };
+    });
+  }
+  /** Permiso del PIN de seguridad en esta pestaña (lo pide, o lo crea la primera vez). */
+  async function ownerAuth(why) {
+    if (!navigator.onLine) { toast('Se necesita internet: el PIN de seguridad lo valida el servidor', 'err'); return false; }
+    const st = await ownerCall({ action: 'estado' });
+    if (!st.ok) { toast(st.error || 'No se pudo consultar el servidor', 'err'); return false; }
+    if (st.data.ok) return true;
+    PV.setOwnerToken('');
+    const create = !st.data.hasPin;
+    return pinSheet({
+      title: '🔐 PIN de seguridad', twice: create, label: create ? 'Crear PIN' : 'Entrar',
+      text: esc(why || '') + (create ? '<br><b>Aún no hay PIN:</b> créalo ahora. Solo tú debes conocerlo; lo guarda y lo valida el servidor.' : ''),
+      onPin: async (pin) => {
+        const r = await ownerCall({ action: create ? 'crear' : 'entrar', pin });
+        if (!r.ok || !r.data || !r.data.token) return r.error || 'No se pudo validar el PIN';
+        PV.setOwnerToken(r.data.token);
+        if (create) toast('PIN de seguridad creado', 'ok');
+        return '';
+      },
+    });
+  }
+  const SILENT_MIN = 15;
+  /** 🤫 Cambio silencioso: lo que se cambie no avisa a nadie ni queda en el Historial (15 min, con PIN). */
+  async function toggleSilent(onDone) {
+    if (PV.silentOn()) { PV.setSilent(0); toast('Cambio silencioso desactivado', 'ok'); if (onDone) onDone(); return; }
+    if (!(await ownerAuth('Con el cambio silencioso, lo que cambies en pedidos y hojas no envía avisos ni queda en el Historial.'))) return;
+    PV.setSilent(SILENT_MIN);
+    toast(`🤫 Cambio silencioso activo por ${SILENT_MIN} minutos`, 'ok');
+    if (onDone) onDone();
+  }
+  const silentBtn = (id) => `<button class="btn ${PV.silentOn() ? 'btn-accent' : ''}" id="${id}" type="button" title="Con el PIN de seguridad: los cambios no avisan ni quedan en el Historial">🤫 ${PV.silentOn() ? 'Silencioso hasta ' + hm(PV.silentUntil()) + ' · desactivar' : 'Cambio silencioso'}</button>`;
+  const silentHint = () => (PV.silentOn() ? `<div class="hint warn no-print">🤫 <b>Cambio silencioso activo</b> hasta las ${hm(PV.silentUntil())}: lo que cambies no avisa a los vendedores ni queda en el Historial.</div>` : '');
+  /** Oculta (o restaura) registros del Historial en el servidor y en esta PC. */
+  async function setHidden(evs, hide) {
+    if (!evs.length) return false;
+    if (!(await ownerAuth(hide ? 'Para ocultar un registro del Historial.' : 'Para restaurar registros del Historial.'))) return false;
+    // Un registro de esta PC que aún no subió: primero se sincroniza (si no, el servidor no lo encuentra)
+    if (evs.some((e) => e.dirty)) await PV.runSync(false);
+    const r = await ownerCall({ action: hide ? 'ocultar' : 'restaurar', ids: evs.map((e) => e.id) });
+    if (!r.ok) { toast(r.error || 'No se pudo', 'err'); return false; }
+    const ok = new Set(r.data.ids || []);
+    if (!ok.size) { toast('Ese registro aún no llegó al servidor: sincroniza y vuelve a intentarlo', 'err'); return false; }
+    for (const e of evs.filter((x) => ok.has(x.id))) {
+      const x = { ...e, updatedAt: r.data.at, dirty: false };
+      if (hide) Object.assign(x, { hidden: true, hiddenAt: r.data.at, deleted: true }); else { delete x.hidden; delete x.hiddenAt; delete x.deleted; x.restoredAt = r.data.at; }
+      await DB.put('events', x);
+    }
+    toast(hide ? 'Registro oculto del Historial' : `${ok.size} registro(s) restaurado(s)`, 'ok');
+    return true;
+  }
+  /** Papelera del Historial: solo con el PIN. */
+  async function hiddenEventsSheet(onDone) {
+    if (!(await ownerAuth('La papelera del Historial solo se abre con tu PIN.'))) return;
+    const draw = async (sh) => {
+      const list = (await DB.getAll('events')).filter((e) => e.hidden).sort((a, b) => String(b.at).localeCompare(String(a.at)));
+      $('#heBody', sh.el).innerHTML = list.length ? `<table class="inv"><thead><tr><th>Fecha y hora</th><th>Quién</th><th>Detalle</th><th>Oculto el</th><th></th></tr></thead><tbody>
+        ${list.map((e) => `<tr><td class="mono">${esc(PV.stampTime(e.at))}</td><td>${esc(e.sellerName)}</td><td>${esc(EVENT_LABEL[e.type] || e.type)} · ${esc(e.text)}</td><td class="mono">${esc(e.hiddenAt ? PV.stampTime(e.hiddenAt) : '')}</td>
+          <td><button class="btn btn-sm" data-restore="${esc(e.id)}">↩ Restaurar</button></td></tr>`).join('')}</tbody></table>` : '<p class="muted">No hay registros ocultos.</p>';
+    };
+    const sh = openSheet(`<div class="row"><h2 class="grow">🗃 Papelera del Historial</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <p class="muted">Registros que ocultaste con tu PIN. No se borraron: siguen guardados en el servidor y solo tú los ves aquí. Al restaurar vuelven al Historial de todas las PCs.</p><div id="heBody" style="overflow:auto"></div>`, { wide: true });
+    await draw(sh);
+    sh.el.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-restore]'); if (!b) return;
+      const ev = await DB.get('events', b.dataset.restore);
+      if (ev && (await setHidden([ev], false))) { await draw(sh); if (onDone) onDone(); }
+    });
+  }
+
   /* ============================== Shell ============================== */
   /* ------------------------- PIN de oficina ------------------------- */
   const LOCK_MIN = 15; // bloqueo automático por inactividad (minutos)
@@ -93,6 +192,7 @@
     }
     const body = $('#officeBody');
     if (!ger && !S.products.length && tab !== 'ajustes') body.insertAdjacentHTML('beforebegin', setupBanner());
+    if (!ger && PV.silentOn()) body.insertAdjacentHTML('beforebegin', `<div class="container">${silentHint()}</div>`);
     ({ cargas: renderLoads, pedidos: renderOrders, archivo: renderArchive, envases: renderEnvases, reportes: (root) => { upgradeLiquidations(root); Reportes.render(root, U().rep || (U().rep = {})); }, pagos: (root) => window.Pagos.renderOffice(root), usuarios: (root) => window.Roles.renderAdmin(root), inventario: renderInventory, marketing: (root) => window.Mkt.render(root),
       clientes: renderClients, vendedores: renderSellers, historial: renderHistory, ajustes: renderSettings })[tab](body);
     const sb = $('#setupImport');
@@ -307,7 +407,7 @@
       <div class="section-title" id="navEspera">⏸ Clientes en espera (no se pierde el pedido)</div>
       ${held.length ? `<div class="card"><table class="inv">${((dupIdx0) => held.map((o) => {
         const t = Matrix.orderTotals(o);
-        return `<tr><td><b>${esc(o.clientName)}</b>${dupBadge(o, dupIdx0)}${window.Revision ? Revision.heldNote(o) : ''}${window.Cobranza ? Cobranza.officeChip(o) : ''}<div class="muted">${esc(o.sellerName)} · ${esc(o.route || '')} · ${esc(fmtDate(o.routeDate))}</div>${dupLines(o, dupIdx0)}</td>
+        return `<tr><td><b>${esc(o.clientName)}</b>${dupBadge(o, dupIdx0)}${window.Revision ? Revision.heldNote(o) : ''}${window.Cobranza ? Cobranza.officeChip(o) : ''}<div class="muted">${esc(o.sellerName)} · ${esc(o.route || '')} · ${esc(fmtDate(o.routeDate))}</div>${orderTimesHTML(o)}${dupLines(o, dupIdx0)}</td>
           <td class="n">${t.bultos} bultos</td><td class="n">${usd(t.monto)}</td>
           <td style="white-space:nowrap"><button class="btn btn-sm" data-edit="${esc(o.id)}">Editar</button>
             <button class="btn btn-sm" data-move="${esc(o.id)}">⇄ A una hoja</button>
@@ -372,9 +472,9 @@
       // La hoja de origen se elimina solo si ya no le queda ningún pedido (según cada pedido)
       const left = fromLoad ? Loads.loadOrders(fromLoad, byIdMap(S.orders)).filter((o) => o.id !== order.id).length : 1;
       await saveDocs('loads', r.loads.map((l) => (left || !fromLoad || l.id !== fromLoad.id ? l : { ...l, deleted: true })));
-      await saveOrder(r.order);
+      await saveOrder({ ...r.order, movedAt: DB.now() });
       const to = r.loads[r.loads.length - 1];
-      await log('movido', `Movió a ${order.clientName} (${order.sellerName}) a la hoja ${Loads.labelOf(to)}`, { orderId: order.id, clientName: order.clientName });
+      await log('movido', `Movió a ${order.clientName} (${order.sellerName}) ${fromLoad ? 'de la hoja ' + Loads.labelOf(fromLoad) + ' ' : ''}a la hoja ${Loads.labelOf(to)}`, { orderId: order.id, clientName: order.clientName, loadId: to.id, fromLoadId: fromLoad ? fromLoad.id : '' });
       sh.close(); toast(order.clientName + ' movido', 'ok'); onDone && onDone();
     };
   }
@@ -398,6 +498,43 @@
       await saveDocs('loads', [r.target, r.source]);
       await saveDocs('orders', r.orders);
       sh.close(); toast('Hojas fusionadas', 'ok'); onDone && onDone();
+    };
+  }
+
+  /* ---- Fecha y hora de cada cosa (hoja de carga): subida, ediciones, espera, movido, cambio de vendedor ---- */
+  const tsOk = (v) => typeof v === 'string' && !Number.isNaN(Date.parse(v));
+  function orderTimes(o) {
+    const T = PV.stampTime, sc = o.sellerChange;
+    return [
+      tsOk(o.sentAt) ? `📤 Subido ${T(o.sentAt)}` : '',
+      tsOk(o.officeEdited) ? `✏️ Editado oficina ${T(o.officeEdited)}` : '',
+      tsOk(o.sellerEdited) ? `✏️ Modificado vendedor ${T(o.sellerEdited)}` : '',
+      tsOk(o.heldAt) ? `⏸ Espera ${T(o.heldAt)}` : '',
+      tsOk(o.movedAt) ? `⇄ Movido ${T(o.movedAt)}` : '',
+      sc && tsOk(sc.at) ? `🔁 Vendedor ${esc(sc.fromName || '')} → ${esc(sc.toName || '')} ${T(sc.at)}` : '',
+    ].filter(Boolean);
+  }
+  const orderTimesHTML = (o) => { const t = orderTimes(o); return t.length ? `<div class="muted" style="font-size:12px">${t.join(' · ')}</div>` : ''; };
+  /** Desde cuándo la hoja está en su estado actual. */
+  function statusSince(load) {
+    const h = (load.statusHistory || []).filter((x) => x && x.id === load.status);
+    return h.length ? h[h.length - 1].at : load.createdAt;
+  }
+  /** Línea de tiempo de la hoja: todo lo que quedó en el Historial sobre ella y sus pedidos (con 🗑 y el PIN de seguridad). */
+  async function drawTimeline(box, load) {
+    if (!box) return;
+    const ids = new Set((load.orderIds || []).concat(S.orders.filter((o) => o.loadId === load.id).map((o) => o.id)));
+    const list = (await DB.getAll('events')).filter((e) => !e.deleted && !e.hidden && (e.loadId === load.id || (e.orderId && ids.has(e.orderId))))
+      .sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    box.innerHTML = list.length ? `<table class="inv"><thead><tr><th>Fecha y hora</th><th>Quién</th><th>Acción</th><th>Detalle</th><th></th></tr></thead><tbody>
+      ${list.map((e) => `<tr><td class="mono" style="white-space:nowrap">${esc(PV.stampTime(e.at))}</td><td>${esc(e.sellerName)}</td><td>${esc(EVENT_LABEL[e.type] || e.type)}</td><td>${esc(e.text)}</td>
+        <td><button class="btn btn-sm" type="button" data-tlhide="${esc(e.id)}" title="Ocultar este registro (PIN de seguridad)" aria-label="Ocultar registro">🗑</button></td></tr>`).join('')}</tbody></table>`
+      : '<p class="muted">Aún no hay registros de esta hoja en esta PC (el Historial guarda los últimos 31 días).</p>';
+    box.onclick = async (e) => {
+      const b = e.target.closest('[data-tlhide]'); if (!b) return;
+      const ev = list.find((x) => x.id === b.dataset.tlhide); if (!ev) return;
+      if (!confirm(`¿Ocultar este registro?\n\n${PV.stampTime(ev.at)} · ${ev.sellerName} · ${ev.text}\n\nNo se borra: queda en la Papelera del historial (solo tú, con tu PIN).`)) return;
+      if (await setHidden([ev], true)) PV.render();
     };
   }
 
@@ -470,7 +607,7 @@
       <div class="toolbar no-print">
         <button class="btn" id="dBack">← ${closed ? 'Archivo' : 'Hojas de carga'}</button>
         <div class="grow"><h2 style="margin:0">${Loads.isRetiro(load) ? '🏢 ' : ''}${esc(Loads.labelOf(load))} ${load.number ? `<span class="muted mono">${esc(Loads.loadCode(load))}</span>` : ''} ${sellerTags(load)}${Loads.isRetiro(load) ? ' <span class="status en_espera">RETIRO POR OFICINA</span>' : ''}</h2>
-          <div class="muted">${esc(load.sellerName)} · pedidos del ${esc(Loads.orderDateRange(os) || '—')}${load.closedAt ? ' · cerrada ' + esc(new Date(load.closedAt).toLocaleString('es-VE')) : ''}</div></div>
+          <div class="muted">${esc(load.sellerName)} · pedidos del ${esc(Loads.orderDateRange(os) || '—')}${load.closedAt ? ' · cerrada ' + esc(new Date(load.closedAt).toLocaleString('es-VE')) : ''}${tsOk(statusSince(load)) ? ` · <b>${esc(st.name)}</b> desde ${esc(PV.stampTime(statusSince(load)))}` : ''}${tsOk(load.updatedAt) ? ` · última edición ${esc(PV.stampTime(load.updatedAt))}` : ''}</div></div>
         <label class="field"><span>Estado de la carga</span><select id="dStatus" class="select status-sel ${st.locked ? 'locked' : ''}">
           ${Loads.statuses(S.config).map((x) => `<option value="${esc(x.id)}" ${x.id === st.id ? 'selected' : ''}>${x.locked ? '🔒 ' : ''}${esc(x.name)}</option>`).join('')}</select></label>
       </div>
@@ -498,8 +635,10 @@
         <button class="btn" id="dTicket" ${os.length ? '' : 'disabled'} title="Un ticket por cliente en la impresora térmica (POS-80)">🧾 Notas de despacho (ticket)</button>
         <button class="btn" id="dCsv">⇩ Descargar Excel</button>
         <button class="btn" id="dCopy">📋 Copiar para Excel</button>
+        ${roGer() ? '' : silentBtn('dSil')}
         ${editableLoad && !os.length ? '<button class="btn btn-danger" id="dDel">Eliminar hoja vacía</button>' : ''}
       </div>
+      ${roGer() ? '' : silentHint()}
       ${os.length ? `<div class="table-wrap"><table class="grid sheet-grid">
         <thead>${initialsRow}${semRow}<tr><th class="sticky-col">Producto</th>
           ${m.cols.map((c, i) => `<th class="client" title="${esc(c.client)}"><div>${i + 1}. ${esc(c.client)}</div></th>`).join('')}<th class="tot">TOTAL</th>${hasDev ? '<th class="dev" title="Devolución: lo que el camión trae de la última liquidación">DEV</th><th class="tot" title="TOTAL − DEVOLUCIÓN">A CARGAR</th>' : ''}</tr></thead>
@@ -513,13 +652,16 @@
           <td><b>${esc(o.clientName)}</b> <span class="muted">${esc(fmtDate(o.routeDate))}</span>${dupBadge(o, dups)}${dupLines(o, dups)}
             ${o.officeEdited ? ' <span class="status abierto">editado oficina</span>' : ''}${o.sellerEdited ? ' <span class="status en_espera">modificado por vendedor</span>' : ''}
             ${o.factura ? ' <span class="status en_carga">🧾 FACTURA</span>' : ''}${window.Cobranza ? Cobranza.officeChip(o) : ''}${revG ? Revision.chip(load, o, revG) : ''}
+            ${orderTimesHTML(o)}
             ${o.notes ? `<div class="muted">📝 ${esc(o.notes)}</div>` : ''}${(o.officeMsgs || []).length ? `<div class="muted">💬 ${o.officeMsgs.length} mensaje${o.officeMsgs.length > 1 ? 's' : ''} de oficina</div>` : ''}${(o.sellerMsgs || []).length ? `<div class="muted">↩ ${o.sellerMsgs.length} respuesta${o.sellerMsgs.length > 1 ? 's' : ''} del vendedor</div>` : ''}</td>
           <td><span class="tag">${esc(Loads.initials(o.sellerName))}</span></td>
           <td class="n" data-l="Bultos">${t.bultos}</td><td class="n" data-l="Unid.">${t.totalUnidades}</td><td class="n" data-l="Monto">${usd(t.monto)}</td>
           <td data-l="Nota Valery"><input class="input sm mono valery-in" inputmode="tel" maxlength="40" data-oid="${esc(o.id)}" value="${esc(o.valeryNote || '')}" placeholder="N° (varias: 85643-85644)" title="Si el pedido lleva varias notas, sepáralas con «-»" aria-label="Nota Valery de ${esc(o.clientName)}"></td>
           <td style="white-space:nowrap"><button class="btn btn-sm" data-ticket="${esc(o.id)}" title="Nota de despacho (ticket)" aria-label="Ticket de ${esc(o.clientName)}">🧾</button> <button class="btn btn-sm" data-edit="${esc(o.id)}">${editableLoad ? 'Editar' : 'Ver'}</button>
             ${editableLoad ? `<button class="btn btn-sm" data-move="${esc(o.id)}">⇄ Mover</button>
-            <button class="btn btn-sm" data-hold="${esc(o.id)}" title="Dejar para otra carga">⏸ Espera</button>` : ''}</td></tr>`; }).join('')}</tbody></table></div>`;
+            <button class="btn btn-sm" data-hold="${esc(o.id)}" title="Dejar para otra carga">⏸ Espera</button>` : ''}</td></tr>`; }).join('')}</tbody></table></div>
+      <details class="card card-pad no-print" id="dTlBox" style="margin-top:12px" ${U().tlOpen ? 'open' : ''}><summary><b>🕒 Línea de tiempo de la hoja</b> <span class="muted">· estados, subidas, ediciones, mover, espera, cambios de vendedor, impresiones y descargas, con fecha y hora</span></summary>
+        <div id="dTl" style="overflow:auto;margin-top:8px"><p class="muted">Abriendo…</p></div></details>`;
 
     const cur = () => S.loads.find((x) => x.id === load.id) || load;
     const refresh = () => renderLoadDetail(root, cur());
@@ -540,7 +682,8 @@
       const extra = vacRows.some((v) => v.total) ? vacRows.map((v) => ({ label: v.label, cells: v.cells, total: v.total })) : [];
       const sheet = Exporta.matrix(m, { sheet: 'Hoja de carga', title: `${Loads.isRetiro(L) ? 'RETIRO POR OFICINA' : 'HOJA DE CARGA'} · ${Loads.labelOf(L)}${L.number ? ' · ' + Loads.loadCode(L) : ''}`,
         info: [`Fecha de la carga: ${L.date || today()}`, `Pedidos del: ${Loads.orderDateRange(os2) || '—'}`, `Ruta: ${L.route || '—'}`, `Despachador: ${L.dispatcherName || '—'}`, `Vendedor(es): ${L.sellerName || '—'}`], extra, dev: hasDev ? devRows : null });
-      await Exporta.save(`hoja_${Loads.labelOf(L)}_${L.date || today()}.xlsx`, [sheet]);
+      const since = statusSince(L);
+      await Exporta.save(`hoja_${Loads.labelOf(L)}_${L.date || today()}.xlsx`, [sheet], { loadId: L.id, stamp: `Estado: ${stName(L)}${tsOk(since) ? ' desde ' + PV.stampTime(since) : ''}${tsOk(L.updatedAt) ? ' · Última edición: ' + PV.stampTime(L.updatedAt) : ''}` });
     };
     $('#dCopy').onclick = async () => {
       const ok = await copyText(Matrix.toDelimited(m, { sep: '\t', decimal: S.settings.csvDecimal }));
@@ -562,6 +705,10 @@
       toast('Hoja enviada a cobranzas', 'ok'); PV.runSync(false);
     };
     const de = $('#dEdit'); if (de) de.onclick = () => { U().editQty = !U().editQty; refresh(); };
+    const dsl = $('#dSil'); if (dsl) dsl.onclick = () => toggleSilent(refresh);
+    // La línea de tiempo se lee solo si está abierta (no hace más lenta la hoja)
+    const tlb = $('#dTlBox');
+    if (tlb) { tlb.ontoggle = () => { U().tlOpen = tlb.open; if (tlb.open) drawTimeline($('#dTl'), cur()); }; if (tlb.open) drawTimeline($('#dTl'), cur()); }
     const dm = $('#dMerge'); if (dm) dm.onclick = () => mergeLoadsDialog(cur(), refresh);
     const dd = $('#dDel'); if (dd) dd.onclick = async () => { await saveDocs('loads', { ...cur(), deleted: true }); U().loadId = null; PV.render(); };
     root.onclick = async (e) => {
@@ -582,7 +729,7 @@
         const r = Loads.hold(cur(), o);
         await saveOrder(r.order);
         await saveDocs('loads', r.load);
-        await log('espera', `Puso en espera a ${o.clientName} (${o.sellerName}), sacándolo de la hoja ${Loads.labelOf(r.load)}`, { orderId: o.id, clientName: o.clientName });
+        await log('espera', `Puso en espera a ${o.clientName} (${o.sellerName}), sacándolo de la hoja ${Loads.labelOf(r.load)}`, { orderId: o.id, clientName: o.clientName, loadId: r.load.id });
         refresh(); toast(o.clientName + ' pasó a espera', 'ok');
       }
     };
@@ -629,7 +776,7 @@
     lines[pid] = { ...line, [kind]: Math.max(0, Math.min(99999, value)) };
     if (!lines[pid].cajas && !lines[pid].unidades) delete lines[pid];
     await saveOrder({ ...o, lines, officeEdited: DB.now() });
-    PV.logEvent('pedido_editado_oficina', `Ajustó cantidades del pedido de ${o.clientName} (${o.sellerName})`, { orderId: o.id, clientName: o.clientName }, { onceKey: 'ofed:' + o.id });
+    PV.logEvent('pedido_editado_oficina', `Ajustó cantidades del pedido de ${o.clientName} (${o.sellerName})`, { orderId: o.id, clientName: o.clientName, loadId: o.loadId || '' }, { onceKey: 'ofed:' + o.id });
   }
 
   /** Cambio de estado con las confirmaciones y efectos que correspondan. */
@@ -694,6 +841,92 @@
     PV.runSync(false);
   }
 
+  /* --------------------- Cambio de vendedor de un pedido (oficina) --------------------- */
+  // Un cliente que se mudó pasa a otro vendedor: la oficina cambia el vendedor del pedido (y si quiere, la
+  // cartera del cliente y sus otros pedidos abiertos). Hasta antes de LIQUIDAR la hoja: si ya está liquidada,
+  // se reabre la liquidación, se cambia y se vuelve a cerrar. El vendedor anterior deja de verlo en su teléfono
+  // (formerSellerIds), el nuevo lo recibe, ambos reciben el aviso y queda en el Historial.
+  const loadOfOrder = (x) => (x && x.loadId ? S.loads.find((l) => l.id === x.loadId && !l.deleted) || null : null);
+  const liqLocked = (x) => { const l = loadOfOrder(x); return !!(l && Liq.isDone(l)); };
+  const loadEditable = (l) => !!l && !l.deleted && !Loads.isClosed(l) && !Loads.statusOf(l, S.config).locked;
+  function sellerPickHTML(o) {
+    if (roGer() || o.deleted) return '';
+    if (liqLocked(o)) return '<div class="hint">🔒 <b>Hoja liquidada:</b> para cambiar el vendedor, reabre la liquidación de la hoja, cambia el vendedor aquí y vuelve a cerrarla.</div>';
+    const list = S.sellers.filter((x) => x.active !== false || x.id === o.sellerId);
+    return `<label class="field" style="margin:6px 0 0;max-width:360px"><span>🧑‍💼 Vendedor del pedido</span><select id="oeSeller" class="select">
+      ${sellerById(o.sellerId) ? '' : `<option value="${esc(o.sellerId || '')}" selected>${esc(o.sellerName || '— sin vendedor —')}</option>`}
+      ${list.map((x) => `<option value="${esc(x.id)}" ${x.id === o.sellerId ? 'selected' : ''}>${esc(x.name)}${x.active === false ? ' (inactivo)' : ''}</option>`).join('')}</select></label>`;
+  }
+  function sellerChangeDialog(o, toId, onDone, onCancel) {
+    const B = sellerById(toId);
+    if (!B) { if (onCancel) onCancel(); return; }
+    if (liqLocked(o)) { toast('La hoja está liquidada: reabre la liquidación para cambiar el vendedor', 'err'); if (onCancel) onCancel(); return; }
+    const fromName = o.sellerName || 'sin vendedor', client = clientById(o.clientId), load = loadOfOrder(o);
+    // Otros pedidos del mismo cliente con el mismo vendedor, aún sin liquidar (no los que el vendedor está armando)
+    const others = S.orders.filter((x) => x.id !== o.id && !x.deleted && o.clientId && x.clientId === o.clientId && x.sellerId === o.sellerId
+      && ['enviado', 'en_carga', 'en_espera'].includes(x.status) && !liqLocked(x))
+      .sort((a, b) => String(a.routeDate).localeCompare(String(b.routeDate)));
+    const canMove = (x) => { const l = loadOfOrder(x); return !!l && loadEditable(l) && !Loads.isRetiro(l); };
+    const where = (x) => { const l = loadOfOrder(x); return l ? `hoja ${Loads.labelOf(l)}${loadEditable(l) ? '' : ' 🔒'}` : (x.status === 'en_espera' ? 'en espera' : 'sin hoja'); };
+    const sh = openSheet(`<div class="row"><h2 class="grow">🔁 Cambiar vendedor</h2><button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      <p>Pedido de <b>${esc(o.clientName)}</b> (${esc(fmtDate(o.routeDate))} · ${esc(where(o))} · ${usd(Matrix.orderTotals(o).monto)}):<br><b>${esc(fromName)}</b> → <b>${esc(B.name)}</b></p>
+      <div class="card card-pad" style="display:grid;gap:8px">
+        ${client ? `<label class="chip-check" style="justify-content:flex-start"><input type="checkbox" id="scCli" ${client.sellerId === B.id ? 'disabled' : ''}> <span>Pasar también el cliente <b>${esc(client.name)}</b> a la cartera de ${esc(B.name)}${client.sellerId === B.id ? ' (ya es de su cartera)' : (client.sellerId ? ` (hoy en la de ${esc((sellerById(client.sellerId) || {}).name || '—')})` : '')}</span></label>` : '<p class="muted">El cliente no está en la cartera: solo cambia el pedido.</p>'}
+        ${others.length ? `<div><b>Otros pedidos de este cliente con ${esc(fromName)}</b> <span class="muted">(marca los que también pasan a ${esc(B.name)})</span>
+          ${others.map((x) => `<label class="chip-check" style="justify-content:flex-start;margin-top:4px"><input type="checkbox" data-oth="${esc(x.id)}"> <span>${esc(fmtDate(x.routeDate))} · ${esc(where(x))} · ${usd(Matrix.orderTotals(x).monto)}</span></label>`).join('')}</div>` : ''}
+        ${canMove(o) ? `<label class="chip-check" style="justify-content:flex-start"><input type="checkbox" id="scMove"> <span>Sacarlo de <b>${esc(Loads.labelOf(load))}</b> y pasarlo a una hoja de ${esc(B.name)} (ruta ${esc((B.routes && B.routes[0]) || o.route || '—')}) · si no lo marcas, se queda en esta hoja con la inicial de ${esc(Loads.initials(B.name))}</span></label>`
+          : (load ? `<p class="muted">Se queda en la hoja ${esc(Loads.labelOf(load))}${loadEditable(load) ? '' : ' (aprobada/cerrada: no se mueve)'} con la inicial de ${esc(B.name)}.</p>` : '')}
+      </div>
+      <p class="muted">${esc(B.name)} lo recibe en su teléfono y ${esc(fromName)} deja de verlo; a los dos les llega el aviso${PV.silentOn() ? ' (🤫 cambio silencioso: no se avisa ni queda en el Historial)' : ' y queda en el Historial con fecha y hora'}. Desde ahora, reportes, quincena y cobranza de este pedido van a nombre de ${esc(B.name)}</p>
+      <div class="actions"><button class="btn" data-close type="button">Cancelar</button><button class="btn btn-primary" id="scGo" type="button">Confirmar cambio</button></div>`, { wide: true });
+    let applied = false;
+    const iv = setInterval(() => { if (!sh.el.isConnected) { clearInterval(iv); if (!applied && onCancel) onCancel(); } }, 400);
+    $('#scGo', sh.el).onclick = async () => {
+      const go = $('#scGo', sh.el); go.disabled = true;
+      try {
+        const at = DB.now(), by = (S.config && S.config.adminName) || 'Oficina';
+        const move = !!($('#scMove', sh.el) && $('#scMove', sh.el).checked);
+        const picked = [o].concat(others.filter((x) => { const c = sh.el.querySelector(`[data-oth="${x.id}"]`); return c && c.checked; }))
+          .map((x) => orderById(x.id) || x).filter((x) => !x.deleted && !liqLocked(x));
+        const fromLoads = new Map(picked.map((x) => [x.id, x.loadId || '']));
+        const changed = picked.map((x) => {
+          const y = { ...x, sellerId: B.id, sellerName: B.name,
+            formerSellerIds: [...new Set((x.formerSellerIds || []).concat(x.sellerId ? [x.sellerId] : []))].filter((id) => id !== B.id),
+            sellerChange: { from: x.sellerId || '', fromName: x.sellerName || '', to: B.id, toName: B.name, at, by } };
+          // Mover a una hoja de B: vuelve a la cola y el armado automático lo ubica en su hoja (su ruta)
+          if (move && canMove(x)) Object.assign(y, { loadId: null, status: 'enviado', locked: false, loadStatusName: '', route: (B.routes && B.routes[0]) || x.route || '' });
+          return y;
+        });
+        await saveDocs('orders', changed);
+        // Hojas tocadas: salen los pedidos movidos y se recalculan sus vendedores (entra B, sale A si ya no tiene pedidos)
+        const gone = new Set(changed.filter((y) => !y.loadId).map((y) => y.id)), ordersNow = byIdMap(S.orders);
+        const loadsOut = [...new Set([...fromLoads.values()].filter(Boolean))].map((id) => S.loads.find((l) => l.id === id && !l.deleted)).filter(Boolean).map((l) => {
+          const l2 = { ...l, orderIds: (l.orderIds || []).filter((id) => !gone.has(id)) };
+          const empty = !Loads.loadOrders(l2, ordersNow).length;
+          if (empty && gone.size && !l2.number && loadEditable(l2)) return { ...l2, deleted: true }; // como al mover: hoja vacía sin número se elimina
+          return Loads.resyncSellers(l2, { orders: S.orders, sellers: S.sellers });
+        });
+        if (loadsOut.length) await saveDocs('loads', loadsOut);
+        if (gone.size) await autoPack();
+        const cc = $('#scCli', sh.el), cl = client && clientById(client.id);
+        if (cc && cc.checked && cl && cl.sellerId !== B.id) await saveClient(cl, { ...cl, sellerId: B.id });
+        for (const y of changed) {
+          const now = orderById(y.id) || y, l0 = S.loads.find((l) => l.id === fromLoads.get(y.id)), l1 = loadOfOrder(now);
+          await log('vendedor_cambiado', `Cambió el vendedor del pedido de ${y.clientName} (${fmtDate(y.routeDate)}): ${y.sellerChange.fromName || 'sin vendedor'} → ${B.name}${l1 && l0 && l1.id !== l0.id ? ` · pasó de la hoja ${Loads.labelOf(l0)} a ${Loads.labelOf(l1)}` : ''}`,
+            { orderId: y.id, clientName: y.clientName, loadId: fromLoads.get(y.id) || (l1 && l1.id) || '', toLoadId: (l1 && l1.id) || '', fromSellerId: y.sellerChange.from, toSellerId: B.id });
+        }
+        applied = true; clearInterval(iv); sh.close();
+        toast(`${changed.length === 1 ? 'Pedido' : changed.length + ' pedidos'} de ${o.clientName} → ${B.name}`, 'ok');
+        PV.runSync(false);
+        if (onDone) onDone();
+      } catch (e) {
+        console.error('[cambio de vendedor]', e);
+        toast('No se pudo cambiar el vendedor: ' + (e && e.message ? e.message : 'error'), 'err');
+        go.disabled = false;
+      }
+    };
+  }
+
   /* ------------------------ Editor de pedido (oficina) ------------------------ */
   function orderEditor(o, onDone) {
     if (!o) return;
@@ -716,6 +949,7 @@
     const sh = openSheet(`
       <div class="row"><div class="grow"><h2>${esc(o.clientName)} <button type="button" class="btn btn-sm" id="oeClient" title="Elegir el cliente correcto, unir un cliente repetido o corregir el nombre">✎ Cliente</button></h2><div class="muted">${esc(o.sellerName)} · Ruta ${esc(o.route || '—')} · ${esc(fmtDate(o.routeDate))} · ${esc(Loads.orderLabel(o))}</div></div>
         <button class="icon-btn" data-close aria-label="Cerrar">×</button></div>
+      ${sellerPickHTML(o)}
       ${locked ? '<div class="hint warn">🔒 La carga de este pedido ya fue aprobada: no se puede modificar.</div>' : ''}
       <div id="oeBody"></div>
       ${o.status !== 'despachado' ? `<div class="row wrap" style="gap:8px;align-items:center;margin-top:10px"><b>Factura:</b>
@@ -734,6 +968,12 @@
           <span class="muted" style="font-size:12px">Al cambiarlo, el pedido pasa solo a la hoja que corresponde.</span></div>`}
       <div class="actions">${o.status !== 'despachado' ? '<button class="btn btn-danger" id="oeDel">🗑 Eliminar pedido</button>' : ''}<button class="btn btn-primary" data-close>Listo</button></div>`, { wide: true });
     draw(sh);
+    const oes = $('#oeSeller', sh.el);
+    if (oes) oes.onchange = () => {
+      const to = oes.value, cur = orderById(o.id) || o;
+      if (!to || to === cur.sellerId) return;
+      sellerChangeDialog(cur, to, () => { sh.close(); if (onDone) onDone(); const now = orderById(o.id); if (now) orderEditor(now, onDone); }, () => { oes.value = cur.sellerId || ''; });
+    };
     sh.el.querySelectorAll('[data-oefac]').forEach((b) => { b.onclick = async () => {
       const cur = orderById(o.id) || o, f = !!b.dataset.oefac;
       if (!!cur.factura === f) return;
@@ -1429,7 +1669,8 @@
     $('#qBack').onclick = () => { U().liqId = null; PV.render(); };
     $('#qXlsx').onclick = () => { const l = cur(), st = liqState(l), sh2 = Liq.sheet(st.os, st.liq, st.rows, st.vac);
       Exporta.save(`liquidacion_${slug(Loads.labelOf(l))}_${l.date || today()}.xlsx`, [Exporta.liquidation(l, sh2, { rate: +S.config.exchangeRate || 0, productsById: byIdMap(S.products), loadName: (id) => { const x = S.loads.find((y) => y.id === id); return x ? Loads.labelOf(x) : 'otra hoja'; },
-        info: [`Fecha de la carga: ${l.date || '—'}`, `Pedidos del: ${Loads.orderDateRange(st.os) || '—'}`, `Ruta: ${l.route || '—'}`, `Despachador: ${l.dispatcherName || '—'}`, `Vendedor(es): ${l.sellerName || ''}`, Liq.isDone(l) ? 'LIQUIDADA' : 'BORRADOR'] })]); };
+        info: [`Fecha de la carga: ${l.date || '—'}`, `Pedidos del: ${Loads.orderDateRange(st.os) || '—'}`, `Ruta: ${l.route || '—'}`, `Despachador: ${l.dispatcherName || '—'}`, `Vendedor(es): ${l.sellerName || ''}`, Liq.isDone(l) ? 'LIQUIDADA' : 'BORRADOR'] })],
+        { loadId: l.id, stamp: Liq.isDone(l) ? 'Liquidación cerrada' + (l.liq && tsOk(l.liq.closedAt) ? ' el ' + PV.stampTime(l.liq.closedAt) : '') : 'Liquidación: BORRADOR' }); };
     $('#qPrint').onclick = () => { const st = liqState(cur()); Print.printLiquidation(cur(), st, { config: S.config, products: S.products, productRank: productRank(), loads: S.loads }); };
     const qc = $('#qClose'); if (qc) qc.onclick = () => closeLiquidation(cur(), root);
     const qr = $('#qReopen'); if (qr) qr.onclick = () => reopenLiquidation(cur(), root);
@@ -2578,11 +2819,12 @@
     pedido_nuevo: 'Abrió pedido', pedido_enviado: 'Envió pedido', pedido_reabierto: 'Reabrió pedido', pedido_modificado: 'Modificó pedido',
     pedido_eliminado: 'Eliminó pedido', cliente_editado: 'Actualizó cliente', cliente_corregido: 'Corrigió cliente', clientes_fusionados: 'Fusionó clientes', cliente_eliminado: 'Eliminó cliente', vendedor_pausa: 'Pausa de pedidos', espera: 'Puso en espera', reincorporado: 'Reincorporó', movido: 'Movió de hoja',
     pedido_editado_oficina: 'Ajuste de oficina', carga_estado: 'Estado de hoja', cliente_reasignado: 'Reasignó cliente', respaldo: 'Respaldo',
+    vendedor_cambiado: 'Cambio de vendedor', impresion: 'Imprimió', descarga: 'Descargó',
     datos_borrados: 'Datos borrados por el navegador', nota_valery: 'Nota Valery', retornables: 'Retornables', mensaje: 'Mensaje a vendedor', liquidacion: 'Liquidación', vacios: 'Kardex de vacíos',
   };
   async function renderHistory(root) {
     const f = U().hist || (U().hist = { day: today(), who: '', type: '' });
-    const dayEvents = (await DB.getAll('events')).filter((e) => e.day === f.day).sort((a, b) => String(a.at).localeCompare(String(b.at)));
+    const dayEvents = (await DB.getAll('events')).filter((e) => e.day === f.day && !e.deleted && !e.hidden).sort((a, b) => String(a.at).localeCompare(String(b.at)));
     const list = dayEvents.filter((e) => (!f.who || e.sellerId === f.who) && (!f.type || e.type === f.type));
     const hhmm = (iso) => new Date(iso).toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit' });
     const whoOpts = [['', 'Todos'], ...S.sellers.map((s) => [s.id, s.name]), ['oficina', 'Oficina']];
@@ -2602,15 +2844,26 @@
         <label class="field"><span>Quién</span><select class="select" data-h="who">${opt(whoOpts, f.who)}</select></label>
         <label class="field"><span>Acción</span><select class="select" data-h="type"><option value="">Todas</option>${opt(Object.entries(EVENT_LABEL), f.type)}</select></label>
         <button class="btn" id="hCsv" ${list.length ? '' : 'disabled'}>⇩ Exportar a Excel</button>
+        <button class="btn" id="hTrash" type="button">🗃 Papelera del historial</button>
+        ${silentBtn('hSil')}
       </div>
-      <p class="muted">Lo registra cada teléfono y PC con su hora; llega al sincronizar (si un vendedor estuvo sin señal, aparece cuando la recupere). Nadie puede editarlo ni borrarlo.</p>
+      <p class="muted">Lo registra cada teléfono y PC con su fecha y hora; llega al sincronizar (si un vendedor estuvo sin señal, aparece cuando la recupere). Nadie puede editarlo. Solo con el PIN de seguridad se puede ocultar un registro (🗑): no se borra, queda en la Papelera del historial y se puede restaurar.</p>
       ${people.size ? `<div class="card" style="overflow:auto"><table class="inv"><thead><tr><th>Quién</th><th>Primera actividad</th><th>Última</th><th>Pedidos enviados</th><th>Eliminados</th><th>Monto enviado</th></tr></thead><tbody>
         ${[...people.values()].sort((a, b) => a.first.localeCompare(b.first)).map((p) => `<tr><td><b>${esc(p.name)}</b></td><td data-l="Primera actividad">${hhmm(p.first)}</td><td data-l="Última">${hhmm(p.last)}</td><td class="n" data-l="Pedidos enviados">${p.sent}</td><td class="n" data-l="Eliminados">${p.del}</td><td class="n" data-l="Monto enviado">${usd(p.amount)}</td></tr>`).join('')}
         </tbody></table></div>` : ''}
-      ${list.length ? `<div class="card" style="overflow:auto;margin-top:12px"><table class="inv"><thead><tr><th>Hora · Quién</th><th>Acción</th><th>Detalle</th></tr></thead><tbody>
-        ${list.map((e) => `<tr><td class="mono"><b>${hhmm(e.at)}</b> · ${esc(e.sellerName)}</td><td data-l="Acción">${esc(EVENT_LABEL[e.type] || e.type)}</td><td>${esc(e.text)}</td></tr>`).join('')}
+      ${list.length ? `<div class="card" style="overflow:auto;margin-top:12px"><table class="inv"><thead><tr><th>Hora · Quién</th><th>Acción</th><th>Detalle</th><th></th></tr></thead><tbody>
+        ${list.map((e) => `<tr><td class="mono"><b>${hhmm(e.at)}</b> · ${esc(e.sellerName)}</td><td data-l="Acción">${esc(EVENT_LABEL[e.type] || e.type)}</td><td>${esc(e.text)}</td>
+          <td><button class="btn btn-sm" type="button" data-hide="${esc(e.id)}" title="Ocultar este registro (PIN de seguridad)" aria-label="Ocultar registro">🗑</button></td></tr>`).join('')}
         </tbody></table></div>` : '<div class="empty card"><strong>Sin actividad</strong>ese día con esos filtros.</div>'}`;
     $('#hFilters').onchange = (e) => { const k = e.target.dataset.h; if (k) { f[k] = e.target.value; renderHistory(root); } };
+    $('#hTrash').onclick = () => hiddenEventsSheet(() => PV.render());
+    $('#hSil').onclick = () => toggleSilent(() => PV.render());
+    root.onclick = async (e) => {
+      const b = e.target.closest('[data-hide]'); if (!b) return;
+      const ev = list.find((x) => x.id === b.dataset.hide); if (!ev) return;
+      if (!confirm(`¿Ocultar este registro del Historial?\n\n${hhmm(ev.at)} · ${ev.sellerName} · ${ev.text}\n\nNo se borra: queda en la Papelera del historial (solo tú, con tu PIN).`)) return;
+      if (await setHidden([ev], true)) PV.render(); // pantalla completa: la ventana del PIN ya redibujó al cerrarse
+    };
     $('#hCsv').onclick = () => Exporta.save('historial_' + f.day + '.xlsx', [Exporta.table({ name: 'Historial', title: 'HISTORIAL DE ACTIVIDAD', subtitle: fmtDate(f.day),
       cols: [{ h: 'FECHA', k: 'date', w: 12 }, { h: 'HORA', w: 8, align: 'center' }, { h: 'QUIÉN', w: 20 }, { h: 'ACCIÓN', w: 26 }, { h: 'DETALLE', w: 80 }, { h: 'EQUIPO', w: 22 }],
       rows: list.map((e) => [e.day, hhmm(e.at), e.sellerName, EVENT_LABEL[e.type] || e.type, e.text, e.deviceId || '']) })]);
@@ -2888,6 +3141,14 @@
           <div class="row wrap" style="margin-top:12px"><button class="btn btn-primary" id="pinSave">${S.officePin ? 'Cambiar PIN' : 'Activar PIN'}</button>
             ${S.officePin ? '<button class="btn btn-danger" id="pinDel">Quitar PIN</button><button class="btn" id="pinLock">🔒 Bloquear ahora</button>' : ''}</div></section>
 
+        <section class="card card-pad"><h3>🔐 PIN de seguridad</h3>
+          <p class="muted">Solo con este PIN se <b>ocultan registros del Historial</b> (quedan en su papelera y se pueden restaurar) y se activa el <b>🤫 cambio silencioso</b> (${SILENT_MIN} min: lo que cambies no avisa a los vendedores ni queda en el Historial). Lo guarda y lo valida el servidor: la clave admin sola no alcanza. Si lo olvidas, se restablece con la clave <span class="mono">PEDIDOS_OWNER_KEY</span> que pones en Vercel.</p>
+          <div class="row wrap"><button class="btn btn-primary" id="owIn" type="button">🔐 Entrar / crear PIN</button>
+            <button class="btn" id="owChg" type="button">Cambiar PIN</button>${silentBtn('owSil')}
+            <button class="btn" id="owBin" type="button">🗃 Papelera del historial</button>
+            <button class="btn" id="owOff" type="button" ${PV.ownerToken() ? '' : 'disabled'}>Salir del PIN en esta pestaña</button>
+            <button class="btn" id="owRst" type="button">Olvidé el PIN</button></div></section>
+
         <section class="card card-pad"><h3>Empresa (aparece en hojas y notas)</h3>
           <div class="grid2">
             <label class="field"><span>Razón social</span><input id="coName" class="input" value="${esc(c.company.name)}"></label>
@@ -2977,6 +3238,25 @@
       return saveCfg({ dispatchers: names.map((n) => prev.find((d) => d.name === n) || { id: DB.uid('d'), name: n }) });
     });
     const pinOk = async () => !S.officePin || (await pinHash(($('#pinCur') || {}).value || '')) === S.officePin;
+    $('#owIn').onclick = async () => { if (await ownerAuth('Entrar con el PIN de seguridad.')) { toast('PIN de seguridad vigente en esta pestaña', 'ok'); renderSettings(root); } };
+    $('#owSil').onclick = () => toggleSilent(() => PV.render());
+    $('#owBin').onclick = () => hiddenEventsSheet();
+    $('#owOff').onclick = () => { PV.setOwnerToken(''); toast('Saliste del PIN de seguridad en esta pestaña', 'ok'); PV.render(); };
+    $('#owChg').onclick = async () => {
+      if (!(await ownerAuth('Primero confirma el PIN actual.'))) return;
+      await pinSheet({ title: 'Cambiar PIN de seguridad', twice: true, label: 'Guardar PIN nuevo', onPin: async (pin) => {
+        const r = await ownerCall({ action: 'cambiar', pin });
+        if (!r.ok || !r.data || !r.data.token) return r.error || 'No se pudo cambiar';
+        PV.setOwnerToken(r.data.token); toast('PIN cambiado', 'ok'); return '';
+      } });
+    };
+    $('#owRst').onclick = async () => {
+      const key = prompt('Clave de restablecimiento (PEDIDOS_OWNER_KEY, la que pusiste en Vercel):');
+      if (!key) return;
+      const r = await ownerCall({ action: 'restablecer', key: key.trim() });
+      if (!r.ok) { toast(r.error || 'No se pudo', 'err'); return; }
+      PV.setOwnerToken(''); toast('PIN borrado: crea uno nuevo con «Entrar / crear PIN»', 'ok'); renderSettings(root);
+    };
     $('#pinSave').onclick = async () => {
       const a = $('#pinNew').value, b = $('#pinNew2').value;
       if (!(await pinOk())) return toast('PIN actual incorrecto', 'err');

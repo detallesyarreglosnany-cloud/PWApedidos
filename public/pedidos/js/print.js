@@ -79,7 +79,33 @@
     });
   }
 
-  function printHTML(title, css, body, fit) {
+  /*
+   * Sello de impresión: cada hoja impresa (o guardada como PDF) lleva al pie la fecha y hora en que se imprimió y quién,
+   * más lo propio del documento (estado y desde cuándo, última edición). La impresión queda en el Historial.
+   */
+  const STAMP_CSS = ' .pv-stamp{margin-top:4px;font:9px/1.2 Arial,Helvetica,sans-serif;color:#444;text-align:right;page-break-inside:avoid;break-inside:avoid}';
+  function addStamp(d, text) {
+    const parts = [...d.querySelectorAll('section.sheet, section.note, section.t, section.pgday')];
+    (parts.length ? parts : [d.body]).forEach((el) => { const x = d.createElement('div'); x.className = 'pv-stamp'; x.textContent = text; el.appendChild(x); });
+  }
+  /** «Estado: Aprobada desde 05/11/2026 09:15 · Última edición: 05/11/2026 09:10» de una hoja de carga. */
+  function loadStampInfo(load, orders, statusName) {
+    if (!load || !global.PV || !global.PV.stampTime) return '';
+    const T = global.PV.stampTime, hist = (load.statusHistory || []).filter((h) => h && h.id === load.status);
+    const since = hist.length ? hist[hist.length - 1].at : load.createdAt;
+    const edits = [load.updatedAt].concat((orders || []).map((o) => o && o.updatedAt)).filter(Boolean).sort();
+    return [statusName ? `Estado: ${statusName}${since ? ' desde ' + T(since) : ''}` : '', edits.length ? 'Última edición: ' + T(edits[edits.length - 1]) : ''].filter(Boolean).join(' · ');
+  }
+  function printHTML(title, css, body, fit, po) {
+    po = po || {};
+    let stamp = '';
+    try {
+      if (!po.test && global.PV && global.PV.stampText) {
+        stamp = global.PV.stampText('Impreso', po.stamp || '');
+        global.PV.docOut('print', title, po.meta);
+      }
+    } catch (e) { /* el sello nunca impide imprimir */ }
+    css = (css || '') + STAMP_CSS;
     const old = document.getElementById('printFrame');
     if (old) old.remove();
     const f = document.createElement('iframe');
@@ -91,6 +117,7 @@
     d.open();
     d.write(`<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${esc(title)}</title><style>${BASE_CSS}${css}</style></head><body>${body}</body></html>`);
     d.close();
+    try { if (stamp) addStamp(d, stamp); } catch (e) { /* solo es presentación */ }
     try { alignCols(d); } catch (e) { /* solo es presentación */ }
     const go = () => { if (fit) fitPages(d, fit); f.contentWindow.focus(); f.contentWindow.print(); };
     const imgs = [...d.images];
@@ -270,7 +297,8 @@
     .sheet .foot{margin:3px 0 0;font-size:9px} .sheet .sign{margin-top:14px}`;
 
   function printLoadSheet(load, orders, ctx) {
-    printHTML('Hoja de carga ' + Loads.loadCode(load), LOAD_CSS, loadSheetHTML(load, orders, ctx), FIT_AUTO);
+    printHTML('Hoja de carga ' + Loads.labelOf(load) + (load.number ? ' · ' + Loads.loadCode(load) : ''), LOAD_CSS, loadSheetHTML(load, orders, ctx), FIT_AUTO,
+      { stamp: loadStampInfo(load, orders, ctx && ctx.statusName), meta: { loadId: load.id } });
   }
 
   /* --------------------------- Liquidación --------------------------- */
@@ -339,7 +367,9 @@
     .fitall table.load.liq td.p,.fitall table.load.liq tfoot td:first-child{white-space:nowrap;max-width:none}`;
 
   function printLiquidation(load, st, ctx) {
-    printHTML('Liquidación ' + Loads.loadCode(load), LIQ_CSS, liquidationHTML(load, st, ctx), FIT_AUTO);
+    const liq = st && st.liq, liqTxt = liq ? (liq.status === 'cerrada' ? 'Liquidación: cerrada' + (liq.closedAt && global.PV && global.PV.stampTime ? ' el ' + global.PV.stampTime(liq.closedAt) : '') : 'Liquidación: BORRADOR') : '';
+    printHTML('Liquidación ' + Loads.labelOf(load) + (load.number ? ' · ' + Loads.loadCode(load) : ''), LIQ_CSS, liquidationHTML(load, st, ctx), FIT_AUTO,
+      { stamp: [liqTxt, loadStampInfo(load, st && st.os, '')].filter(Boolean).join(' · '), meta: { loadId: load.id } });
   }
 
   /* ------------------------ Saldos de vacíos (E4) ------------------------ */
@@ -545,7 +575,9 @@
   function printTickets(orders, ctx, o) {
     const opts = ticketOpts(o);
     const body = orders.map((x) => opts.copies === 2 ? ticketHTML(x, ctx, opts, 'ORIGINAL · CLIENTE') + ticketHTML(x, ctx, opts, 'COPIA · EMPRESA') : ticketHTML(x, ctx, opts, '')).join('');
-    printHTML('Notas de despacho', ticketCSS(opts.width), body);
+    const L = ctx && ctx.load;
+    printHTML('Notas de despacho' + (L ? ' · ' + Loads.labelOf(L) : orders.length === 1 && orders[0] ? ' · ' + orders[0].clientName : ''), ticketCSS(opts.width), body, null,
+      { meta: L ? { loadId: L.id, ...(orders.length === 1 && orders[0] ? { orderId: orders[0].id, clientName: orders[0].clientName } : {}) } : {} });
   }
   /** Ticket de prueba para revisar ancho, margen y corte. */
   function printTestTicket(ctx, o) {
@@ -553,7 +585,7 @@
     const demo = { clientName: 'CLIENTE DE PRUEBA', sellerName: 'Vendedor', route: 'RUTA', valeryNote: '0000', notes: 'Si este texto sale completo y centrado, la impresora está lista.',
       lines: { a: { code: '102', name: 'REFRESCO 1,25 L', presentation: '', category: 'PRUEBA', unitsPerBox: 6, boxPrice: 10, unitPrice: 2, cajas: 3, unidades: 2 },
         b: { code: '669', name: 'PRODUCTO CON UN NOMBRE MUY LARGO PARA VER CÓMO SE PARTE', presentation: '350 ML', category: 'PRUEBA', unitsPerBox: 24, boxPrice: 8.5, unitPrice: 0, cajas: 12, unidades: 0 } } };
-    printHTML('Ticket de prueba', ticketCSS(opts.width), ticketHTML(demo, { ...ctx, load: null }, opts, `PRUEBA · ${opts.width} mm`));
+    printHTML('Ticket de prueba', ticketCSS(opts.width), ticketHTML(demo, { ...ctx, load: null }, opts, `PRUEBA · ${opts.width} mm`), null, { test: true });
   }
 
   /** Cuadre de despachos (camiones) de un período, por despachador. */

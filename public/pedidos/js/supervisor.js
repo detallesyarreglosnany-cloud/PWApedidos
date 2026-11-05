@@ -105,7 +105,7 @@
   /* ============================== HISTORIAL (solo lectura) ============================== */
   async function renderHistorial(root) {
     const f = S.ui.supHist || (S.ui.supHist = { day: today(), who: '', type: '' });
-    const dayEvents = (await DB.getAll('events')).filter((e) => e.day === f.day).sort((a, b) => String(a.at).localeCompare(String(b.at)));
+    const dayEvents = (await DB.getAll('events')).filter((e) => e.day === f.day && !e.deleted && !e.hidden).sort((a, b) => String(a.at).localeCompare(String(b.at)));
     const list = dayEvents.filter((e) => (!f.who || e.sellerId === f.who) && (!f.type || e.type === f.type));
     const hhmm = (iso) => new Date(iso).toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit' });
     const whoOpts = [['', 'Todos'], ...S.sellers.map((s) => [s.id, s.name]), ['oficina', 'Oficina']];
