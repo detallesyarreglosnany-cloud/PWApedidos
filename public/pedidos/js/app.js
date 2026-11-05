@@ -228,7 +228,7 @@
     const prevs = byField ? await Promise.all(docs.map((d) => DB.get(kind, d.id))) : [];
     const SELLER_ST = ['abierto', 'enviado'];
     const skipOf = (prev, d) => (kind === 'orders' && !isOffice() && !(prev && SELLER_ST.includes(prev.status) && SELLER_ST.includes(d.status)) ? DB.FV_GROUPS.orders : null);
-    // Cambio silencioso: el servidor no avisa de este guardado (requiere el permiso del PIN de la creadora)
+    // Cambio silencioso: el servidor no avisa de este guardado (requiere el permiso del PIN de seguridad)
     if (byField && silentOn()) { const q = DB.now(); docs.forEach((d) => { d.quietAt = q; }); }
     docs.forEach((d, i) => { DB.touch(d); if (byField) DB.stampFields(prevs[i], d, skipOf(prevs[i], d)); });
     await DB.putMany(kind, docs);
@@ -261,7 +261,7 @@
     if (sess && sess.sellerId) DB.setCookie('pv_seller', sess.sellerId);
   }
 
-  /* ============ PIN de la creadora y cambio silencioso (solo oficina) ============ */
+  /* ============ PIN de seguridad y cambio silencioso (solo oficina) ============ */
   // El permiso del PIN (lo valida el servidor) vive solo en esta pestaña. Con el «cambio silencioso»
   // activo, lo que se guarda en pedidos y hojas no genera avisos ni queda en el Historial.
   const ssGet = (k) => { try { return sessionStorage.getItem(k) || ''; } catch (e) { return ''; } };
@@ -287,7 +287,7 @@
   }
 
   /* ====================== Historial de actividad ====================== */
-  // Cada acción queda con hora, quién y equipo. Solo se agrega: nadie la edita (la creadora puede ocultar un registro con su PIN).
+  // Cada acción queda con hora, quién y equipo. Solo se agrega: nadie la edita (con el PIN de seguridad se puede ocultar un registro).
   const lastLogged = new Map();
   async function logEvent(type, text, extra, opts) {
     try {

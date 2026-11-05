@@ -4,7 +4,7 @@ import { db } from '@/lib/db';
 import { createPin, hasPin, isPinFormat, resetPin, tokenOk, verifyPin, weakPin } from '@/lib/pin';
 import { OWNER_PIN_ID } from '@/lib/owner';
 
-// PIN de la creadora y registros ocultos del Historial (solo la oficina: clave admin).
+// PIN de seguridad y registros ocultos del Historial (solo la oficina: clave admin).
 // Un registro oculto NO se borra: queda en la base marcado (deleted + hidden) y deja de verse en
 // todas las PCs; solo con el PIN se ve en la «Papelera del historial» y se puede restaurar.
 //
@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
       if (!isPinFormat(pin)) return NextResponse.json({ error: 'El PIN es de 4 a 6 números' }, { status: 400 });
       if (weakPin(pin)) return NextResponse.json({ error: 'PIN muy fácil (1234, 0000…): elige otro' }, { status: 400 });
       const r = await createPin(OWNER_PIN_ID, pin, device);
-      return 'error' in r ? NextResponse.json({ error: 'Ya existe el PIN de la creadora' }, { status: 409 }) : NextResponse.json(r, { headers: NO_STORE });
+      return 'error' in r ? NextResponse.json({ error: 'Ya existe el PIN de seguridad' }, { status: 409 }) : NextResponse.json(r, { headers: NO_STORE });
     }
     if (action === 'entrar') {
       if (!isPinFormat(pin)) return NextResponse.json({ error: 'El PIN es de 4 a 6 números' }, { status: 400 });
@@ -56,7 +56,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
     if (action === 'ocultar' || action === 'restaurar') {
-      if (!(await tokenOk(OWNER_PIN_ID, tok))) return NextResponse.json({ error: 'PIN de la creadora requerido', pin: true }, { status: 401 });
+      if (!(await tokenOk(OWNER_PIN_ID, tok))) return NextResponse.json({ error: 'PIN de seguridad requerido', pin: true }, { status: 401 });
       const ids = (Array.isArray(body.ids) ? body.ids : []).filter((x): x is string => typeof x === 'string' && x.length > 0 && x.length <= 120).slice(0, MAX_IDS);
       if (!ids.length) return NextResponse.json({ error: 'Faltan los registros' }, { status: 400 });
       const hide = action === 'ocultar', at = new Date().toISOString(), done: string[] = [];

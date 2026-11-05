@@ -27,7 +27,7 @@
   const sizeOrd = () => (window.Almacen ? Almacen.sizeOrder(S.config) : undefined); // orden de presentaciones (2 L, 1,5 L, 1 L, 1,25 L…)
   const byIdMap = (arr) => new Map(arr.map((x) => [x.id, x]));
 
-  /* ====== PIN de la creadora · cambio silencioso · registros ocultos del Historial ====== */
+  /* ====== PIN de seguridad · cambio silencioso · registros ocultos del Historial ====== */
   // El PIN lo valida el SERVIDOR (/api/pedidos/historial): la clave admin sola no alcanza.
   const ownerCall = async (body) => Sync.adminCall('historial', { deviceId: await Sync.deviceId(), ...body });
   const hm = (ms) => new Date(ms).toLocaleTimeString('es-VE', { hour: '2-digit', minute: '2-digit' });
@@ -58,22 +58,22 @@
       };
     });
   }
-  /** Permiso del PIN de la creadora en esta pestaña (lo pide, o lo crea la primera vez). */
+  /** Permiso del PIN de seguridad en esta pestaña (lo pide, o lo crea la primera vez). */
   async function ownerAuth(why) {
-    if (!navigator.onLine) { toast('Se necesita internet: el PIN de la creadora lo valida el servidor', 'err'); return false; }
+    if (!navigator.onLine) { toast('Se necesita internet: el PIN de seguridad lo valida el servidor', 'err'); return false; }
     const st = await ownerCall({ action: 'estado' });
     if (!st.ok) { toast(st.error || 'No se pudo consultar el servidor', 'err'); return false; }
     if (st.data.ok) return true;
     PV.setOwnerToken('');
     const create = !st.data.hasPin;
     return pinSheet({
-      title: '🔐 PIN de la creadora', twice: create, label: create ? 'Crear PIN' : 'Entrar',
+      title: '🔐 PIN de seguridad', twice: create, label: create ? 'Crear PIN' : 'Entrar',
       text: esc(why || '') + (create ? '<br><b>Aún no hay PIN:</b> créalo ahora. Solo tú debes conocerlo; lo guarda y lo valida el servidor.' : ''),
       onPin: async (pin) => {
         const r = await ownerCall({ action: create ? 'crear' : 'entrar', pin });
         if (!r.ok || !r.data || !r.data.token) return r.error || 'No se pudo validar el PIN';
         PV.setOwnerToken(r.data.token);
-        if (create) toast('PIN de la creadora creado', 'ok');
+        if (create) toast('PIN de seguridad creado', 'ok');
         return '';
       },
     });
@@ -87,7 +87,7 @@
     toast(`🤫 Cambio silencioso activo por ${SILENT_MIN} minutos`, 'ok');
     if (onDone) onDone();
   }
-  const silentBtn = (id) => `<button class="btn ${PV.silentOn() ? 'btn-accent' : ''}" id="${id}" type="button" title="Con el PIN de la creadora: los cambios no avisan ni quedan en el Historial">🤫 ${PV.silentOn() ? 'Silencioso hasta ' + hm(PV.silentUntil()) + ' · desactivar' : 'Cambio silencioso'}</button>`;
+  const silentBtn = (id) => `<button class="btn ${PV.silentOn() ? 'btn-accent' : ''}" id="${id}" type="button" title="Con el PIN de seguridad: los cambios no avisan ni quedan en el Historial">🤫 ${PV.silentOn() ? 'Silencioso hasta ' + hm(PV.silentUntil()) + ' · desactivar' : 'Cambio silencioso'}</button>`;
   const silentHint = () => (PV.silentOn() ? `<div class="hint warn no-print">🤫 <b>Cambio silencioso activo</b> hasta las ${hm(PV.silentUntil())}: lo que cambies no avisa a los vendedores ni queda en el Historial.</div>` : '');
   /** Oculta (o restaura) registros del Historial en el servidor y en esta PC. */
   async function setHidden(evs, hide) {
@@ -520,7 +520,7 @@
     const h = (load.statusHistory || []).filter((x) => x && x.id === load.status);
     return h.length ? h[h.length - 1].at : load.createdAt;
   }
-  /** Línea de tiempo de la hoja: todo lo que quedó en el Historial sobre ella y sus pedidos (con 🗑 para la creadora). */
+  /** Línea de tiempo de la hoja: todo lo que quedó en el Historial sobre ella y sus pedidos (con 🗑 y el PIN de seguridad). */
   async function drawTimeline(box, load) {
     if (!box) return;
     const ids = new Set((load.orderIds || []).concat(S.orders.filter((o) => o.loadId === load.id).map((o) => o.id)));
@@ -528,7 +528,7 @@
       .sort((a, b) => String(b.at).localeCompare(String(a.at)));
     box.innerHTML = list.length ? `<table class="inv"><thead><tr><th>Fecha y hora</th><th>Quién</th><th>Acción</th><th>Detalle</th><th></th></tr></thead><tbody>
       ${list.map((e) => `<tr><td class="mono" style="white-space:nowrap">${esc(PV.stampTime(e.at))}</td><td>${esc(e.sellerName)}</td><td>${esc(EVENT_LABEL[e.type] || e.type)}</td><td>${esc(e.text)}</td>
-        <td><button class="btn btn-sm" type="button" data-tlhide="${esc(e.id)}" title="Ocultar este registro (PIN de la creadora)" aria-label="Ocultar registro">🗑</button></td></tr>`).join('')}</tbody></table>`
+        <td><button class="btn btn-sm" type="button" data-tlhide="${esc(e.id)}" title="Ocultar este registro (PIN de seguridad)" aria-label="Ocultar registro">🗑</button></td></tr>`).join('')}</tbody></table>`
       : '<p class="muted">Aún no hay registros de esta hoja en esta PC (el Historial guarda los últimos 31 días).</p>';
     box.onclick = async (e) => {
       const b = e.target.closest('[data-tlhide]'); if (!b) return;
@@ -2847,13 +2847,13 @@
         <button class="btn" id="hTrash" type="button">🗃 Papelera del historial</button>
         ${silentBtn('hSil')}
       </div>
-      <p class="muted">Lo registra cada teléfono y PC con su fecha y hora; llega al sincronizar (si un vendedor estuvo sin señal, aparece cuando la recupere). Nadie puede editarlo. Solo la creadora, con su PIN, puede ocultar un registro (🗑): no se borra, queda en la Papelera del historial y se puede restaurar.</p>
+      <p class="muted">Lo registra cada teléfono y PC con su fecha y hora; llega al sincronizar (si un vendedor estuvo sin señal, aparece cuando la recupere). Nadie puede editarlo. Solo con el PIN de seguridad se puede ocultar un registro (🗑): no se borra, queda en la Papelera del historial y se puede restaurar.</p>
       ${people.size ? `<div class="card" style="overflow:auto"><table class="inv"><thead><tr><th>Quién</th><th>Primera actividad</th><th>Última</th><th>Pedidos enviados</th><th>Eliminados</th><th>Monto enviado</th></tr></thead><tbody>
         ${[...people.values()].sort((a, b) => a.first.localeCompare(b.first)).map((p) => `<tr><td><b>${esc(p.name)}</b></td><td data-l="Primera actividad">${hhmm(p.first)}</td><td data-l="Última">${hhmm(p.last)}</td><td class="n" data-l="Pedidos enviados">${p.sent}</td><td class="n" data-l="Eliminados">${p.del}</td><td class="n" data-l="Monto enviado">${usd(p.amount)}</td></tr>`).join('')}
         </tbody></table></div>` : ''}
       ${list.length ? `<div class="card" style="overflow:auto;margin-top:12px"><table class="inv"><thead><tr><th>Hora · Quién</th><th>Acción</th><th>Detalle</th><th></th></tr></thead><tbody>
         ${list.map((e) => `<tr><td class="mono"><b>${hhmm(e.at)}</b> · ${esc(e.sellerName)}</td><td data-l="Acción">${esc(EVENT_LABEL[e.type] || e.type)}</td><td>${esc(e.text)}</td>
-          <td><button class="btn btn-sm" type="button" data-hide="${esc(e.id)}" title="Ocultar este registro (PIN de la creadora)" aria-label="Ocultar registro">🗑</button></td></tr>`).join('')}
+          <td><button class="btn btn-sm" type="button" data-hide="${esc(e.id)}" title="Ocultar este registro (PIN de seguridad)" aria-label="Ocultar registro">🗑</button></td></tr>`).join('')}
         </tbody></table></div>` : '<div class="empty card"><strong>Sin actividad</strong>ese día con esos filtros.</div>'}`;
     $('#hFilters').onchange = (e) => { const k = e.target.dataset.h; if (k) { f[k] = e.target.value; renderHistory(root); } };
     $('#hTrash').onclick = () => hiddenEventsSheet(() => PV.render());
@@ -3141,7 +3141,7 @@
           <div class="row wrap" style="margin-top:12px"><button class="btn btn-primary" id="pinSave">${S.officePin ? 'Cambiar PIN' : 'Activar PIN'}</button>
             ${S.officePin ? '<button class="btn btn-danger" id="pinDel">Quitar PIN</button><button class="btn" id="pinLock">🔒 Bloquear ahora</button>' : ''}</div></section>
 
-        <section class="card card-pad"><h3>🔐 PIN de la creadora</h3>
+        <section class="card card-pad"><h3>🔐 PIN de seguridad</h3>
           <p class="muted">Solo con este PIN se <b>ocultan registros del Historial</b> (quedan en su papelera y se pueden restaurar) y se activa el <b>🤫 cambio silencioso</b> (${SILENT_MIN} min: lo que cambies no avisa a los vendedores ni queda en el Historial). Lo guarda y lo valida el servidor: la clave admin sola no alcanza. Si lo olvidas, se restablece con la clave <span class="mono">PEDIDOS_OWNER_KEY</span> que pones en Vercel.</p>
           <div class="row wrap"><button class="btn btn-primary" id="owIn" type="button">🔐 Entrar / crear PIN</button>
             <button class="btn" id="owChg" type="button">Cambiar PIN</button>${silentBtn('owSil')}
@@ -3238,13 +3238,13 @@
       return saveCfg({ dispatchers: names.map((n) => prev.find((d) => d.name === n) || { id: DB.uid('d'), name: n }) });
     });
     const pinOk = async () => !S.officePin || (await pinHash(($('#pinCur') || {}).value || '')) === S.officePin;
-    $('#owIn').onclick = async () => { if (await ownerAuth('Entrar con el PIN de la creadora.')) { toast('PIN de la creadora vigente en esta pestaña', 'ok'); renderSettings(root); } };
+    $('#owIn').onclick = async () => { if (await ownerAuth('Entrar con el PIN de seguridad.')) { toast('PIN de seguridad vigente en esta pestaña', 'ok'); renderSettings(root); } };
     $('#owSil').onclick = () => toggleSilent(() => PV.render());
     $('#owBin').onclick = () => hiddenEventsSheet();
-    $('#owOff').onclick = () => { PV.setOwnerToken(''); toast('Saliste del PIN de la creadora en esta pestaña', 'ok'); PV.render(); };
+    $('#owOff').onclick = () => { PV.setOwnerToken(''); toast('Saliste del PIN de seguridad en esta pestaña', 'ok'); PV.render(); };
     $('#owChg').onclick = async () => {
       if (!(await ownerAuth('Primero confirma el PIN actual.'))) return;
-      await pinSheet({ title: 'Cambiar PIN de la creadora', twice: true, label: 'Guardar PIN nuevo', onPin: async (pin) => {
+      await pinSheet({ title: 'Cambiar PIN de seguridad', twice: true, label: 'Guardar PIN nuevo', onPin: async (pin) => {
         const r = await ownerCall({ action: 'cambiar', pin });
         if (!r.ok || !r.data || !r.data.token) return r.error || 'No se pudo cambiar';
         PV.setOwnerToken(r.data.token); toast('PIN cambiado', 'ok'); return '';

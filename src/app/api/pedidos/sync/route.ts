@@ -39,7 +39,7 @@ import { comboAlloc, comboOk, comboV, type Combo, type MoneyLine } from '@/lib/m
 //     así el teléfono del vendedor anterior también se entera y deja de verlo.
 //     Igual un pedido al que la oficina le cambió el vendedor.
 //   - Cambio silencioso: un pedido u hoja que la oficina guardó con quietAt (más nuevo que la
-//     versión anterior) y con el permiso del PIN de la creadora (x-owner-token) no genera avisos.
+//     versión anterior) y con el permiso del PIN de seguridad (x-owner-token) no genera avisos.
 //   - Pedidos y hojas se combinan CAMPO POR CAMPO (doc.fv guarda la hora de cada
 //     campo): si dos equipos editan el mismo documento sin haberse sincronizado,
 //     no se pierde ninguno de los dos cambios.
@@ -424,7 +424,7 @@ export async function POST(req: NextRequest) {
   const serverTime = new Date();
   let mktCombos: Combo[] | null = null; // combos autorizados (se leen una vez, si un pedido trae combos)
   let mktOk: boolean | null = null; // ¿puede construir Promoción y marketing? (PIN de la sección)
-  let ownerQuiet: boolean | null = null; // ¿trae el permiso del PIN de la creadora? (cambio silencioso)
+  let ownerQuiet: boolean | null = null; // ¿trae el permiso del PIN de seguridad? (cambio silencioso)
   const isQuiet = async (doc: Record<string, unknown>, cur: Record<string, unknown> | null) => {
     if (!isAdmin || !quietDoc(doc, cur)) return false;
     if (ownerQuiet === null) ownerQuiet = await ownerOk(req);

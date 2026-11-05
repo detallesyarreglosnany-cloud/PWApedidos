@@ -236,7 +236,7 @@
     if (cfg.adminKey) headers['x-admin-key'] = cfg.adminKey;
     if (cfg.supervisorKey) headers['x-supervisor-key'] = cfg.supervisorKey;
     if (cfg.mktToken) headers['x-mkt-token'] = cfg.mktToken; // permiso del PIN de Promoción y marketing
-    withOwner(headers, cfg); // permiso del PIN de la creadora (cambio silencioso)
+    withOwner(headers, cfg); // permiso del PIN de seguridad (cambio silencioso)
     await withUser(headers, cfg);
 
     // Vercel rechaza cuerpos de más de 4,5 MB en ambos sentidos: la subida va
@@ -432,7 +432,7 @@
     for (const m of await DB.getAll('meta')) if (/^syncCursor/.test(m.key)) await DB.remove('meta', m.key);
   }
 
-  /** Oficina con el permiso del PIN de la creadora (solo en esta pestaña). */
+  /** Oficina con el permiso del PIN de seguridad (solo en esta pestaña). */
   function withOwner(headers, cfg) {
     try { const t = sessionStorage.getItem('pvOwnerTok'); if (t && cfg.adminKey) headers['x-owner-token'] = t; } catch (e) { /* noop */ }
   }
