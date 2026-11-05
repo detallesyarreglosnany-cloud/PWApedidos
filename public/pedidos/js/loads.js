@@ -296,6 +296,18 @@
     return { ...load, sellerId: ids[0], sellerIds: ids, sellerName: names.join(' + ') };
   }
 
+  /**
+   * Vendedores de la hoja según sus pedidos REALES (tras un cambio de vendedor): entra el nuevo y sale
+   * el que ya no tiene ningún pedido en ella. Una hoja sin pedidos conserva los que tenía.
+   */
+  function resyncSellers(load, state) {
+    const ordersById = new Map(state.orders.map((o) => [o.id, o]));
+    const ids = [...new Set(loadOrders(load, ordersById).map((o) => o.sellerId).filter(Boolean))];
+    if (!ids.length) return load;
+    const names = ids.map((id) => { const s = state.sellers.find((x) => x.id === id); return s ? s.name : ''; }).filter(Boolean);
+    return { ...load, sellerId: ids[0], sellerIds: ids, sellerName: names.join(' + ') };
+  }
+
   /** Cuántos números de carga y de nota necesita este cambio de estado (para reservarlos antes). */
   function numbersNeeded(load, statusId, state) {
     const st = statuses(state.config).find((x) => x.id === statusId);
@@ -395,7 +407,7 @@
 
   global.Loads = {
     DEFAULT_STATUSES, ORDER_LABEL, isRetiro, retiroDispatcher, statuses, statusOf, isOpen, isClosed, limits, measure, usage, loadOrders,
-    autoPack, repair, hold, release, moveOrder, merge, setStatus, numbersNeeded, shortages, initials, sellerIdsOf, labelOf, autoLabel, orderDateRange,
+    autoPack, repair, hold, release, moveOrder, merge, resyncSellers, setStatus, numbersNeeded, shortages, initials, sellerIdsOf, labelOf, autoLabel, orderDateRange,
     loadCode: (l) => (l.number ? 'C-' + fmtNum(l.number) : 'Borrador'),
     noteCode: (n) => 'NE-' + fmtNum(n, 6),
     /** Etiqueta del estado de un pedido para el vendedor. */

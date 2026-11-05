@@ -286,8 +286,19 @@
     return blocks(def.name || 'Datos', [b], { title: def.title, subtitle: def.subtitle, freezeHead: true, filter: def.filter !== false, freezeCols: def.freezeCols || 0 });
   }
 
-  /** Arma el .xlsx y lo descarga (o lo comparte desde el teléfono). */
-  async function save(filename, sheets) {
+  /**
+   * Arma el .xlsx y lo descarga (o lo comparte desde el teléfono). Cada hoja lleva al final el sello
+   * «Descargado el … · por …» (más meta.stamp) y la descarga queda en el Historial (meta.loadId: en su hoja).
+   */
+  async function save(filename, sheets, meta) {
+    meta = meta || {};
+    try {
+      if (global.PV && global.PV.stampText) {
+        const txt = global.PV.stampText('Descargado', meta.stamp || '');
+        sheets.forEach((sh) => { if (sh && Array.isArray(sh.rows)) sh.rows = sh.rows.concat([[], [{ v: txt, s: S.note }]]); });
+        global.PV.docOut('download', filename.replace(/\.(xlsx|csv)$/i, ''), meta.loadId ? { loadId: meta.loadId } : {});
+      }
+    } catch (e) { /* el sello nunca impide descargar */ }
     const u8 = X().build(sheets);
     return global.PV.saveBinary(filename.replace(/\.csv$/i, '') + (/\.xlsx$/i.test(filename) ? '' : '.xlsx'), u8, X().MIME);
   }

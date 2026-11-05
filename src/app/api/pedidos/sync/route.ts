@@ -2,6 +2,7 @@ import { NextRequest, NextResponse, after } from 'next/server';
 import { Prisma } from '@prisma/client';
 import { db, TX_WAIT } from '@/lib/db';
 import { isAdminReq, isSupervisorReq, syncOk } from '@/lib/keys';
+import { ownerOk } from '@/lib/owner';
 import { userHeaderInvalid, userOf } from '@/lib/roles';
 import { sendPush, type PushMsg, type PushRole } from '@/lib/push';
 import { RESET_LOCK, currentEpoch, epochAt } from '@/lib/epoch';
@@ -36,6 +37,9 @@ import { comboAlloc, comboOk, comboV, type Combo, type MoneyLine } from '@/lib/m
 //     borran. Solo la oficina los baja.
 //   - Un cliente reasignado guarda sus vendedores anteriores (formerSellerIds):
 //     así el teléfono del vendedor anterior también se entera y deja de verlo.
+//     Igual un pedido al que la oficina le cambió el vendedor.
+//   - Cambio silencioso: un pedido u hoja que la oficina guardó con quietAt (más nuevo que la
+//     versión anterior) y con el permiso del PIN de la creadora (x-owner-token) no genera avisos.
 //   - Pedidos y hojas se combinan CAMPO POR CAMPO (doc.fv guarda la hora de cada
 //     campo): si dos equipos editan el mismo documento sin haberse sincronizado,
 //     no se pierde ninguno de los dos cambios.
@@ -54,7 +58,7 @@ const ADMIN_KINDS: readonly string[] = ['products', 'sellers', 'loads', 'config'
 type Kind = (typeof KINDS)[number];
 // Campos de un pedido que controla la oficina: un teléfono nunca los pisa
 // (aunque su copia local esté atrasada y no sepa que el pedido ya está en una hoja).
-const OFFICE_ORDER_FIELDS = ['loadId', 'locked', 'loadStatusName', 'noteNumber', 'loadNumber', 'dispatchedAt', 'officeEdited', 'heldAt', 'valeryNote', 'officeMsgs', 'delivery', 'pendingFrom'];
+const OFFICE_ORDER_FIELDS = ['loadId', 'locked', 'loadStatusName', 'noteNumber', 'loadNumber', 'dispatchedAt', 'officeEdited', 'heldAt', 'valeryNote', 'officeMsgs', 'delivery', 'pendingFrom', 'formerSellerIds', 'sellerChange', 'movedAt', 'quietAt'];
 const OFFICE_ORDER_STATUS: readonly string[] = ['en_carga', 'en_espera', 'despachado'];
 // Datos del cliente que solo cambia la oficina (el vendedor actualiza el resto de la ficha)
 const CLIENT_OFFICE_FIELDS = ['creditDays', 'creditLimit', 'active', 'group', 'formerSellerIds'];
@@ -73,6 +77,8 @@ const PULL_OVERLAP_MS = 45_000;
 const PULL_BUDGET = 3 * 1024 * 1024; // tamaño máximo de cada página de bajada
 const PULL_ORDER: readonly Kind[] = ['config', 'products', 'sellers', 'clients', 'loads', 'orders', 'events'];
 const EVENTS_DAYS = 31; // historial que baja una oficina nueva
+const FORMER_DAYS = 30; // pedidos que cambiaron de vendedor: el teléfono anterior los recibe si cambiaron en estos días
+const daysAgoDate = (n: number) => new Date(Date.now() - n * 86400000);
 
 type Doc = Record<string, unknown> & { id: string; updatedAt: string; deleted?: boolean };
 type Row = { kind: string; id: string; data: string; sellerId: string | null; routeDate: string | null; status: string | null; deleted: boolean; updatedAt: string };
@@ -334,6 +340,9 @@ function sellerLoadView(d: Doc): Doc {
 
 // ---- Avisos push según el cambio de un pedido ----
 type Notice = { to: PushRole; sellerId: string; msg: PushMsg };
+/** Guardado en «cambio silencioso»: quietAt posterior a la versión que había en el servidor. */
+const quietDoc = (doc: Record<string, unknown>, cur: Record<string, unknown> | null) =>
+  typeof doc.quietAt === 'string' && !!doc.quietAt && (!cur || doc.quietAt > String(cur.updatedAt || ''));
 const SENT = ['enviado', 'en_carga', 'en_espera', 'despachado'];
 const isSent = (o: Record<string, unknown> | null) => !!o && !o.deleted && SENT.includes(String(o.status));
 
@@ -356,6 +365,8 @@ function orderNotice(cur: Record<string, unknown> | null, doc: Record<string, un
   // La oficina cargó un pedido a nombre del vendedor
   if (!cur && sid && doc.createdBy === 'oficina' && isSent(doc)) return seller('🏢 Pedido cargado por la oficina', `${client}${doc.routeDate ? ' · ' + String(doc.routeDate) : ''}`, 'ofi');
   if (!cur || !sid) return null;
+  // La oficina le cambió el vendedor: le llega al vendedor nuevo (el anterior recibe su aviso aparte)
+  if (cur.sellerId && String(cur.sellerId) !== sid) return seller('📋 Pedido asignado a ti', `${client}: la oficina te lo pasó (antes de ${String(cur.sellerName || 'otro vendedor')})`, 'vend');
   // Mensaje nuevo de la oficina sobre este pedido
   const nm = Array.isArray(doc.officeMsgs) ? doc.officeMsgs : [], cm = Array.isArray(cur.officeMsgs) ? cur.officeMsgs : [];
   if (nm.length > cm.length) {
@@ -413,6 +424,12 @@ export async function POST(req: NextRequest) {
   const serverTime = new Date();
   let mktCombos: Combo[] | null = null; // combos autorizados (se leen una vez, si un pedido trae combos)
   let mktOk: boolean | null = null; // ¿puede construir Promoción y marketing? (PIN de la sección)
+  let ownerQuiet: boolean | null = null; // ¿trae el permiso del PIN de la creadora? (cambio silencioso)
+  const isQuiet = async (doc: Record<string, unknown>, cur: Record<string, unknown> | null) => {
+    if (!isAdmin || !quietDoc(doc, cur)) return false;
+    if (ownerQuiet === null) ownerQuiet = await ownerOk(req);
+    return ownerQuiet;
+  };
 
   if (!syncOk(req)) {
     return NextResponse.json({ error: 'Clave de sincronización inválida' }, { status: 401 });
@@ -685,7 +702,7 @@ export async function POST(req: NextRequest) {
             if (was && !now2) notices.push({ to: 'seller', sellerId: doc.id, msg: { title: '✅ Ya puedes volver a subir pedidos', body: 'Tus hojas se descongestionaron. ¡A vender!', tag: `s-${doc.id}-pausa` } });
           }
           // Hoja enviada a cobranzas: les llega el aviso a Cobranzas
-          if (kind === 'loads') {
+          if (kind === 'loads' && !(await isQuiet(doc as Rec, cur as Rec | null))) {
             const sent = (x: Rec | null) => String((x && x.cobSent && typeof x.cobSent === 'object' ? (x.cobSent as Rec).at : '') || '');
             const d = doc as Rec;
             if (sent(d) && sent(d) !== sent(cur as Rec | null) && !d.deleted) extraNotices.push({ id: doc.id, n: { to: 'cobranzas', sellerId: '', msg: { title: '🧾 Hoja por aprobar', body: `${String(d.label || 'Hoja')} · ${String(d.sellerName || '')} · ${Array.isArray(d.orderIds) ? d.orderIds.length : 0} clientes`.slice(0, 300), tag: `cob-${doc.id}` } } });
@@ -695,9 +712,14 @@ export async function POST(req: NextRequest) {
             if (!mktCombos) { const r = await db.distDoc.findUnique({ where: { kind_id: { kind: 'config', id: 'mkt' } }, select: { data: true } }); mktCombos = r ? ((JSON.parse(r.data) as Rec).combos as Combo[]) || [] : []; }
             if (!combosValid(doc as Rec, mktCombos)) { stripCombos(doc as Rec, serverTime.toISOString()); doc.updatedAt = later(existing ? existing.updatedAt : doc.updatedAt, doc.updatedAt); }
           }
-          if (kind === 'orders') {
+          if (kind === 'orders' && !(await isQuiet(doc as Rec, cur as Rec | null))) {
             const n = orderNotice(cur as Record<string, unknown> | null, doc as Record<string, unknown>, isAdmin);
             if (n) pending.set(doc.id, n);
+            // Cambio de vendedor (oficina): el vendedor anterior también se entera
+            const fromSid = cur ? String(cur.sellerId || '') : '';
+            if (isAdmin && fromSid && fromSid !== String(doc.sellerId || '')) {
+              extraNotices.push({ id: doc.id, n: { to: 'seller', sellerId: fromSid, msg: { title: '↪ Pedido pasado a otro vendedor', body: `${String((doc as Rec).clientName || '')}: ahora lo atiende ${String((doc as Rec).sellerName || 'otro vendedor')}`, tag: `o-${doc.id}-vendx` } } });
+            }
             if (isSent(doc as Record<string, unknown>) && !isSent(cur as Record<string, unknown> | null)) {
               newlySent.add(doc.id);
               // Gerencia cargó un pedido a nombre del vendedor: el vendedor se entera
@@ -777,7 +799,14 @@ export async function POST(req: NextRequest) {
           return sellerId ? { kind, syncedAt, data: { contains: JSON.stringify(sellerId) } } : null;
         case 'orders':
           if (noScope) return null;
-          return { kind, syncedAt, ...(sellerId ? { sellerId } : {}), ...(sinceDays ? { routeDate: { gte: daysAgo(sinceDays) } } : {}) };
+          // Los suyos, y los que fueron suyos antes de que la oficina les cambiara el vendedor
+          // (formerSellerIds): así el teléfono anterior recibe la versión nueva y deja de mostrarlos
+          return {
+            kind, syncedAt,
+            // (la 2.ª rama se limita a lo cambiado hace poco: usa el índice por syncedAt y nunca recorre todos los pedidos)
+            ...(sellerId ? { OR: [{ sellerId }, { syncedAt: { gte: since || daysAgoDate(FORMER_DAYS) }, AND: [{ data: { contains: '"formerSellerIds":[' } }, { data: { contains: JSON.stringify(sellerId) } }] }] } : {}),
+            ...(sinceDays ? { routeDate: { gte: daysAgo(sinceDays) } } : {}),
+          };
         case 'events': return office ? { kind, syncedAt, ...(since ? {} : { routeDate: { gte: daysAgo(EVENTS_DAYS) } }) } : null;
       }
     };
