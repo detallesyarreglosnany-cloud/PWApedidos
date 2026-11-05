@@ -3142,7 +3142,6 @@
             ${S.officePin ? '<button class="btn btn-danger" id="pinDel">Quitar PIN</button><button class="btn" id="pinLock">🔒 Bloquear ahora</button>' : ''}</div></section>
 
         <section class="card card-pad"><h3>🔐 PIN de seguridad</h3>
-          <p class="muted">Solo con este PIN se <b>ocultan registros del Historial</b> (quedan en su papelera y se pueden restaurar) y se activa el <b>🤫 cambio silencioso</b> (${SILENT_MIN} min: lo que cambies no avisa a los vendedores ni queda en el Historial). Lo guarda y lo valida el servidor: la clave admin sola no alcanza. Si lo olvidas, se restablece con la clave <span class="mono">PEDIDOS_OWNER_KEY</span> que pones en Vercel.</p>
           <div class="row wrap"><button class="btn btn-primary" id="owIn" type="button">🔐 Entrar / crear PIN</button>
             <button class="btn" id="owChg" type="button">Cambiar PIN</button>${silentBtn('owSil')}
             <button class="btn" id="owBin" type="button">🗃 Papelera del historial</button>
